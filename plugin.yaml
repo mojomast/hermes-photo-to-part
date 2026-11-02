@@ -1,9 +1,10 @@
 name: photo-to-part
-version: "0.1.0"
+version: "0.1.1"
 description: >-
   Turn photos, a few measurements, or a messy scan into a parametric printable
-  part and check the mesh locally. No network, no credentials, and no printer
-  connection.
+  part and check the mesh locally. Tools read and write only the paths you
+  pass. No credentials and no printer connection. A STEP kernel is a separate
+  install in the project environment.
 author: mojomast
 license: MIT
 homepage: https://github.com/mojomast/hermes-photo-to-part
@@ -14,13 +15,18 @@ tags:
   - skills
 manifest_version: 2
 api_version: 1
-provides_tools: []
+provides_tools:
+  - photo_part_validate
+  - photo_part_render
+  - photo_part_heal
+  - photo_part_template
 provides_hooks: []
 provides_middleware: []
 requires_env: []
 # Kept in step with pyproject.toml. pyproject.toml is what Hermes installs.
 python_dependencies:
   - "trimesh>=4.6.0,<5.3"
+  - "fast-simplification>=0.1.8,<0.3"
   - "shapely>=2.0.1,<2.3"
   - "mapbox-earcut>=1.0.3,<2.2"
   - "numpy>=1.26,<2.6"

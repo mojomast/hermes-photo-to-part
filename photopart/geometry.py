@@ -17,6 +17,9 @@ import numpy as np
 import trimesh
 from shapely.geometry import Polygon, box
 
+from photopart.io import DEFAULT_MAX_BYTES
+from photopart.status import status
+
 # name, default millimetres, minimum, what it controls
 FIELDS: tuple[tuple[str, float, float, str], ...] = (
     ("width_mm", 51.0, 5.0, "Overall width across the top of the plate."),
@@ -266,7 +269,8 @@ def main(argv: list[str] | None = None) -> int:
     existing = [path for path in targets if path.exists()]
     if existing and not args.force:
         names = ", ".join(path.name for path in existing)
-        print(f"refusing to overwrite {names}. Pass --force.", flush=True)
+        status(f"refusing to overwrite {names}. Pass --force.")
+        print(json.dumps({"ok": False, "error": f"refusing to overwrite {names}. Pass --force."}))
         return 1
     try:
         params = _load_overrides(args.params, args.set)
@@ -274,7 +278,8 @@ def main(argv: list[str] | None = None) -> int:
             out_dir, params, ascii_stl=args.ascii, write_3mf=not args.no_3mf
         )
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
-        print(f"error: {exc}", flush=True)
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        status(f"error: {exc}")
         return 1
     summary = {
         "stl": str(written["stl"]),
@@ -289,5 +294,10 @@ def main(argv: list[str] | None = None) -> int:
         "triangles": int(len(written["mesh"].faces)),
         "watertight": bool(written["mesh"].is_watertight),
     }
+    summary["ok"] = summary["watertight"]
     print(json.dumps(summary, indent=2, sort_keys=True))
+    if summary["ok"]:
+        status("ok")
+    else:
+        status("FAILED: template mesh is not watertight")
     return 0 if summary["watertight"] else 2

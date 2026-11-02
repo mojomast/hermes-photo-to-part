@@ -8,20 +8,22 @@ It is a community plugin by [Kyle Durepos](https://github.com/mojomast). It is n
 
 ## What you get
 
-One skill, `photo-to-part:photo-to-printable-part`, and four local scripts:
+One skill and four tools. The skill id is `photo-to-part:photo-to-printable-part`. That is the whole id. `plugin:photo-to-part:photo-to-printable-part` is not a skill name. A `plugin:` prefix in Hermes docs is a placeholder.
 
-| Script | Job |
+| Tool | Job |
 | --- | --- |
-| `make_template.py` | Write a watertight sample plate (STL, OpenSCAD, parameters). |
-| `export_validate.py` | Check watertightness, one shell, and the bounding box against target millimetres. |
-| `render_views.py` | Front, side, top, and iso previews, plus a side-by-side with a photo. |
-| `heal_scan.py` | Weld, fill holes, and keep the largest shell of a scan. Flat caps are not a finished surface. |
+| `photo_part_template` | Write a watertight sample plate (STL, OpenSCAD, parameters). |
+| `photo_part_validate` | Check watertightness, one shell, and the bounding box against target millimetres. |
+| `photo_part_render` | Front, side, top, and iso previews fitted to the part, a side-by-side, and an outline overlay when you pass pixels per millimetre. |
+| `photo_part_heal` | Weld, fill holes, and keep the largest shell of a scan. Flat caps are not a finished surface. Fan fallback and shell counts are separate fields. |
 
-`register()` does not add tools, hooks, or middleware. Enabling the plugin installs the Python packages in `pyproject.toml` into the Hermes environment after you accept them. CadQuery, build123d, and OpenSCAD are not installed for you. Use one of those in the working directory when you want fillets or a STEP file.
+The same four jobs are available as scripts under `skills/photo-to-printable-part/scripts/`. Hermes installs the Python packages into its own environment. A system `python script.py` cannot see that environment. The scripts re-exec into it. Prefer the tools, which already run there. Do not pip install trimesh into the system Python.
+
+`register()` adds those tools and the skill. It does not add hooks or middleware, and it does not read secrets. Enabling the plugin installs the packages in `pyproject.toml` from PyPI after you accept them. CadQuery, build123d, and OpenSCAD are not installed for you. Installing one in the project environment, when you want a STEP file, downloads packages and can take several minutes. The pinned lines are in the skill's `references/cad-backends.md`.
 
 ## Disclosure
 
-The scripts read the mesh and image paths you give them and write the output paths you give them. They do not open network connections, read credentials, talk to a printer, or update themselves. Photos you attach in a Hermes chat still go to your model provider. That is Hermes, not an extra upload from this plugin. Details are in [SECURITY.md](SECURITY.md).
+The tools and scripts read the mesh and image paths you give them and write the output paths you give them. They do not open network connections, read credentials, talk to a printer, or update themselves. If a script is started with a Python that cannot import trimesh, it re-executes itself with the plugin environment's Python. That interpreter path comes from `HERMES_HOME`. Photos you attach in a Hermes chat still go to your model provider. That is Hermes, not an extra upload from this plugin. Details are in [SECURITY.md](SECURITY.md).
 
 ## Install
 
@@ -48,16 +50,16 @@ From a checkout, with the dependencies installed (`pip install -e .`):
 python skills/photo-to-printable-part/scripts/make_template.py --out-dir ./part-v1 --ascii
 python skills/photo-to-printable-part/scripts/export_validate.py ./part-v1/plate_clip.stl --size 51 72.6 6
 python skills/photo-to-printable-part/scripts/render_views.py ./part-v1/plate_clip.stl --out-dir ./renders --grid-mm 2
-python skills/photo-to-printable-part/scripts/heal_scan.py scan.stl --out healed.stl
+python skills/photo-to-printable-part/scripts/heal_scan.py scan.stl --out healed.stl --units m
 ```
 
-The checkers print JSON on stdout. Exit `0` passes, `2` means the mesh loaded but a check failed, `1` means the command could not run. STL files are millimetres. 3MF, which records that unit, needs the optional `lxml` extra: `pip install -e ".[threemf]"`.
+Each checker prints one JSON object on stdout. `ok` and `FAILED` go to stderr. Exit `0` passes, `2` means the mesh loaded but a check failed, `1` means the command could not run. Pass `--units m`, `cm`, or `in` when the file is not millimetres. `--photo-scale` is pixels per millimetre and writes `overlay.png`. STL files are millimetres after that conversion. 3MF, which records that unit, needs the optional `lxml` extra: `pip install -e ".[threemf]"`.
 
 ## Sample
 
 ![Four views of the sample plate](docs/screenshot-views.png)
 
-The checked-in sample is `examples/plate-clip/`. Overall size **51 × 72.6 × 6 mm**. The picture beside the front view is a grid drawn by the script, labeled as synthetic.
+The checked-in sample is `examples/plate-clip/`. Overall size **51 × 72.6 × 6 mm**. The picture beside the front view is a grid drawn by the script, labeled as synthetic. The views are fitted to the part, and the front view looks along the thin axis.
 
 ![Synthetic reference beside the front view](examples/plate-clip/renders/compare_front.png)
 

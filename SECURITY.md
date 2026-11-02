@@ -6,11 +6,12 @@ This plugin is trusted in-process Python, the same as any other Hermes plugin. R
 
 What it does:
 
-- `register()` only calls `ctx.register_skill`. It does not register tools, hooks, or middleware, and it does not read the environment.
-- The helper scripts read the mesh and image paths you pass them and write the output paths you pass them. They refuse to overwrite an input with the healed output.
-- They do not open sockets, spawn shells, read `.env` files, or read Hermes credential stores.
+- `register()` calls `ctx.register_skill` and `ctx.register_tool` for `photo_part_validate`, `photo_part_render`, `photo_part_heal`, and `photo_part_template`. It does not register hooks or middleware, and it does not read credentials.
+- The tools and helper scripts read the mesh and image paths you pass them and write the output paths you pass them. They refuse to overwrite an input with the healed output.
+- They do not open sockets, read `.env` files, or read Hermes credential stores.
+- If a helper script is started with a Python that cannot import trimesh, it re-executes itself with the plugin environment's Python. It finds that interpreter from `HERMES_HOME` install metadata (`facts.json` and the install venv layout). It does not run a shell string and it does not install packages.
 - There is no telemetry and no self-updater.
 
-Photos you attach in a Hermes chat are still sent to whatever model provider you use. This plugin does not add a second upload. A mesh you point the scripts at stays on disk.
+Photos you attach in a Hermes chat are still sent to whatever model provider you use. This plugin does not add a second upload. A mesh you point the tools at stays on disk.
 
-Enabling the plugin asks Hermes to install the Python packages listed in `pyproject.toml` from PyPI. Those packages are not vendored here. CadQuery, build123d, OpenSCAD, and PyMeshLab are not installed by the plugin.
+Enabling the plugin asks Hermes to install the Python packages listed in `pyproject.toml` from PyPI, after you accept that install. Those packages are not vendored here. CadQuery, build123d, OpenSCAD, and PyMeshLab are not installed by the plugin. Installing CadQuery or build123d yourself, in a project environment, is a separate download and can take several minutes.

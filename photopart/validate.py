@@ -10,6 +10,8 @@ import numpy as np
 
 from photopart.io import DEFAULT_MAX_BYTES, load_mesh
 from photopart.report import measure
+from photopart.status import status
+from photopart.units import add_unit_arguments, attach_units, prepare_mesh
 
 
 def compare_extents(
@@ -112,32 +114,65 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-multi-shell", action="store_true")
     parser.add_argument("--json-out", help="Also write the report to this path.")
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
+    add_unit_arguments(parser)
     args = parser.parse_args(argv)
-    if args.tolerance < 0:
-        print("error: --tolerance must be >= 0", flush=True)
-        return 1
+    code, report = run_validate(
+        args.mesh,
+        size=None if args.size is None else tuple(args.size),
+        tolerance=args.tolerance,
+        allow_axis_swap=args.allow_axis_swap,
+        allow_open=args.allow_open,
+        allow_multi_shell=args.allow_multi_shell,
+        units=args.units,
+        scale=args.scale,
+        json_out=args.json_out,
+        max_bytes=args.max_bytes,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+    if code == 0:
+        status("ok")
+    elif report.get("failures"):
+        status("FAILED: " + "; ".join(report["failures"]))
+    elif report.get("error"):
+        status(f"error: {report['error']}")
+    return code
+
+
+def run_validate(
+    mesh_path: str,
+    *,
+    size: tuple[float, float, float] | None = None,
+    tolerance: float = 0.3,
+    allow_axis_swap: bool = False,
+    allow_open: bool = False,
+    allow_multi_shell: bool = False,
+    units: str | None = None,
+    scale: float | None = None,
+    json_out: str | None = None,
+    max_bytes: int = DEFAULT_MAX_BYTES,
+) -> tuple[int, dict]:
+    """Load, scale, and check a mesh. The report is the stdout document."""
+    if tolerance < 0:
+        return 1, {"ok": False, "error": "--tolerance must be >= 0"}
     try:
-        mesh = load_mesh(args.mesh, max_bytes=args.max_bytes)
+        loaded = load_mesh(mesh_path, max_bytes=max_bytes)
+        mesh, meta = prepare_mesh(loaded, units, scale)
         report = evaluate(
             mesh,
-            target=None if args.size is None else tuple(args.size),
-            tolerance=args.tolerance,
-            allow_axis_swap=args.allow_axis_swap,
-            allow_open=args.allow_open,
-            allow_multi_shell=args.allow_multi_shell,
+            target=size,
+            tolerance=tolerance,
+            allow_axis_swap=allow_axis_swap,
+            allow_open=allow_open,
+            allow_multi_shell=allow_multi_shell,
         )
     except (OSError, ValueError) as exc:
-        print(f"error: {exc}", flush=True)
-        return 1
-    report["file"] = str(Path(args.mesh).expanduser().resolve())
-    text = json.dumps(report, indent=2, sort_keys=True)
-    print(text)
-    if args.json_out:
-        destination = Path(args.json_out).expanduser().resolve()
+        return 1, {"ok": False, "error": str(exc)}
+    report["file"] = str(Path(mesh_path).expanduser().resolve())
+    attach_units(report, meta)
+    if json_out:
+        destination = Path(json_out).expanduser().resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(text + "\n", encoding="utf-8")
-    if report["failures"]:
-        print("FAILED: " + "; ".join(report["failures"]), flush=True)
-        return 2
-    print("ok", flush=True)
-    return 0
+        destination.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    return (0 if report["ok"] else 2), report
