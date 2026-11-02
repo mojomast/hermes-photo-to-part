@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-photo-to-part"
-version = "0.1.0"
+version = "0.1.1"
 description = "Hermes plugin: photos, measurements, or a scan to a checked printable part."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,6 +13,7 @@ authors = [{ name = "Kyle Durepos" }]
 keywords = ["hermes", "cad", "stl", "3d-printing"]
 dependencies = [
   "trimesh>=4.6.0,<5.3",
+  "fast-simplification>=0.1.8,<0.3",
   "shapely>=2.0.1,<2.3",
   "mapbox-earcut>=1.0.3,<2.2",
   "numpy>=1.26,<2.6",

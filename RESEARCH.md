@@ -148,3 +148,13 @@ A 2 mm grid is a scale only when the page was printed at 100% and the photo is s
 - `fill_holes` will not rescue an arbitrary scan. The skill says so. A curved rebuild still has to be done in a CAD kernel.
 - Printer numbers are vendor design guides, not a calibration of the user's machine.
 - The `afterforge` catalog entry used as a formatting reference is maintained by `ussyverse`, not by `mojomast`. `orbit-desktop` and `hermes-session-warmer` are the `mojomast` listings.
+
+## 7. Version 0.1.1
+
+A real session on Hermes v0.21.7 (deepseek-v4.1-flash) spent its turns on three gaps: system Python could not import trimesh, the skill id was given a `plugin:` prefix, and the agent wrote its own photo overlay. v0.1.1 answers those with tools plus a re-exec launcher, the exact skill id, and `--photo-scale`.
+
+`ctx.register_tool(name, toolset, schema, handler, description=...)` is the keyword form of the method on the v0.21.7 plugin context. `provides_tools` lists the four names passed to that call. `requires_hermes` stays unset: this checkout was not passed through `hermes plugins validate`, and a floor we have not watched load would be a guess. The user who hit the bugs was on v0.21.7, which already has `register_tool`.
+
+`fast-simplification` 0.2.0 (uploaded 2026-08-12, under the 2026-10-30 quarantine) is the quadric decimator trimesh calls. The pin is `>=0.1.8,<0.3`. CadQuery 2.8.0 and build123d 0.13.0 were the PyPI tips on 2026-11-02. The documented project-env lines use floors below those tips (`cadquery>=2.6,<2.9`, `build123d>=0.10,<0.14`). Those packages are still not plugin dependencies. The plugin tools do not open sockets. The CAD install does, and the docs say so.
+
+Preview rendering no longer uses matplotlib's tick locator. A z-buffer and a frame fitted to the mesh replaced it. matplotlib stays a dependency because the catalog-image builder uses its font as a fallback. The iso view is still the old projection, with no back-face culling.

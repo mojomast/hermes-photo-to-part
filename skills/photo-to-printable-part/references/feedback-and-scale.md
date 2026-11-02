@@ -20,7 +20,13 @@ When a caliper number and a grid count disagree, keep the caliper number and say
 
 Use the grid to estimate a curve: how many squares a radius spans, and where a straight run starts. Then put a single radius or a polyline in the script. Do not trace the photo pixel by pixel.
 
-`render_views.py --grid-mm 2` draws a 2 mm grid on the preview so you can compare counts. The preview grid is in model units. It does not prove the photo's printer was calibrated.
+`photo_part_render` with `grid_mm: 2` draws a 2 mm grid on the orthographic previews so you can compare counts. The grid is in model millimetres. It does not prove the photo's printer was calibrated. The iso view has no metric grid, because its axes are not millimetres.
+
+## Outline overlay
+
+Pass `photo_scale` (pixels per millimetre) to `photo_part_render` along with `photo`. The tool writes `overlay.png`: the front-view outline drawn on the photo. It also writes the side-by-side `compare_front.png`. Default placement puts the model center on the image center. `overlay_origin` is `[x, y]`, the image pixel of the model's minimum corner, with y growing downward.
+
+On 2 mm grid paper, `photo_scale` is the pixel width of one square divided by 2. Do not write an overlay script. The tool is the overlay.
 
 ## Hard dimensions
 

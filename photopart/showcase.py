@@ -99,7 +99,7 @@ def write_banner(iso_png: Path, destination: Path) -> None:
     )
     draw.text(
         (64, 430),
-        "Local files only. No network and no printer.",
+        "Local mesh checks. No printer connection.",
         fill="#8aa0ad",
         font=_font(22),
     )

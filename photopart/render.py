@@ -1,41 +1,85 @@
-"""Orthographic previews of a mesh for a side-by-side fit check.
+"""Orthographic previews and a scaled outline overlay.
 
-Renders are previews. Above a face cap, faces are sampled evenly so a scan
-still produces a picture. The picture is not a boolean simplification.
+Faces above the preview cap are quadric-decimated. The picture is a z-buffer,
+so coplanar faces do not streak and dropped faces are not left as holes.
+Axes are fitted to the part. The longest axis is up unless the caller picks one.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import trimesh
-from matplotlib.patches import Polygon as MplPolygon
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 from photopart.io import DEFAULT_MAX_BYTES, load_mesh, resolve_file
+from photopart.status import status
+from photopart.units import add_unit_arguments, attach_units, prepare_mesh
 
 PREVIEW_FACE_CAP = 8000
+FULL_RASTER_LIMIT = 200_000
 _VIEWS = ("front", "side", "top", "iso")
+_AXIS = {"x": 0, "y": 1, "z": 2}
+_FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 
-def _project(vertices: np.ndarray, view: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return 2D points and a depth used only to sort faces.
+def choose_axes(extents, up: str | None = None, front_axis: str | None = None) -> dict[str, str]:
+    """Pick up, front, and side from the part's extents.
 
-    The part stands in XY and is thick along Z. Front is the silhouette.
+    Up is the longest axis. The front camera looks along the shortest remaining
+    axis, which is the thin direction of a plate and the depth of an upright peg.
+    Ties take the earlier of x, y, z.
     """
+    ext = np.asarray(extents, dtype=float).reshape(3)
+    names = ("x", "y", "z")
+    if up is not None and up not in names:
+        raise ValueError(f"up must be x, y, or z, got {up!r}")
+    if front_axis is not None and front_axis not in names:
+        raise ValueError(f"front axis must be x, y, or z, got {front_axis!r}")
+    if up is None:
+        if front_axis is None:
+            up_i = int(np.argmax(ext))
+        else:
+            front_i = names.index(front_axis)
+            rest = [i for i in range(3) if i != front_i]
+            up_i = rest[int(np.argmax(ext[rest]))]
+    else:
+        up_i = names.index(up)
+    if front_axis is None:
+        rest = [i for i in range(3) if i != up_i]
+        front_i = rest[int(np.argmin(ext[rest]))]
+    else:
+        front_i = names.index(front_axis)
+    if front_i == up_i:
+        raise ValueError("front axis and up axis must be different")
+    side_i = next(i for i in range(3) if i not in (up_i, front_i))
+    return {
+        "up": names[up_i],
+        "front_axis": names[front_i],
+        "side_axis": names[side_i],
+        "top_axis": names[up_i],
+    }
+
+
+def _ortho_map(view: str, axes: dict[str, str]) -> tuple[tuple[int, float], tuple[int, float], tuple[int, float]]:
+    """Horizontal, vertical, and depth axes. Larger depth is farther from the camera."""
+    up = _AXIS[axes["up"]]
+    front = _AXIS[axes["front_axis"]]
+    side = _AXIS[axes["side_axis"]]
     if view == "front":
-        return vertices[:, [0, 1]], vertices[:, 2]
+        return (side, 1.0), (up, 1.0), (front, 1.0)
     if view == "side":
-        return vertices[:, [2, 1]], vertices[:, 0]
+        return (front, 1.0), (up, 1.0), (side, 1.0)
     if view == "top":
-        return vertices[:, [0, 2]], -vertices[:, 1]
+        return (side, 1.0), (front, 1.0), (up, -1.0)
+    raise ValueError(f"unknown view {view}")
+
+
+def _project(vertices: np.ndarray, view: str, axes: dict[str, str]) -> tuple[np.ndarray, np.ndarray]:
     if view == "iso":
         xy = np.column_stack(
             (
@@ -45,27 +89,101 @@ def _project(vertices: np.ndarray, view: str) -> tuple[np.ndarray, np.ndarray]:
         )
         depth = vertices[:, 0] * 0.2 + vertices[:, 1] * 0.3 + vertices[:, 2] * 0.1
         return xy, depth
-    raise ValueError(f"unknown view {view}")
+    horizontal, vertical, depth_axis = _ortho_map(view, axes)
+    xy = np.column_stack(
+        (
+            vertices[:, horizontal[0]] * horizontal[1],
+            vertices[:, vertical[0]] * vertical[1],
+        )
+    )
+    depth = vertices[:, depth_axis[0]] * depth_axis[1]
+    return xy, depth
+
+
+def _view_direction(view: str, axes: dict[str, str]) -> np.ndarray:
+    """Direction from the camera into the scene, matching ``_project`` depth."""
+    direction = np.zeros(3, dtype=float)
+    if view == "iso":
+        direction[:] = (0.2, 0.3, 0.1)
+        direction /= np.linalg.norm(direction)
+        return direction
+    _horizontal, _vertical, depth_axis = _ortho_map(view, axes)
+    direction[depth_axis[0]] = depth_axis[1]
+    return direction
+
+
+def _quantize(mesh: trimesh.Trimesh, pitch: float) -> trimesh.Trimesh:
+    vertices = np.round(np.asarray(mesh.vertices, dtype=float) / pitch) * pitch
+    trial = trimesh.Trimesh(vertices=vertices, faces=np.array(mesh.faces, copy=True), process=False)
+    trial.merge_vertices()
+    if len(trial.faces):
+        trial.update_faces(trial.unique_faces() & trial.nondegenerate_faces())
+    trial.remove_unreferenced_vertices()
+    return trial
+
+
+def _cluster_preview(mesh: trimesh.Trimesh, target_faces: int) -> trimesh.Trimesh:
+    """Collapse nearby vertices until the face count fits. This keeps a surface.
+
+    It is the fallback for a mesh too large to rasterize when quadric
+    decimation is unavailable. It does not drop every Nth face.
+    """
+    longest = float(np.max(np.asarray(mesh.extents, dtype=float)))
+    if longest <= 0 or len(mesh.faces) <= target_faces:
+        return mesh
+    lo = longest / 100_000.0
+    hi = longest / 2.0
+    best: trimesh.Trimesh | None = None
+    for _ in range(16):
+        pitch = (lo + hi) / 2.0
+        trial = _quantize(mesh, pitch)
+        count = len(trial.faces)
+        if count == 0:
+            hi = pitch
+            continue
+        if count > target_faces:
+            lo = pitch
+        else:
+            best = trial
+            hi = pitch
+    if best is None:
+        best = _quantize(mesh, max(hi, lo))
+    return best if len(best.faces) else mesh
 
 
 def _preview_mesh(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, dict]:
-    count = len(mesh.faces)
+    count = int(len(mesh.faces))
     info = {
-        "source_faces": int(count),
-        "preview_faces": int(count),
+        "source_faces": count,
+        "preview_faces": count,
         "decimated_for_preview": False,
+        "decimation": "none",
     }
     if count <= PREVIEW_FACE_CAP:
         return mesh, info
-    chosen = np.linspace(0, count - 1, PREVIEW_FACE_CAP).astype(int)
-    preview = trimesh.Trimesh(
-        vertices=mesh.vertices.copy(),
-        faces=mesh.faces[chosen].copy(),
-        process=False,
-    )
-    info["preview_faces"] = int(len(preview.faces))
-    info["decimated_for_preview"] = True
-    return preview, info
+    error = None
+    try:
+        simple = mesh.simplify_quadric_decimation(face_count=PREVIEW_FACE_CAP)
+    except Exception as exc:
+        simple = None
+        error = str(exc)
+    if simple is not None and len(simple.faces) > 0 and len(simple.faces) < count:
+        info["preview_faces"] = int(len(simple.faces))
+        info["decimated_for_preview"] = True
+        info["decimation"] = "quadric"
+        if error:
+            info["decimation_error"] = error
+        return simple, info
+    if error:
+        info["decimation_error"] = error
+    if count <= FULL_RASTER_LIMIT:
+        info["decimation"] = "full"
+        return mesh, info
+    clustered = _cluster_preview(mesh, PREVIEW_FACE_CAP)
+    info["preview_faces"] = int(len(clustered.faces))
+    info["decimated_for_preview"] = info["preview_faces"] < count
+    info["decimation"] = "vertex_cluster"
+    return clustered, info
 
 
 def _shade(normals: np.ndarray) -> np.ndarray:
@@ -73,64 +191,205 @@ def _shade(normals: np.ndarray) -> np.ndarray:
     light /= np.linalg.norm(light)
     length = np.linalg.norm(normals, axis=1)
     length[length == 0] = 1.0
-    unit = np.round(normals / length[:, None], 4)
+    unit = normals / length[:, None]
     lambert = np.clip(unit @ light, 0.0, 1.0)
     tone = 0.28 + 0.72 * lambert
     color = np.column_stack(
-        (0.45 + 0.35 * tone, 0.55 + 0.30 * tone, 0.62 + 0.25 * tone)
-    )
-    return np.clip(color, 0.0, 1.0)
-
-
-def render_view(mesh: trimesh.Trimesh, view: str, destination: Path, *, grid_mm: float | None) -> None:
-    points, depth = _project(np.asarray(mesh.vertices, dtype=float), view)
-    faces = np.asarray(mesh.faces)
-    normals = np.asarray(mesh.face_normals, dtype=float)
-    order = np.argsort(depth[faces].mean(axis=1))
-    colors = _shade(normals)
-    fig, ax = plt.subplots(figsize=(6.2, 6.2), dpi=120)
-    for index in order:
-        polygon = points[faces[index]]
-        color = colors[index]
-        # A same-color stroke covers the hairline matplotlib leaves between triangles.
-        ax.add_patch(
-            MplPolygon(
-                polygon,
-                closed=True,
-                facecolor=color,
-                edgecolor=color,
-                linewidth=0.8,
-                joinstyle="round",
-            )
+        (
+            0.45 + 0.35 * tone,
+            0.55 + 0.30 * tone,
+            0.62 + 0.25 * tone,
         )
+    )
+    return np.clip(color * 255.0, 0, 255).astype(np.uint8)
+
+
+def _rasterize(
+    points: np.ndarray,
+    depth: np.ndarray,
+    faces: np.ndarray,
+    colors: np.ndarray,
+    width: int,
+    height: int,
+) -> np.ndarray:
+    """Paint triangles with a z-buffer. Smaller depth is closer to the camera."""
+    image = np.full((height, width, 3), 255, dtype=np.uint8)
+    zbuf = np.full((height, width), np.inf, dtype=np.float64)
+    for index, face in enumerate(faces):
+        tri = points[face]
+        zed = depth[face]
+        minx = max(int(math.floor(float(np.min(tri[:, 0])))), 0)
+        maxx = min(int(math.ceil(float(np.max(tri[:, 0])))), width - 1)
+        miny = max(int(math.floor(float(np.min(tri[:, 1])))), 0)
+        maxy = min(int(math.ceil(float(np.max(tri[:, 1])))), height - 1)
+        if minx > maxx or miny > maxy:
+            continue
+        xs = np.arange(minx, maxx + 1)
+        ys = np.arange(miny, maxy + 1)
+        xx, yy = np.meshgrid(xs, ys)
+        x0, y0 = float(tri[0, 0]), float(tri[0, 1])
+        x1, y1 = float(tri[1, 0]), float(tri[1, 1])
+        x2, y2 = float(tri[2, 0]), float(tri[2, 1])
+        denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2)
+        if abs(denom) < 1e-12:
+            continue
+        w0 = ((y1 - y2) * (xx - x2) + (x2 - x1) * (yy - y2)) / denom
+        w1 = ((y2 - y0) * (xx - x2) + (x0 - x2) * (yy - y2)) / denom
+        w2 = 1.0 - w0 - w1
+        mask = (w0 >= -1e-6) & (w1 >= -1e-6) & (w2 >= -1e-6)
+        if not np.any(mask):
+            continue
+        zz = w0 * float(zed[0]) + w1 * float(zed[1]) + w2 * float(zed[2])
+        closer = mask & (zz < zbuf[miny : maxy + 1, minx : maxx + 1])
+        ys_hit, xs_hit = np.nonzero(closer)
+        if ys_hit.size == 0:
+            continue
+        zbuf[miny + ys_hit, minx + xs_hit] = zz[ys_hit, xs_hit]
+        image[miny + ys_hit, minx + xs_hit] = colors[index]
+    return image
+
+
+def _frame(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     mins = points.min(axis=0)
     maxs = points.max(axis=0)
-    span = np.maximum(maxs - mins, 1e-6)
-    pad = span * 0.08
-    ax.set_xlim(mins[0] - pad[0], maxs[0] + pad[0])
-    ax.set_ylim(mins[1] - pad[1], maxs[1] + pad[1])
-    ax.set_aspect("equal", adjustable="box")
+    span = np.maximum(maxs - mins, 1e-9)
+    pad = np.maximum(span * 0.08, float(np.max(span)) * 0.02)
+    return mins - pad, maxs + pad
+
+
+def _fit(mins: np.ndarray, maxs: np.ndarray, width: int, height: int) -> tuple[float, float, float]:
+    """One scale for both axes, so a 6 mm edge is not stretched into a square."""
+    span = np.maximum(maxs - mins, 1e-9)
+    scale = min((width - 1) / float(span[0]), (height - 1) / float(span[1]))
+    used_w = float(span[0]) * scale
+    used_h = float(span[1]) * scale
+    origin_x = ((width - 1) - used_w) / 2.0
+    origin_y = ((height - 1) - used_h) / 2.0
+    return scale, origin_x, origin_y
+
+
+def _to_pixels(points: np.ndarray, mins: np.ndarray, maxs: np.ndarray, width: int, height: int) -> np.ndarray:
+    scale, origin_x, origin_y = _fit(mins, maxs, width, height)
+    px = origin_x + (points[:, 0] - mins[0]) * scale
+    py = origin_y + (maxs[1] - points[:, 1]) * scale
+    return np.column_stack((px, py))
+
+
+def _font(size: int) -> ImageFont.ImageFont:
+    if Path(_FONT).is_file():
+        return ImageFont.truetype(_FONT, size=size)
+    return ImageFont.load_default()
+
+
+def _grid_step(span: float, requested: float) -> float:
+    if requested <= 0 or span <= 0:
+        return requested
+    count = span / requested
+    if count <= 40:
+        return requested
+    return requested * math.ceil(count / 40.0)
+
+
+def _draw_grid(
+    image: np.ndarray,
+    mins: np.ndarray,
+    maxs: np.ndarray,
+    grid_mm: float,
+) -> float:
+    height, width = image.shape[:2]
+    span = np.maximum(maxs - mins, 1e-9)
+    step = _grid_step(float(np.max(span)), grid_mm)
+    if step <= 0:
+        return step
+    scale, origin_x, origin_y = _fit(mins, maxs, width, height)
+    background = np.all(image >= 250, axis=2)
+    canvas = Image.fromarray(image.copy(), mode="RGB")
+    draw = ImageDraw.Draw(canvas)
+    # Grid lines cover the whole frame at the same millimetre scale as the part.
+    left = float(mins[0]) - origin_x / scale
+    right = left + (width - 1) / scale
+    top = float(maxs[1]) + origin_y / scale
+    bottom = top - (height - 1) / scale
+    start_x = math.floor(left / step) * step
+    start_y = math.floor(bottom / step) * step
+    x = start_x
+    guard = 0
+    while x <= right + step * 0.01 and guard < 80:
+        px = origin_x + (x - float(mins[0])) * scale
+        if 0 <= px <= width - 1:
+            draw.line((px, 0, px, height - 1), fill=(213, 224, 230), width=1)
+        x += step
+        guard += 1
+    y = start_y
+    guard = 0
+    while y <= top + step * 0.01 and guard < 80:
+        py = origin_y + (float(maxs[1]) - y) * scale
+        if 0 <= py <= height - 1:
+            draw.line((0, py, width - 1, py), fill=(213, 224, 230), width=1)
+        y += step
+        guard += 1
+    lined = np.asarray(canvas)
+    # Keep the grid behind the part so lines do not streak across faces.
+    image[background] = lined[background]
+    return step
+
+
+def render_view(
+    mesh: trimesh.Trimesh,
+    view: str,
+    destination: Path,
+    *,
+    grid_mm: float | None,
+    axes: dict[str, str],
+    length_unit: str,
+    pixels: int = 720,
+    samples: int | None = None,
+) -> dict:
+    if samples is None:
+        samples = 2 if len(mesh.faces) <= 2000 else 1
+    samples = max(1, int(samples))
+    vertices = np.asarray(mesh.vertices, dtype=float)
+    points, depth = _project(vertices, view, axes)
+    mins, maxs = _frame(points)
+    faces = np.asarray(mesh.faces)
+    colors = _shade(np.asarray(mesh.face_normals, dtype=float))
+    scale = samples
+    pix = _to_pixels(points, mins, maxs, pixels * scale, pixels * scale)
+    buffer = _rasterize(pix, depth, faces, colors, pixels * scale, pixels * scale)
+    if scale > 1:
+        buffer = (
+            buffer.reshape(pixels, scale, pixels, scale, 3).mean(axis=(1, 3)).astype(np.uint8)
+        )
+    drawn_step = None
     if grid_mm and grid_mm > 0 and view != "iso":
-        ax.set_axisbelow(True)
-        start_x = np.floor((mins[0] - pad[0]) / grid_mm) * grid_mm
-        start_y = np.floor((mins[1] - pad[1]) / grid_mm) * grid_mm
-        ax.set_xticks(np.arange(start_x, maxs[0] + pad[0] + grid_mm, grid_mm), minor=True)
-        ax.set_yticks(np.arange(start_y, maxs[1] + pad[1] + grid_mm, grid_mm), minor=True)
-        ax.set_xticks(np.arange(np.floor(mins[0] / 10) * 10, maxs[0] + 10, 10))
-        ax.set_yticks(np.arange(np.floor(mins[1] / 10) * 10, maxs[1] + 10, 10))
-        ax.grid(True, which="minor", color="#d5e0e6", linewidth=0.4)
-        ax.grid(True, which="major", color="#b7c6d0", linewidth=0.6)
-        ax.tick_params(labelsize=7)
-    else:
-        ax.set_xticks([])
-        ax.set_yticks([])
-    ax.set_title(f"{view}  ·  millimetres", fontsize=11, color="#1c2430")
-    for spine in ax.spines.values():
-        spine.set_color("#d5dde3")
-    fig.tight_layout()
+        drawn_step = _draw_grid(buffer, mins, maxs, grid_mm)
+    header = 40
+    canvas = Image.new("RGB", (pixels, pixels + header), "white")
+    canvas.paste(Image.fromarray(buffer, mode="RGB"), (0, header))
+    # Iso axes are a projection, not millimetres, so the title does not claim a scale.
+    title = view if view == "iso" else f"{view}  ·  {length_unit}"
+    ImageDraw.Draw(canvas).text((12, 10), title, fill=(28, 36, 48), font=_font(18))
     destination.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(destination, facecolor="white")
-    plt.close(fig)
+    canvas.save(destination, format="PNG")
+    return {"grid_step_mm": drawn_step, "view": view}
+
+
+def _contact(out_dir: Path, destination: Path) -> None:
+    images = [Image.open(out_dir / f"{view}.png").convert("RGB") for view in _VIEWS]
+    width, height = images[0].size
+    label = 28
+    gap = 12
+    canvas = Image.new("RGB", (width * 2 + gap, (height + label) * 2 + gap), "white")
+    draw = ImageDraw.Draw(canvas)
+    font = _font(16)
+    for index, (view, image) in enumerate(zip(_VIEWS, images)):
+        column, row = index % 2, index // 2
+        x = column * (width + gap)
+        y = row * (height + label + gap)
+        draw.text((x + 8, y + 4), view, fill=(28, 36, 48), font=font)
+        canvas.paste(image, (x, y + label))
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(destination, format="PNG")
 
 
 def side_by_side(photo: Path, render_path: Path, destination: Path) -> None:
@@ -138,9 +397,11 @@ def side_by_side(photo: Path, render_path: Path, destination: Path) -> None:
     left = Image.open(photo).convert("RGB")
     right = Image.open(render_path).convert("RGB")
     height = 720
+
     def scale(image: Image.Image) -> Image.Image:
         ratio = height / image.height
         return image.resize((max(1, int(image.width * ratio)), height), Image.Resampling.LANCZOS)
+
     left_s = scale(left)
     right_s = scale(right)
     gap = 24
@@ -148,10 +409,90 @@ def side_by_side(photo: Path, render_path: Path, destination: Path) -> None:
     canvas.paste(left_s, (0, 40))
     canvas.paste(right_s, (left_s.width + gap, 40))
     draw = ImageDraw.Draw(canvas)
-    draw.text((12, 12), "reference", fill="#1c2430")
-    draw.text((left_s.width + gap + 12, 12), "model front", fill="#1c2430")
+    draw.text((12, 12), "reference", fill=(28, 36, 48), font=_font(18))
+    draw.text((left_s.width + gap + 12, 12), "model front", fill=(28, 36, 48), font=_font(18))
     destination.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(destination, format="PNG")
+
+
+def outline_segments(mesh: trimesh.Trimesh, view: str, axes: dict[str, str]) -> np.ndarray:
+    """Projected outline: boundary edges plus silhouette edges for this view.
+
+    A watertight solid has no boundary. Its outline is the set of edges where
+    one neighbor faces the camera and the other faces away.
+    """
+    if len(mesh.faces) == 0:
+        return np.zeros((0, 2, 2), dtype=float)
+    unique = np.asarray(mesh.edges_unique)
+    inverse = np.asarray(mesh.edges_unique_inverse)
+    counts = np.bincount(inverse) if inverse.size else np.zeros(0, dtype=int)
+    chosen: list[np.ndarray] = []
+    if counts.size:
+        boundary = np.flatnonzero(counts == 1)
+        if boundary.size:
+            chosen.append(boundary)
+    direction = _view_direction(view, axes)
+    try:
+        adjacency = np.asarray(mesh.face_adjacency)
+        adjacency_edges = np.asarray(mesh.face_adjacency_edges)
+        if adjacency.size and adjacency_edges.size:
+            facing = np.asarray(mesh.face_normals, dtype=float) @ direction
+            front = facing < 0
+            flip = front[adjacency[:, 0]] != front[adjacency[:, 1]]
+            if np.any(flip):
+                chosen.append(adjacency_edges[flip])
+    except Exception:
+        pass
+    if not chosen:
+        return np.zeros((0, 2, 2), dtype=float)
+    edge_index = np.unique(np.concatenate(chosen))
+    segments_3d = unique[edge_index]
+    points, _depth = _project(np.asarray(mesh.vertices, dtype=float), view, axes)
+    return points[segments_3d]
+
+
+def overlay_outline(
+    mesh: trimesh.Trimesh,
+    photo: Path,
+    destination: Path,
+    *,
+    view: str,
+    axes: dict[str, str],
+    photo_scale: float,
+    origin: tuple[float, float] | None = None,
+) -> None:
+    """Draw the view outline onto a copy of the photo.
+
+    ``photo_scale`` is pixels per millimetre. With no origin, the model center
+    sits on the image center. ``origin`` is the image pixel of the model's
+    minimum corner (image y grows downward).
+    """
+    if photo_scale <= 0 or not np.isfinite(photo_scale):
+        raise ValueError("photo scale must be a positive number of pixels per millimetre")
+    image = Image.open(photo).convert("RGB")
+    segments = outline_segments(mesh, view, axes)
+    if len(segments):
+        flat = segments.reshape(-1, 2)
+        minimum = flat.min(axis=0)
+        maximum = flat.max(axis=0)
+        center = (minimum + maximum) / 2.0
+    else:
+        minimum = np.zeros(2)
+        center = np.zeros(2)
+    draw = ImageDraw.Draw(image)
+    width = int(np.clip(round(photo_scale * 0.35), 2, 8))
+    for segment in segments:
+        horizontal = segment[:, 0]
+        vertical = segment[:, 1]
+        if origin is None:
+            x = image.width / 2.0 + (horizontal - center[0]) * photo_scale
+            y = image.height / 2.0 - (vertical - center[1]) * photo_scale
+        else:
+            x = origin[0] + (horizontal - minimum[0]) * photo_scale
+            y = origin[1] - (vertical - minimum[1]) * photo_scale
+        draw.line((float(x[0]), float(y[0]), float(x[1]), float(y[1])), fill=(20, 24, 32), width=width)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    image.save(destination, format="PNG")
 
 
 def render_views(
@@ -160,24 +501,41 @@ def render_views(
     *,
     grid_mm: float | None = None,
     photo: Path | None = None,
+    photo_scale: float | None = None,
+    overlay_origin: tuple[float, float] | None = None,
+    up: str | None = None,
+    front_axis: str | None = None,
+    pixels: int = 720,
+    samples: int | None = None,
+    length_unit: str = "millimetres",
+    unit_meta: dict | None = None,
 ) -> dict:
+    if photo_scale is not None and photo is None:
+        raise ValueError("--photo-scale needs --photo")
+    if overlay_origin is not None and photo_scale is None:
+        raise ValueError("--overlay-origin needs --photo-scale")
+    axes = choose_axes(mesh.extents, up=up, front_axis=front_axis)
     preview, info = _preview_mesh(mesh)
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
+    grid_step = None
     for view in _VIEWS:
         path = out_dir / f"{view}.png"
-        render_view(preview, view, path, grid_mm=grid_mm)
+        details = render_view(
+            preview,
+            view,
+            path,
+            grid_mm=grid_mm,
+            axes=axes,
+            length_unit=length_unit,
+            pixels=pixels,
+            samples=samples,
+        )
+        if view == "front":
+            grid_step = details["grid_step_mm"]
         written.append(str(path))
     contact = out_dir / "contact.png"
-    fig, axes = plt.subplots(2, 2, figsize=(10, 10), dpi=110)
-    for axis, view in zip(axes.ravel(), _VIEWS):
-        image = plt.imread(out_dir / f"{view}.png")
-        axis.imshow(image)
-        axis.set_title(view, fontsize=11)
-        axis.axis("off")
-    fig.tight_layout()
-    fig.savefig(contact, facecolor="white")
-    plt.close(fig)
+    _contact(out_dir, contact)
     written.append(str(contact))
     compare = None
     if photo is not None:
@@ -185,41 +543,111 @@ def render_views(
         side_by_side(photo, out_dir / "front.png", compare_path)
         compare = str(compare_path)
         written.append(compare)
+    overlay = None
+    if photo is not None and photo_scale is not None:
+        overlay_path = out_dir / "overlay.png"
+        overlay_outline(
+            mesh,
+            photo,
+            overlay_path,
+            view="front",
+            axes=axes,
+            photo_scale=photo_scale,
+            origin=overlay_origin,
+        )
+        overlay = str(overlay_path)
+        written.append(overlay)
     manifest = {
         **info,
         "grid_mm": grid_mm,
+        "grid_step_mm": grid_step,
         "views": written,
         "compare_front": compare,
-        "units": "millimeters",
+        "overlay": overlay,
+        "photo_scale_px_per_mm": photo_scale,
+        "view_axes": axes,
+        "units": length_unit,
+        "length_unit": length_unit,
     }
+    if unit_meta is not None:
+        attach_units(manifest, unit_meta)
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return manifest
 
 
-def main(argv: list[str] | None = None) -> int:
+def _parse_origin(text: str) -> tuple[float, float]:
+    parts = text.split(",")
+    if len(parts) != 2:
+        raise ValueError("--overlay-origin must be x,y in image pixels")
+    try:
+        origin = (float(parts[0]), float(parts[1]))
+    except ValueError as exc:
+        raise ValueError("--overlay-origin must be x,y in image pixels") from exc
+    if not np.isfinite(origin).all():
+        raise ValueError("--overlay-origin must be finite")
+    return origin
+
+
+def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     parser = argparse.ArgumentParser(description="Render front, side, top, and iso views.")
     parser.add_argument("mesh")
     parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--photo", help="Reference image placed beside the front view.")
+    parser.add_argument("--photo", help="Reference image. Written beside the front view.")
+    parser.add_argument(
+        "--photo-scale",
+        type=float,
+        help="Pixels per millimetre. Draws an outline of the front view on the photo.",
+    )
+    parser.add_argument(
+        "--overlay-origin",
+        help="Image pixel x,y of the model's minimum corner. Default: center the model.",
+    )
     parser.add_argument("--grid-mm", type=float, help="Draw a square grid of this size, in mm.")
+    parser.add_argument("--up", choices=("x", "y", "z"), help="Axis that points up. Default: the longest side.")
+    parser.add_argument(
+        "--front-axis",
+        choices=("x", "y", "z"),
+        help="Axis the front camera looks along. Default: the shortest axis that is not up.",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
+    add_unit_arguments(parser)
     args = parser.parse_args(argv)
     out_dir = Path(args.out_dir).expanduser().resolve()
     if out_dir.exists() and any(out_dir.iterdir()) and not args.force:
-        print(f"error: {out_dir} is not empty. Pass --force.", flush=True)
-        return 1
+        return 1, {"ok": False, "error": f"{out_dir} is not empty. Pass --force."}
     try:
-        mesh = load_mesh(args.mesh, max_bytes=args.max_bytes)
+        loaded = load_mesh(args.mesh, max_bytes=args.max_bytes)
+        mesh, meta = prepare_mesh(loaded, args.units, args.scale)
         photo = None
         if args.photo:
             photo = resolve_file(args.photo, max_bytes=args.max_bytes, label="photo")
-        manifest = render_views(mesh, out_dir, grid_mm=args.grid_mm, photo=photo)
+        origin = None if args.overlay_origin is None else _parse_origin(args.overlay_origin)
+        manifest = render_views(
+            mesh,
+            out_dir,
+            grid_mm=args.grid_mm,
+            photo=photo,
+            photo_scale=args.photo_scale,
+            overlay_origin=origin,
+            up=args.up,
+            front_axis=args.front_axis,
+            length_unit=meta["length_unit"],
+            unit_meta=meta,
+        )
     except (OSError, ValueError) as exc:
-        print(f"error: {exc}", flush=True)
-        return 1
-    print(json.dumps(manifest, indent=2, sort_keys=True))
-    print("ok", flush=True)
-    return 0
+        return 1, {"ok": False, "error": str(exc)}
+    manifest["ok"] = True
+    return 0, manifest
+
+
+def main(argv: list[str] | None = None) -> int:
+    code, payload = run_render(argv)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    if code == 0:
+        status("ok")
+    elif payload.get("error"):
+        status(f"error: {payload['error']}")
+    return code

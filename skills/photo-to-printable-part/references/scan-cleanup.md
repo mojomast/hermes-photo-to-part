@@ -4,13 +4,19 @@ Load this in scan mode, before rebuilding the solid.
 
 ## What the helper does
 
+Prefer the `photo_part_heal` tool. The script form is:
+
 ```bash
-python <SKILL_DIR>/scripts/heal_scan.py scan.stl --out healed.stl
+python <SKILL_DIR>/scripts/heal_scan.py scan.stl --out healed.stl --units m
 ```
 
-The script copies the mesh, welds vertices, drops degenerate and duplicate faces, fixes normals, and fills boundary holes. The default second pass uses a triangle fan if the first pass left the mesh open. It then keeps the shell with the most triangles.
+The healer copies the mesh, welds vertices, drops degenerate and duplicate faces, fixes normals, and fills boundary holes. If the first pass leaves the mesh open and `--fan` was not set, a second pass fan-fills the remaining holes and sets `fan_fallback` (and `fan_used`) to true. `fan_requested` is true only when `--fan` was passed. It then keeps the shell with the most triangles.
 
-The JSON report has `before` and `after` triangle counts, `fan_used`, and `shells_dropped`. Exit `0` means the result is watertight. Exit `2` means it is still open.
+`shells_before` is the input shell count. `shells_dropped` counts input shells that were discarded. A one-shell input reports `shells_dropped: 0`. Pieces created by the repair and then discarded are `repair_fragments_removed`, not dropped input shells.
+
+`--units` is `mm`, `cm`, `m`, or `in`. `--scale` is an extra multiplier. The output STL is millimetres after that conversion. With neither flag, file numbers are treated as millimetres and nothing is guessed. `unit_warning` is set when the longest side is under 1 mm or over 2 m. `input_extents_file` is the size before conversion.
+
+Exit `0` means the result is watertight. Exit `2` means it is still open. Stdout is one JSON object. `ok` goes to stderr.
 
 Limits, so you do not over-claim:
 

@@ -1,10 +1,21 @@
 {
   "compare_front": "/workspace/examples/plate-clip/renders/compare_front.png",
   "decimated_for_preview": false,
+  "decimation": "none",
   "grid_mm": 2,
+  "grid_step_mm": 4,
+  "length_unit": "millimetres",
+  "overlay": null,
+  "photo_scale_px_per_mm": null,
   "preview_faces": 64,
   "source_faces": 64,
-  "units": "millimeters",
+  "units": "millimetres",
+  "view_axes": {
+    "front_axis": "z",
+    "side_axis": "x",
+    "top_axis": "y",
+    "up": "y"
+  },
   "views": [
     "/workspace/examples/plate-clip/renders/front.png",
     "/workspace/examples/plate-clip/renders/side.png",
