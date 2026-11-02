@@ -31,10 +31,12 @@ def failed(message: str, step: str | None = None) -> dict:
 
 def step_measure() -> str:
     return (
-        "Next: photo_part_template (try l_bracket, hinge, plate, countersink, "
-        "revolve, or ribs before custom code) or photo_part_build, writing "
-        "name_v1.stl in an absolute project directory. Then photo_part_validate "
-        "that file. Do not write into HERMES_HOME/cache."
+        "Next: write spec.json from the user's dimensions, then photo_part_template "
+        "(try thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, l_bracket, "
+        "hinge, plate, countersink, revolve, or ribs before custom code) or "
+        "photo_part_build. A build script imports photopart.features. "
+        "Write name_v1.stl in an absolute project directory. Then photo_part_validate "
+        "that file with the spec. Do not write into HERMES_HOME/cache. Do not delete an STL or 3MF."
     )
 
 
@@ -92,13 +94,17 @@ def step_heal(path: str) -> str:
 def step_build(outputs: list[str], *, ok: bool) -> str:
     stl = next((path for path in outputs if str(path).lower().endswith(".stl")), None)
     if ok and stl:
-        return step_model(stl)
+        return (
+            f"Next: photo_part_validate {stl} with spec.json. Do not overwrite it and do not "
+            "delete an older STL or 3MF. A later edit is a new name_vN.stl. "
+            "Then photo_part_render the same file and deliver."
+        )
     if ok:
         return (
-            "Next: if the script wrote an STL, photo_part_validate that absolute path. "
+            "Next: if the script wrote an STL, photo_part_validate that absolute path with spec.json. "
             "Do not overwrite it. A later edit is a new name_vN.stl."
         )
     return (
-        "The build script failed. Read stderr, fix the script, and run photo_part_build "
-        "again. Do not overwrite a validated STL."
+        "The build script failed. The error field is the exception. "
+        "Fix the script and run photo_part_build again. Do not delete or overwrite an STL or 3MF."
     )

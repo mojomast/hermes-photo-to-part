@@ -1,5 +1,5 @@
 name: photo-to-part
-version: "0.1.3"
+version: "0.1.4"
 description: >-
   Skill id photo-to-part:photo-to-printable-part. Turn photos, a few
   measurements, or a messy scan into a parametric printable part and check

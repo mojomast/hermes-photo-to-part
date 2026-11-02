@@ -1,8 +1,9 @@
 """Silhouette outline for a reference photo.
 
 The line is the outer contour of the z-buffer mask, not the mesh's facet edges.
-``center`` places that mask on the image center. ``auto`` scales and translates
-it onto the part segmented from the photo and reports the overlap.
+``center`` places that mask on the image center. ``auto`` scales, rotates,
+and optionally mirrors it onto the part, then picks the render view whose
+silhouette overlaps the photo best.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ def paint_overlay(
     seed: tuple[float, float] | None = None,
     exclude: list | None = None,
     angled: bool = False,
+    view: str = "front",
 ) -> dict:
     """Draw the front silhouette on a copy of ``photo`` and write a diff image.
 
@@ -46,6 +48,8 @@ def paint_overlay(
     used = fit
     blob = None
     foreground = None
+    rotation = 0.0
+    mirror = False
     hints = bool(roi or seed or exclude)
     if origin is not None:
         placed = _blit_origin(model, (height, width), minimum, maximum, photo_scale, origin)
@@ -61,7 +65,11 @@ def paint_overlay(
                 "Pass roi or seed on the part, and exclude the coin."
             )
         else:
-            placed, note = _align(model, foreground)
+            pose = search_alignment(model, foreground)
+            placed = pose["placed"]
+            note = pose["note"]
+            rotation = pose["rotation_deg"]
+            mirror = pose["mirror"]
             used = "auto"
     else:
         placed = _blit_center(model, (height, width), minimum, maximum, photo_scale, points)
@@ -84,6 +92,235 @@ def paint_overlay(
         "overlay_fit_note": note,
         "overlay_blob": blob,
         "overlay_warnings": warnings,
+        "overlay_rotation_deg": rotation,
+        "overlay_mirror": bool(mirror),
+        "overlay_view": view,
+    }
+
+
+def paint_auto_views(
+    views: list,
+    photo: Path,
+    destination: Path,
+    diff_destination: Path,
+    *,
+    photo_scale: float,
+    roi: tuple[float, float, float, float] | None = None,
+    seed: tuple[float, float] | None = None,
+    exclude: list | None = None,
+    angled: bool = False,
+) -> dict:
+    """Try front, side, and top. Keep the pose with the best overlap.
+
+    ``views`` is ``(name, points, faces)`` in preference order. Within 0.01
+    IoU the earlier view wins, so a rectangle does not flip to top.
+    """
+    if not views:
+        raise ValueError("overlay auto needs at least one view")
+    image = np.array(Image.open(photo).convert("RGB"))
+    foreground, blob = _foreground_for_score(image, roi=roi, seed=seed, exclude=exclude, hints=True)
+    chosen = None
+    if foreground is not None:
+        for index, (name, points, faces) in enumerate(views):
+            model, _minimum, _maximum = raster_model(points, faces, photo_scale)
+            pose = search_alignment(model, foreground)
+            if chosen is None or _prefer_pose(pose["iou"], index, chosen["iou"], chosen["index"]):
+                chosen = {"pose": pose, "name": name, "index": index, "iou": pose["iou"]}
+    if chosen is None:
+        name, points, faces = views[0]
+        model, minimum, maximum = raster_model(points, faces, photo_scale)
+        placed = _blit_center(model, image.shape[:2], minimum, maximum, photo_scale, points)
+        note = (
+            "Could not segment a part from the photo, so the outline stayed centered. "
+            "Pass roi or seed on the part, and exclude the coin."
+        )
+        rotation = 0.0
+        mirror = False
+        view_name = name
+        iou = None if foreground is None else _iou(placed, foreground)
+    else:
+        placed = chosen["pose"]["placed"]
+        note = chosen["pose"]["note"]
+        rotation = chosen["pose"]["rotation_deg"]
+        mirror = chosen["pose"]["mirror"]
+        view_name = chosen["name"]
+        iou = chosen["iou"]
+        note = f"{note} View {view_name}."
+    warnings = _overlay_warnings(iou, blob, angled=angled, missed=foreground is None)
+    if warnings and note:
+        note = note + " " + " ".join(warnings)
+    elif warnings:
+        note = " ".join(warnings)
+    return _write_overlay(
+        image,
+        placed,
+        foreground,
+        blob,
+        destination,
+        diff_destination,
+        fit="auto",
+        note=note,
+        iou=iou,
+        warnings=warnings,
+        rotation=rotation,
+        mirror=mirror,
+        view=view_name,
+    )
+
+
+def search_alignment(model: np.ndarray, foreground: np.ndarray) -> dict:
+    """Coarse 15° search, then ±12° at 3°, including a mirror.
+
+    The search runs on masks no wider than 160 px. The reported IoU is the
+    full-resolution overlap of the winning pose. Ties within 0.01 IoU prefer
+    no mirror and the angle closer to 0, so an axis-aligned part stays put.
+    """
+    long_side = max(max(model.shape), max(foreground.shape))
+    factor = 1.0 if long_side <= 160 else 160.0 / long_side
+    small_model = _resize_by(model, factor)
+    small_foreground = _resize_by(foreground, factor)
+    best: dict | None = None
+
+    def consider(angle: float, mirror: bool) -> None:
+        nonlocal best
+        placed = _place(small_model, small_foreground, angle, mirror, close=False)
+        score = _iou(placed, small_foreground)
+        key = _pose_key(angle, mirror)
+        if best is None or score > best["score"] + 0.01 or (score >= best["score"] - 0.01 and key < best["key"]):
+            best = {"score": score, "angle": angle % 360.0, "mirror": mirror, "key": key}
+
+    for mirror in (False, True):
+        for step in range(0, 360, 15):
+            consider(float(step), mirror)
+    assert best is not None
+    center = best["angle"]
+    for mirror in (False, True):
+        for delta in range(-12, 13, 3):
+            consider(center + delta, mirror)
+    angle = float(best["angle"])
+    mirror = bool(best["mirror"])
+    placed = _place(model, foreground, angle, mirror, close=True)
+    full = _iou(placed, foreground)
+    # A symmetric silhouette ties under a mirror. Prefer the unmirrored pose
+    # when the full-resolution scores are within 0.01.
+    other = _place(model, foreground, angle, not mirror, close=True)
+    other_iou = _iou(other, foreground)
+    if other_iou + 0.01 >= full and (not mirror) is False:
+        # other is mirrored; keep the current one when it is already unmirrored
+        pass
+    if (not mirror) and other_iou > full + 0.01:
+        placed, full, mirror = other, other_iou, True
+    elif mirror and other_iou + 0.01 >= full:
+        placed, full, mirror = other, other_iou, False
+    angle = round(angle, 2)
+    note = f"Aligned at {angle:g} deg, mirror {'on' if mirror else 'off'}."
+    return {
+        "placed": placed,
+        "rotation_deg": angle,
+        "mirror": mirror,
+        "iou": full,
+        "note": note,
+    }
+
+
+def _prefer_pose(new_iou: float, new_index: int, old_iou: float, old_index: int) -> bool:
+    if new_iou > old_iou + 0.01:
+        return True
+    return abs(new_iou - old_iou) <= 0.01 and new_index < old_index
+
+
+def _pose_key(angle: float, mirror: bool) -> tuple:
+    wrapped = angle % 360.0
+    distance = min(wrapped, 360.0 - wrapped)
+    return (distance, 1 if mirror else 0, wrapped)
+
+
+def _resize_by(mask: np.ndarray, factor: float) -> np.ndarray:
+    if factor >= 0.999:
+        return mask
+    height, width = mask.shape
+    resized_w = max(1, int(round(width * factor)))
+    resized_h = max(1, int(round(height * factor)))
+    image = Image.fromarray((mask.astype(np.uint8) * 255), mode="L")
+    small = np.asarray(image.resize((resized_w, resized_h), Image.Resampling.NEAREST))
+    return small > 127
+
+
+def _place(model: np.ndarray, foreground: np.ndarray, angle_deg: float, mirror: bool, *, close: bool) -> np.ndarray:
+    model_box = _bbox(model)
+    photo_box = _bbox(foreground)
+    if model_box is None or photo_box is None:
+        return np.zeros_like(foreground)
+    mx0, my0, mx1, my1 = model_box
+    px0, py0, px1, py1 = photo_box
+    model_pixels = int(np.count_nonzero(model))
+    photo_pixels = int(np.count_nonzero(foreground))
+    if model_pixels > 0 and photo_pixels > 0:
+        # Pixel area stays stable when the part is rotated. The axis-aligned
+        # box of a rotated silhouette is larger than the part.
+        scale = math.sqrt(photo_pixels / model_pixels)
+    else:
+        mw = max(1, mx1 - mx0)
+        mh = max(1, my1 - my0)
+        fw = max(1, px1 - px0)
+        fh = max(1, py1 - py0)
+        scale = math.sqrt((fw * fh) / (mw * mh))
+    mcx = (mx0 + mx1 - 1) / 2.0
+    mcy = (my0 + my1 - 1) / 2.0
+    pcx = (px0 + px1 - 1) / 2.0
+    pcy = (py0 + py1 - 1) / 2.0
+    ys, xs = np.nonzero(model)
+    dx = (xs.astype(float) - mcx) * scale
+    dy = (ys.astype(float) - mcy) * scale
+    if mirror:
+        dx = -dx
+    rad = math.radians(float(angle_deg))
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    rx = cos_a * dx - sin_a * dy
+    ry = sin_a * dx + cos_a * dy
+    placed_x = np.rint(pcx + rx).astype(np.int32)
+    placed_y = np.rint(pcy + ry).astype(np.int32)
+    placed = np.zeros(foreground.shape, dtype=bool)
+    keep = (placed_x >= 0) & (placed_y >= 0) & (placed_x < placed.shape[1]) & (placed_y < placed.shape[0])
+    placed[placed_y[keep], placed_x[keep]] = True
+    if close:
+        placed = _close(placed)
+    return placed
+
+
+def _write_overlay(
+    image,
+    placed,
+    foreground,
+    blob,
+    destination,
+    diff_destination,
+    *,
+    fit,
+    note,
+    iou,
+    warnings,
+    rotation,
+    mirror,
+    view,
+) -> dict:
+    painted = _draw_contour(image, placed)
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(painted, mode="RGB").save(destination, format="PNG")
+    diff = _diff_image(image, placed, foreground)
+    Image.fromarray(diff, mode="RGB").save(diff_destination, format="PNG")
+    return {
+        "overlay_fit": fit,
+        "overlay_iou": None if iou is None else round(float(iou), 4),
+        "overlay_diff": str(Path(diff_destination).resolve()),
+        "overlay_fit_note": note,
+        "overlay_blob": blob,
+        "overlay_warnings": warnings,
+        "overlay_rotation_deg": float(rotation),
+        "overlay_mirror": bool(mirror),
+        "overlay_view": view,
     }
 
 

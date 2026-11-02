@@ -163,8 +163,11 @@ def run_heal(argv: list[str] | None = None) -> tuple[int, dict]:
         export_stl(repaired, out_path, ascii_stl=args.ascii)
     except (OSError, ValueError) as exc:
         return 1, failed(str(exc))
+    from photopart.history import missing_versions
+
     report["input"] = str(in_path)
     report["output"] = str(out_path)
+    report["missing_earlier"] = missing_versions(out_path)
     failures: list[str] = []
     if not report["after"]["watertight"]:
         failures.append("healed mesh is still open")

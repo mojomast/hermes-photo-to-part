@@ -36,6 +36,7 @@ def run_build(
     limit = _timeout(timeout)
     extra = [str(item) for item in (args or [])]
     interpreter = plugin_python()
+    history = _snapshot_existing(work)
     before = _snapshot(work)
     argv = [interpreter, str(script_path), *extra]
     try:
@@ -50,7 +51,7 @@ def run_build(
         report = {
             "ok": False,
             "timeout": True,
-            "error": f"build exceeded {limit:g}s",
+            "error": _timeout_error(limit, exc.stderr),
             "interpreter": interpreter,
             "cwd": str(work),
             "script": str(script_path),
@@ -62,6 +63,18 @@ def run_build(
         return attach_flow(report, step_build([], ok=False))
     outputs = _changed(work, before)
     ok = completed.returncode == 0
+    shells = []
+    if ok:
+        shells = _union_outputs(outputs)
+        outputs = _changed(work, before)
+    missing = []
+    for path in outputs:
+        if Path(path).suffix.lower() in {".stl", ".3mf"}:
+            from photopart.history import missing_versions
+
+            for name in missing_versions(path):
+                if name not in missing:
+                    missing.append(name)
     report = {
         "ok": ok,
         "timeout": False,
@@ -72,9 +85,12 @@ def run_build(
         "stdout": _clip(completed.stdout),
         "stderr": _clip(completed.stderr),
         "outputs": outputs,
+        "shells": shells,
+        "missing_earlier": missing,
+        "history": history,
     }
     if not ok:
-        report["error"] = f"build exited {completed.returncode}"
+        report["error"] = _failure_text(completed.stderr, completed.returncode)
     return attach_flow(report, step_build(outputs, ok=ok))
 
 
@@ -134,10 +150,108 @@ def _changed(root: Path, before: dict[str, tuple[int, int]]) -> list[str]:
         current = (stat.st_size, stat.st_mtime_ns)
         if before.get(key) == current:
             continue
+        if ".p2p_history" in path.parts:
+            continue
         found.append(key)
         if len(found) >= _MAX_OUTPUTS:
             break
     return found
+
+
+def _snapshot_existing(root: Path) -> list[str]:
+    """Keep the previous bytes of top-level STL and 3MF files before the script runs."""
+    from photopart.history import snapshot
+
+    saved = []
+    if not root.is_dir():
+        return saved
+    for path in root.iterdir():
+        if path.is_file() and path.suffix.lower() in {".stl", ".3mf"}:
+            copied = snapshot(path)
+            if copied:
+                saved.append(copied)
+    return saved
+
+
+def _union_outputs(paths: list[str]) -> list[dict]:
+    """Boolean-union overlapping shells and report the count before and after."""
+    import trimesh
+
+    from photopart.history import snapshot
+    from photopart.manifold_util import union_components
+
+    rows = []
+    for raw in paths:
+        path = Path(raw)
+        if path.suffix.lower() not in {".stl", ".3mf"} or ".p2p_history" in path.parts:
+            continue
+        try:
+            loaded = trimesh.load(path, force="mesh", process=True)
+        except Exception as exc:
+            rows.append(
+                {
+                    "file": str(path),
+                    "shells_before": None,
+                    "shells_after": None,
+                    "union_applied": False,
+                    "error": str(exc),
+                }
+            )
+            continue
+        if not isinstance(loaded, trimesh.Trimesh) or len(loaded.faces) == 0:
+            continue
+        before = len(loaded.split(only_watertight=False))
+        applied = False
+        after = before
+        if before > 1:
+            merged, did = union_components(loaded)
+            if did:
+                after = len(merged.split(only_watertight=False))
+                if after < before:
+                    try:
+                        snapshot(path)
+                        kind = "stl" if path.suffix.lower() == ".stl" else "3mf"
+                        payload = merged.export(file_type=kind)
+                        if isinstance(payload, str):
+                            payload = payload.encode("utf-8")
+                        path.write_bytes(payload)
+                        applied = True
+                    except Exception:
+                        after = before
+                        applied = False
+                else:
+                    after = before
+        rows.append(
+            {
+                "file": str(path),
+                "shells_before": before,
+                "shells_after": after if applied or before == 1 else before,
+                "union_applied": applied,
+            }
+        )
+    return rows
+
+
+def _failure_text(stderr, returncode: int) -> str:
+    """Exception line first, then a short traceback. No skill-id filler."""
+    text = _clip(stderr).strip()
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return f"build exited {returncode} with no stderr"
+    exception = lines[-1]
+    context = lines[max(0, len(lines) - 13) : -1]
+    if not context:
+        return exception
+    return exception + "\n" + "\n".join(context)
+
+
+def _timeout_error(limit: float, stderr) -> str:
+    text = _clip(stderr).strip()
+    lines = [line for line in text.splitlines() if line.strip()]
+    message = f"TimeoutExpired: build exceeded {limit:g}s"
+    if lines:
+        return message + "\n" + lines[-1]
+    return message
 
 
 def _clip(value) -> str:

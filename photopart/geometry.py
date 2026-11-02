@@ -158,6 +158,9 @@ def scad_source(params: Mapping[str, float] | None = None) -> str:
 
 
 def export_stl(mesh: trimesh.Trimesh, path: Path, *, ascii_stl: bool) -> None:
+    from photopart.history import snapshot
+
+    snapshot(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     if ascii_stl:
         from trimesh.exchange.stl import export_stl_ascii
@@ -179,6 +182,9 @@ def export_3mf(mesh: trimesh.Trimesh, path: Path) -> None:
     payload = mesh.export(file_type="3mf")
     if isinstance(payload, str):
         payload = payload.encode("utf-8")
+    from photopart.history import snapshot
+
+    snapshot(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
 
