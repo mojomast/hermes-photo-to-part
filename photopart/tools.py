@@ -6,7 +6,9 @@ Importing this module does not import trimesh; the handlers do, on first use.
 
 from __future__ import annotations
 
+import inspect
 import json
+import re
 from pathlib import Path
 
 from photopart.flow import SKILL_ID, attach_flow
@@ -47,8 +49,50 @@ def _lead(text: str) -> str:
 
 _CONCISE_DROP = {"history", "overlay_poses", "stdout", "stderr"}
 
+# PluginContext.register_tool on Hermes v0.21.7 (NousResearch/hermes-agent
+# hermes_cli/plugins.py, tag v0.21.7, commit 71d34bad). output_schema is not
+# one of these. Later builds may add keywords; those stay optional.
+_HERMES_V0217_REGISTER_PARAMS = frozenset({
+    "name",
+    "toolset",
+    "schema",
+    "handler",
+    "check_fn",
+    "requires_env",
+    "is_async",
+    "description",
+    "emoji",
+    "override",
+})
+_UNEXPECTED_KEYWORD = re.compile(r"unexpected keyword argument '([^']+)'")
 
-def _emit(payload: dict, fallback: str, *, plain_error: bool = False, response_format: str = "concise") -> str:
+
+def _output_schema(name: str) -> dict:
+    """Declared result. Hermes uses it when register_tool accepts output_schema."""
+    return {
+        "type": "object",
+        "properties": {
+            "ok": {"type": "boolean"},
+            "error": {"type": "string"},
+            "cause": {"type": "string"},
+            "fix": {"type": "string"},
+            "next_step": {"type": "string"},
+            "skill_id": {"type": "string"},
+            "response_format": {"type": "string"},
+        },
+        "required": ["ok", "next_step", "skill_id"],
+        "description": name,
+    }
+
+
+def _emit(
+    payload: dict,
+    fallback: str,
+    *,
+    plain_error: bool = False,
+    response_format: str = "concise",
+    tool_name: str = "photo_part",
+) -> str:
     if payload.get("error") and not plain_error and SKILL_ID not in str(payload["error"]):
         payload["error"] = f"{payload['error']} Skill id: {SKILL_ID}."
     if payload.get("error"):
@@ -61,6 +105,8 @@ def _emit(payload: dict, fallback: str, *, plain_error: bool = False, response_f
         payload["skill_id"] = SKILL_ID
     mode = response_format if response_format in {"concise", "detailed"} else "concise"
     payload["response_format"] = mode
+    if mode == "detailed":
+        payload["output_schema"] = _output_schema(tool_name)
     if mode == "concise":
         for key in _CONCISE_DROP:
             payload.pop(key, None)
@@ -180,8 +226,14 @@ def validate_tool(params, **_kwargs) -> str:
             {"ok": False, "error": str(exc)},
             "Fix the arguments, then photo_part_validate the mesh.",
             response_format=mode,
+            tool_name="photo_part_validate",
         )
-    return _emit(report, "Next: photo_part_render the same file, then deliver it.", response_format=mode)
+    return _emit(
+        report,
+        "Next: photo_part_render the same file, then deliver it.",
+        response_format=mode,
+        tool_name="photo_part_validate",
+    )
 
 
 def render_tool(params, **_kwargs) -> str:
@@ -258,11 +310,13 @@ def render_tool(params, **_kwargs) -> str:
             {"ok": False, "error": str(exc)},
             "Fix the render arguments, then photo_part_render the validated file.",
             response_format=mode,
+            tool_name="photo_part_render",
         )
     return _emit(
         report,
         "Read stale_validation. Deliver the file only when it is false and validation_ok is true.",
         response_format=mode,
+        tool_name="photo_part_render",
     )
 
 
@@ -304,8 +358,14 @@ def heal_tool(params, **_kwargs) -> str:
             {"ok": False, "error": str(exc)},
             "Fix the heal arguments. Write a new name_vN.stl. Do not overwrite a validated mesh.",
             response_format=mode,
+            tool_name="photo_part_heal",
         )
-    return _emit(report, "Next: photo_part_validate the healed STL, then render it.", response_format=mode)
+    return _emit(
+        report,
+        "Next: photo_part_validate the healed STL, then render it.",
+        response_format=mode,
+        tool_name="photo_part_heal",
+    )
 
 
 def template_tool(params, **_kwargs) -> str:
@@ -342,6 +402,7 @@ def template_tool(params, **_kwargs) -> str:
             {"ok": False, "error": str(exc)},
             "Try a photo_part_template shape before a custom script. Pass an absolute project out_dir.",
             response_format=mode,
+            tool_name="photo_part_template",
         )
     from photopart.flow import step_model
     from photopart.history import missing_versions
@@ -372,7 +433,12 @@ def template_tool(params, **_kwargs) -> str:
 
     attach_flow(summary, step_model(stl or "name_v1.stl"))
     note_missing_spec(summary, Path.cwd(), out_dir)
-    return _emit(summary, step_model(stl or "name_v1.stl"), response_format=mode)
+    return _emit(
+        summary,
+        step_model(stl or "name_v1.stl"),
+        response_format=mode,
+        tool_name="photo_part_template",
+    )
 
 
 def measure_tool(params, **_kwargs) -> str:
@@ -389,11 +455,13 @@ def measure_tool(params, **_kwargs) -> str:
             {"ok": False, "error": str(exc)},
             "Fix the measure arguments. Pass an absolute project path for out.",
             response_format=mode,
+            tool_name="photo_part_measure",
         )
     return _emit(
         report,
         "Next: photo_part_template or photo_part_build, then validate name_v1.stl.",
         response_format=mode,
+        tool_name="photo_part_measure",
     )
 
 
@@ -421,12 +489,14 @@ def build_tool(params, **_kwargs) -> str:
             {"ok": False, "error": str(exc)},
             "Try photo_part_template shapes such as l_bracket before a custom script.",
             response_format=mode,
+            tool_name="photo_part_build",
         )
     return _emit(
         report,
         "Next: photo_part_validate the STL the script wrote, with spec.json. Do not overwrite it.",
         plain_error=bool(report.get("error")),
         response_format=mode,
+        tool_name="photo_part_build",
     )
 
 
@@ -445,24 +515,6 @@ def _schema(name: str, description: str, properties: dict, required: list[str]) 
             "properties": fields,
             "required": required,
         },
-    }
-
-
-def _output_schema(name: str) -> dict:
-    """Declared result. Hermes uses it when register_tool accepts output_schema."""
-    return {
-        "type": "object",
-        "properties": {
-            "ok": {"type": "boolean"},
-            "error": {"type": "string"},
-            "cause": {"type": "string"},
-            "fix": {"type": "string"},
-            "next_step": {"type": "string"},
-            "skill_id": {"type": "string"},
-            "response_format": {"type": "string"},
-        },
-        "required": ["ok", "next_step", "skill_id"],
-        "description": name,
     }
 
 
@@ -783,10 +835,98 @@ def tool_specs() -> list[dict]:
     return [validate, render, heal, template, measure, build]
 
 
+def _signature_parameters(func):
+    try:
+        return inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return None
+
+
+def _register_tool_accepts(func, name: str, parameters) -> bool:
+    """True when func lists `name` or accepts **kwargs."""
+    if parameters is None:
+        return name in _HERMES_V0217_REGISTER_PARAMS
+    if name in parameters:
+        kind = parameters[name].kind
+        return kind in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
+    return any(param.kind is inspect.Parameter.VAR_KEYWORD for param in parameters.values())
+
+
+def _dropped_note(description: str, dropped: dict) -> str:
+    """Keep a schema Hermes could not take as a register_tool keyword."""
+    if not dropped:
+        return description
+    notes = []
+    schema = dropped.get("output_schema")
+    if isinstance(schema, dict):
+        notes.append("output_schema=" + json.dumps(schema, sort_keys=True, separators=(",", ":")))
+    others = {key: value for key, value in dropped.items() if key != "output_schema"}
+    if others:
+        notes.append("unsupported_register_kwargs=" + json.dumps(others, sort_keys=True, default=str))
+    suffix = " ".join(notes)
+    if not suffix or suffix in description:
+        return description
+    return f"{description} {suffix}"
+
+
+def _payload_without(kwargs: dict, dropped_keys: set[str]) -> dict:
+    """Copy the call, folding dropped keywords into the descriptions."""
+    dropped = {key: kwargs[key] for key in dropped_keys if key in kwargs and key != "description"}
+    payload = {key: value for key, value in kwargs.items() if key not in dropped_keys}
+    if not dropped:
+        return payload
+    base = str(kwargs.get("description") or "")
+    if "description" in payload:
+        payload["description"] = _dropped_note(str(payload.get("description") or ""), dropped)
+    schema = payload.get("schema")
+    if isinstance(schema, dict):
+        schema = dict(schema)
+        schema["description"] = _dropped_note(str(schema.get("description") or base), dropped)
+        payload["schema"] = schema
+    return payload
+
+
+def _call_register_tool(register, **kwargs) -> None:
+    """Call register_tool, omitting keywords this Hermes build does not accept.
+
+    Hermes v0.21.7 raises TypeError on output_schema. The signature check skips
+    unknown keywords, including any optional keyword besides output_schema.
+    A TypeError that names an unexpected keyword retries without it. Dropped
+    schemas stay on the tool description. Detailed results still include
+    output_schema.
+    """
+    parameters = _signature_parameters(register)
+    dropped = {key for key in kwargs if not _register_tool_accepts(register, key, parameters)}
+    last_error: TypeError | None = None
+    for _attempt in range(1 + len(kwargs)):
+        payload = _payload_without(kwargs, dropped)
+        try:
+            register(**payload)
+            return
+        except TypeError as exc:
+            last_error = exc
+            match = _UNEXPECTED_KEYWORD.search(str(exc))
+            if match is None:
+                raise
+            name = match.group(1)
+            if name not in kwargs or name in dropped:
+                raise
+            dropped.add(name)
+    if last_error is not None:
+        raise last_error
+    names = ", ".join(sorted(dropped))
+    raise TypeError(f"register_tool rejected optional keywords: {names}")
+
+
 def register_tools(ctx) -> None:
     """Register the mesh tools. Names match plugin.yaml provides_tools."""
+    register = ctx.register_tool
     for spec in tool_specs():
-        ctx.register_tool(
+        _call_register_tool(
+            register,
             name=spec["name"],
             toolset="photo-to-part",
             schema=spec["schema"],

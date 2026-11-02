@@ -183,6 +183,8 @@ class EvalTests(unittest.TestCase):
         failed = [row["id"] for row in report["results"] if not row.get("passed")]
         self.assertEqual(failed, [], json.dumps(report["results"], indent=2, default=str))
         self.assertGreaterEqual(report["passed"], 15)
+        self.assertEqual(report["tools_registered"], 6)
+        self.assertIsNone(report.get("registration_error"))
         self.assertEqual(report["wrong_skill_ids"], 0)
         self.assertEqual(report["deleted_files"], [])
         scored = score_transcript(

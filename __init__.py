@@ -12,9 +12,10 @@ def register(ctx) -> None:
     as an alias. The description in SKILL.md is what ``skills_list`` shows,
     and it starts with the real id ``photo-to-part:photo-to-printable-part``.
     Hermes reads that description from the skill file.
-    Tools are registered with the keyword form of register_tool from Hermes
-    v0.21.7 (name, toolset, schema, handler). trimesh is imported when a tool
-    runs, not when the plugin is registered.
+    Tools use the keyword form of register_tool. Hermes v0.21.7 accepts
+    name, toolset, schema, handler, and description, and rejects output_schema.
+    That keyword is passed only when the live signature accepts it. trimesh is
+    imported when a tool runs, not when the plugin is registered.
     """
     skills_dir = Path(__file__).resolve().parent / "skills"
     if skills_dir.is_dir():

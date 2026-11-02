@@ -6,7 +6,7 @@ description: >-
   measurements, or turn a messy scan into a clean solid. Use for a replacement
   part, a fit-test print, an STL, a 2 mm grid-paper photo, or a scan cleaned
   into CAD. Call the photo_part_* tools. Read next_step. Stay under 25 calls.
-version: "0.1.6"
+version: "0.1.7"
 author: mojomast
 license: MIT
 compatibility: >-

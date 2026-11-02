@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7 — 2026-11-02
+
+- `ctx.register_tool` receives `output_schema` only when that Hermes build accepts it. Hermes v0.21.7 (`PluginContext.register_tool` has no `output_schema` parameter and no `**kwargs`) no longer fails `hermes plugins doctor` with `unexpected keyword argument 'output_schema'`, so all six tools register. Any other keyword the live signature does not accept is skipped the same way. A `TypeError` that names an unexpected keyword retries without it. A schema that cannot be passed is appended to the tool description and included on `response_format=detailed` results.
+- `python -m evals.runner` loads the plugin `register(ctx)` entrypoint against a Hermes v0.21.7-shaped context and exits non-zero, with a clear message, when fewer than six tools register.
+- CI checks `hermes plugins validate` and `hermes plugins doctor` against Hermes v0.21.7. PyPI has no 0.21.7 release and that tag refuses a wheel build, so the job editable-installs the git tag on Python 3.14 (its dependencies are marked for 3.14 only) with a temporary `HERMES_HOME`. The 3.11 and 3.12 jobs skip that CLI and cover both `register_tool` signatures in unit tests.
+
 ## 0.1.6 — 2026-11-02
 
 - Validate writes a `score` from spec checks, watertightness, and printability. `next_step` says stop when every check passes, or revert to the better `name_vK` when a version regresses. A final render delivers the best validated version.

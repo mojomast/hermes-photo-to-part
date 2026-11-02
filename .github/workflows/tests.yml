@@ -19,3 +19,29 @@ jobs:
       - run: uv venv .venv
       - run: uv pip install --python .venv/bin/python --exclude-newer 2026-10-30 -e ".[dev]"
       - run: .venv/bin/python -m unittest discover -s tests -v
+  # PyPI hermes-agent stops at 0.19.0, and the v0.21.7 tag refuses wheel builds.
+  # An editable install of that tag is the doctor/validate path, and it needs
+  # Python 3.14 because that tag's dependencies are marked for 3.14 only.
+  hermes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install Hermes v0.21.7
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          git clone --depth 1 --branch v0.21.7 https://github.com/NousResearch/hermes-agent.git "${{ runner.temp }}/hermes-agent"
+          python -m pip install -e "${{ runner.temp }}/hermes-agent"
+      - name: Validate and doctor with a temporary HERMES_HOME
+        run: |
+          set -euo pipefail
+          export HERMES_HOME="${{ runner.temp }}/hermes-home"
+          mkdir -p "$HERMES_HOME"
+          export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
+          hermes plugins validate .
+          doctor_out="$(hermes plugins doctor . --ci)"
+          printf '%s\n' "$doctor_out"
+          printf '%s\n' "$doctor_out" | grep -q "6 tool"

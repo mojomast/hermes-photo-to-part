@@ -10,7 +10,7 @@ From the repository root, with the package installed:
 python -m evals.runner
 ```
 
-Exit 0 means every task met its expectation. The JSON report has, for the suite and for each task:
+Exit 0 means every task met its expectation and `register(ctx)` registered all six tools. Fewer than six tools prints `plugin registration failed: register(ctx) yielded N tools, expected 6` and exits 1. The JSON report has, for the suite and for each task:
 
 - `passed`
 - `dim_error_mm` when a spec row has an actual and a target
