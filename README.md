@@ -8,16 +8,17 @@ It is a community plugin by [Kyle Durepos](https://github.com/mojomast). It is n
 
 ## What you get
 
-One skill and four tools. The skill id is `photo-to-part:photo-to-printable-part`. That is the whole id. `plugin:photo-to-part:photo-to-printable-part` is not a skill name. A `plugin:` prefix in Hermes docs is a placeholder.
+One skill and five tools. The skill id is `photo-to-part:photo-to-printable-part`. That is the whole id. `plugin:photo-to-part:photo-to-printable-part` is not a skill name. A `plugin:` prefix in Hermes docs is a placeholder.
 
 | Tool | Job |
 | --- | --- |
-| `photo_part_template` | Write a watertight sample plate (STL, OpenSCAD, parameters). |
-| `photo_part_validate` | Check watertightness, one shell, and the bounding box against target millimetres. |
-| `photo_part_render` | Front, side, top, and iso previews fitted to the part, a side-by-side, and an outline overlay when you pass pixels per millimetre. |
-| `photo_part_heal` | Weld, fill holes, and keep the largest shell of a scan. Flat caps are not a finished surface. Fan fallback and shell counts are separate fields. |
+| `photo_part_template` | A watertight block: sample plate, plate with holes, countersink, revolved profile, radial ribs, L-bracket, or a print-in-place hinge. |
+| `photo_part_validate` | Watertightness, shell count (`expected_shells` for a print-in-place part), bounding box, and optional hole positions. A longest side under 1 mm or over 2 m fails unless `allow_size` is set. |
+| `photo_part_render` | Front, side, top, and iso previews fitted to the part, a side-by-side, and a silhouette overlay. `overlay_fit: auto` reports an IoU. |
+| `photo_part_heal` | Weld, fill holes, and keep the largest shell of a scan. `--union` merges overlapping shells. Flat caps are not a finished surface. |
+| `photo_part_measure` | Pixels per millimetre from a coin or a ruler, and an optional four-point rectified image. |
 
-The same four jobs are available as scripts under `skills/photo-to-printable-part/scripts/`. Hermes installs the Python packages into its own environment. A system `python script.py` cannot see that environment. The scripts re-exec into it. Prefer the tools, which already run there. Do not pip install trimesh into the system Python.
+The same jobs are available as scripts under `skills/photo-to-printable-part/scripts/` for a person at a shell. Hermes should call the tools. The tools already run where trimesh and manifold3d are installed. A system `python script.py` re-execs into that environment without resolving the venv interpreter symlink. Do not pip install into the system Python.
 
 `register()` adds those tools and the skill. It does not add hooks or middleware, and it does not read secrets. Enabling the plugin installs the packages in `pyproject.toml` from PyPI after you accept them. CadQuery, build123d, and OpenSCAD are not installed for you. Installing one in the project environment, when you want a STEP file, downloads packages and can take several minutes. The pinned lines are in the skill's `references/cad-backends.md`.
 
@@ -53,7 +54,7 @@ python skills/photo-to-printable-part/scripts/render_views.py ./part-v1/plate_cl
 python skills/photo-to-printable-part/scripts/heal_scan.py scan.stl --out healed.stl --units m
 ```
 
-Each checker prints one JSON object on stdout. `ok` and `FAILED` go to stderr. Exit `0` passes, `2` means the mesh loaded but a check failed, `1` means the command could not run. Pass `--units m`, `cm`, or `in` when the file is not millimetres. `--photo-scale` is pixels per millimetre and writes `overlay.png`. STL files are millimetres after that conversion. 3MF, which records that unit, needs the optional `lxml` extra: `pip install -e ".[threemf]"`.
+Each checker prints one JSON object on stdout. `ok` and `FAILED` go to stderr. Exit `0` passes, `2` means the mesh loaded but a check failed, `1` means the command could not run. Pass `--units m`, `cm`, or `in` when the file is not millimetres. If that conversion is already applied and the part is still implausible, drop the flag. `--allow-size` is the only way to accept a part under 1 mm or over 2 m. `--expected-shells 2` is the print-in-place hinge. `--photo-scale` is pixels per millimetre and writes `overlay.png` plus an IoU when `--overlay-fit auto` is set. STL files are millimetres after that conversion. 3MF, which records that unit, needs the optional `lxml` extra: `pip install -e ".[threemf]"`.
 
 ## Sample
 

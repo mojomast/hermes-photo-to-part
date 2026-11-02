@@ -34,6 +34,24 @@ def compare_extents(
     return bool(np.all(np.abs(got - want) <= tolerance)), delta
 
 
+def _closure_failure(measured: dict) -> str:
+    """Say why a mesh is open. A count of zero boundary edges is not a cause."""
+    parts: list[str] = []
+    if measured["nonmanifold_edges"]:
+        parts.append(f"{measured['nonmanifold_edges']} non-manifold edges")
+    if measured["degenerate_faces"]:
+        parts.append(f"{measured['degenerate_faces']} degenerate faces")
+    if measured["boundary_edges"]:
+        parts.append(f"{measured['boundary_edges']} boundary edges")
+    if not parts:
+        parts.append("the surface does not close")
+    detail = ", ".join(parts)
+    return (
+        f"not watertight: {detail}. "
+        "Run photo_part_heal to weld vertices, drop degenerate faces, and round-trip through manifold3d."
+    )
+
+
 def evaluate(
     mesh,
     *,
@@ -42,28 +60,41 @@ def evaluate(
     allow_axis_swap: bool = False,
     allow_open: bool = False,
     allow_multi_shell: bool = False,
+    expected_shells: int | None = None,
+    holes: list | None = None,
 ) -> dict:
     """Return a JSON-ready report. `ok` is true only when every check passes."""
     measured = measure(mesh)
     failures: list[str] = []
     if not measured["watertight"] and not allow_open:
-        failures.append(
-            f"not watertight ({measured['boundary_edges']} boundary edges)"
-        )
-    if measured["watertight"] and not measured["winding_consistent"]:
+        failures.append(_closure_failure(measured))
+    elif measured["watertight"] and not measured["winding_consistent"]:
         failures.append("winding is inconsistent")
-    if measured["nonmanifold_edges"]:
-        failures.append(f"{measured['nonmanifold_edges']} non-manifold edges")
-    if measured["degenerate_faces"]:
-        failures.append(f"{measured['degenerate_faces']} degenerate faces")
+    if measured["watertight"] or allow_open:
+        if measured["nonmanifold_edges"]:
+            failures.append(f"{measured['nonmanifold_edges']} non-manifold edges")
+        if measured["degenerate_faces"]:
+            failures.append(f"{measured['degenerate_faces']} degenerate faces")
     volume = measured["volume_mm3"]
     if measured["watertight"] and measured["winding_consistent"] and (
         volume is None or volume <= 0
     ):
         failures.append("volume is not positive")
     components = measured["components"]
-    if components is not None and components != 1 and not allow_multi_shell:
-        failures.append(f"{components} shells; a printable part should be one shell")
+    if expected_shells is not None:
+        if components != int(expected_shells):
+            failures.append(f"{components} shells; expected {int(expected_shells)}")
+    elif components is not None and components != 1 and not allow_multi_shell:
+        failures.append(
+            f"{components} shells; a printable part should be one shell. "
+            "For a print-in-place part, pass --expected-shells N or --allow-multi-shell."
+        )
+    hole_report = None
+    if holes:
+        from photopart.holes import check_holes
+
+        hole_failures, hole_report = check_holes(mesh, holes, tolerance=tolerance)
+        failures.extend(hole_failures)
 
     delta = None
     if target is not None:
@@ -87,6 +118,8 @@ def evaluate(
         if target is None
         else {"x": target[0], "y": target[1], "z": target[2]},
         "extent_delta_mm": delta,
+        "expected_shells": None if expected_shells is None else int(expected_shells),
+        "holes": hole_report,
         **measured,
     }
     return report
@@ -112,6 +145,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--allow-open", action="store_true")
     parser.add_argument("--allow-multi-shell", action="store_true")
+    parser.add_argument(
+        "--expected-shells",
+        type=int,
+        help="Exact shell count. Use 2 for a print-in-place hinge. Overrides the one-shell rule.",
+    )
+    parser.add_argument(
+        "--allow-size",
+        action="store_true",
+        help="Accept a longest side under 1 mm or over 2 m. Without this, that size fails.",
+    )
+    parser.add_argument(
+        "--holes",
+        help="JSON list of {x, y, diameter, axis?} holes to check, in millimetres.",
+    )
     parser.add_argument("--json-out", help="Also write the report to this path.")
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     add_unit_arguments(parser)
@@ -123,12 +170,17 @@ def main(argv: list[str] | None = None) -> int:
         allow_axis_swap=args.allow_axis_swap,
         allow_open=args.allow_open,
         allow_multi_shell=args.allow_multi_shell,
+        expected_shells=args.expected_shells,
+        allow_size=args.allow_size,
+        holes=args.holes,
         units=args.units,
         scale=args.scale,
         json_out=args.json_out,
         max_bytes=args.max_bytes,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
+    if report.get("unit_warning"):
+        status(report["unit_warning"])
     if code == 0:
         status("ok")
     elif report.get("failures"):
@@ -146,6 +198,9 @@ def run_validate(
     allow_axis_swap: bool = False,
     allow_open: bool = False,
     allow_multi_shell: bool = False,
+    expected_shells: int | None = None,
+    allow_size: bool = False,
+    holes: list | str | None = None,
     units: str | None = None,
     scale: float | None = None,
     json_out: str | None = None,
@@ -154,7 +209,10 @@ def run_validate(
     """Load, scale, and check a mesh. The report is the stdout document."""
     if tolerance < 0:
         return 1, {"ok": False, "error": "--tolerance must be >= 0"}
+    if expected_shells is not None and int(expected_shells) < 1:
+        return 1, {"ok": False, "error": "--expected-shells must be >= 1"}
     try:
+        hole_specs = _load_holes(holes)
         loaded = load_mesh(mesh_path, max_bytes=max_bytes)
         mesh, meta = prepare_mesh(loaded, units, scale)
         report = evaluate(
@@ -164,11 +222,17 @@ def run_validate(
             allow_axis_swap=allow_axis_swap,
             allow_open=allow_open,
             allow_multi_shell=allow_multi_shell,
+            expected_shells=expected_shells,
+            holes=hole_specs,
         )
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         return 1, {"ok": False, "error": str(exc)}
     report["file"] = str(Path(mesh_path).expanduser().resolve())
     attach_units(report, meta)
+    if meta["unit_warning"] and not allow_size:
+        report["failures"].append(meta["unit_warning"])
+        report["ok"] = False
+    report["allow_size"] = bool(allow_size)
     if json_out:
         destination = Path(json_out).expanduser().resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -176,3 +240,16 @@ def run_validate(
             json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
     return (0 if report["ok"] else 2), report
+
+
+def _load_holes(holes: list | str | None) -> list | None:
+    if holes is None or holes == "":
+        return None
+    if isinstance(holes, str):
+        text = Path(holes).expanduser().read_text(encoding="utf-8")
+        holes = json.loads(text)
+        if isinstance(holes, dict) and "holes" in holes:
+            holes = holes["holes"]
+    if not isinstance(holes, list):
+        raise ValueError("holes must be a JSON list of {x, y, diameter}")
+    return holes

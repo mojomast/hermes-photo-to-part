@@ -14,9 +14,13 @@ The healer copies the mesh, welds vertices, drops degenerate and duplicate faces
 
 `shells_before` is the input shell count. `shells_dropped` counts input shells that were discarded. A one-shell input reports `shells_dropped: 0`. Pieces created by the repair and then discarded are `repair_fragments_removed`, not dropped input shells.
 
-`--units` is `mm`, `cm`, `m`, or `in`. `--scale` is an extra multiplier. The output STL is millimetres after that conversion. With neither flag, file numbers are treated as millimetres and nothing is guessed. `unit_warning` is set when the longest side is under 1 mm or over 2 m. `input_extents_file` is the size before conversion.
+`--units` is `mm`, `cm`, `m`, or `in`. `--scale` is an extra multiplier. The output STL is millimetres after that conversion. With neither flag, file numbers are treated as millimetres and nothing is guessed. `unit_warning` is set when the longest side is under 1 mm or over 2 m. That warning fails the command (`ok: false`, exit 2) unless `--allow-size` is set. If `--units` was already applied and the part is still implausible, the warning says to drop that flag. `input_extents_file` is the size before conversion.
 
-Exit `0` means the result is watertight. Exit `2` means it is still open. Stdout is one JSON object. `ok` goes to stderr.
+`--union` boolean-unions shells with manifold3d. Overlapping shells become one. Disjoint shells stay separate. `union_applied` says whether that union ran.
+
+A validator line that names non-manifold edges or degenerate faces, including a mesh with zero boundary edges, is that cause. Run heal. Do not read "0 boundary edges" as the reason the solid failed to close.
+
+Exit `0` means watertight and a plausible size. Exit `2` means still open, or an implausible size without `--allow-size`. Stdout is one JSON object. `ok` and `FAILED` go to stderr.
 
 Limits, so you do not over-claim:
 

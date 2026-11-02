@@ -86,14 +86,24 @@ def candidate_pythons(home: Path | None = None, *, include_virtualenv: bool = Tr
             python = _python_in(Path(virtual).expanduser())
             if python is not None:
                 found.append(python)
+    # abspath keeps a venv symlink. Path.resolve() would follow it to the
+    # shared base interpreter and drop that venv's site-packages.
     unique: list[Path] = []
     seen: set[str] = set()
     for path in found:
-        key = str(path.resolve())
+        key = _path_key(path)
         if key not in seen:
             seen.add(key)
-            unique.append(path.resolve())
+            unique.append(Path(key))
     return unique
+
+
+def _path_key(path: Path) -> str:
+    """Identity of an interpreter path. Does not follow symlinks."""
+    try:
+        return os.path.abspath(path)
+    except OSError:
+        return os.fspath(path)
 
 
 def pick_reexec(
@@ -110,17 +120,12 @@ def pick_reexec(
     """
     if already_reexec or can_import:
         return None
-    try:
-        current_resolved = current.resolve()
-    except OSError:
-        current_resolved = current
+    current_key = _path_key(current)
     for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            resolved = candidate
-        if resolved != current_resolved:
-            return candidate
+        # Compare the symlink path, not the interpreter it points at.
+        # The same binary with a different path still has the venv's packages.
+        if _path_key(candidate) != current_key:
+            return Path(_path_key(candidate))
     return None
 
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 — 2026-11-02
+
+- Helper scripts exec the venv `bin/python` symlink instead of the base interpreter it points at, so `python3 scripts/*.py` keeps the plugin's site-packages.
+- The overlay is the silhouette contour of the z-buffer mask. `--overlay-fit auto` aligns it to the part in a straight-on photo and reports `overlay_iou` plus `overlay_diff.png`.
+- A mesh that is open because of non-manifold edges or degenerate faces says so, with counts, and points at `photo_part_heal`. An implausible size (under 1 mm or over 2 m) fails validation and heal unless `--allow-size`. A warning names units that were already applied.
+- `--expected-shells N` accepts a print-in-place part. `--holes` checks hole position and diameter.
+- `photo_part_template` builds a plate with holes, a countersink, a revolved profile, radial ribs, an L-bracket, and a print-in-place hinge, on trimesh and manifold3d.
+- `photo_part_measure` returns pixels per millimetre from a coin or a ruler, and can rectify a four-point quad. `photo_part_heal --union` merges overlapping shells.
+- The skill id `photo-to-part:photo-to-printable-part` is the first line of the description `skills_list` shows. A colon alias is not registered, because Hermes skill names cannot contain a colon. The instructions say to call the tools, not the scripts, and to stop well within 40 turns.
+
 ## 0.1.1 — 2026-11-02
 
 - Register `photo_part_validate`, `photo_part_render`, `photo_part_heal`, and `photo_part_template`. Hermes runs them inside the plugin environment, so a check no longer depends on system Python.

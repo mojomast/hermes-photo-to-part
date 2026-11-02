@@ -238,6 +238,7 @@ class PluginTests(unittest.TestCase):
             "photo_part_render",
             "photo_part_heal",
             "photo_part_template",
+            "photo_part_measure",
         ])
         for item in tools:
             self.assertEqual(item["toolset"], "photo-to-part")
@@ -253,7 +254,7 @@ class PluginTests(unittest.TestCase):
         front = text.split("---", 2)[1]
         meta = yaml.safe_load(front)
         self.assertEqual(meta["name"], "photo-to-printable-part")
-        self.assertEqual(meta["version"], "0.1.1")
+        self.assertEqual(meta["version"], "0.1.2")
         description = meta["description"].strip()
         self.assertLessEqual(len(description), 1024)
         self.assertIn("STL", description)
@@ -274,8 +275,8 @@ class PluginTests(unittest.TestCase):
         manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "photo-to-part")
-        self.assertEqual(manifest["version"], "0.1.1")
-        self.assertEqual(project["project"]["version"], "0.1.1")
+        self.assertEqual(manifest["version"], "0.1.2")
+        self.assertEqual(project["project"]["version"], "0.1.2")
         self.assertEqual(manifest["python_dependencies"], project["project"]["dependencies"])
         from photopart.tools import TOOL_NAMES
 
@@ -380,15 +381,23 @@ class UnitAndFrameTests(unittest.TestCase):
             path = Path(tmp) / "scan.stl"
             path.write_bytes(box.export(file_type="stl"))
             out = StringIO()
-            with redirect_stdout(out):
+            with redirect_stdout(out), redirect_stderr(StringIO()):
                 code = validate_main([str(path)])
-            self.assertEqual(code, 0)
+            self.assertEqual(code, 2)
             report = json.loads(out.getvalue())
+            self.assertFalse(report["ok"])
             self.assertIsNotNone(report["unit_warning"])
             self.assertLess(report["extents_mm"]["z"], 1.0)
             self.assertAlmostEqual(report["input_extents_file"]["z"], report["extents_mm"]["z"], places=3)
             out = StringIO()
-            with redirect_stdout(out):
+            with redirect_stdout(out), redirect_stderr(StringIO()):
+                code = validate_main([str(path), "--allow-size"])
+            self.assertEqual(code, 0)
+            allowed = json.loads(out.getvalue())
+            self.assertTrue(allowed["ok"])
+            self.assertIsNotNone(allowed["unit_warning"])
+            out = StringIO()
+            with redirect_stdout(out), redirect_stderr(StringIO()):
                 code = validate_main([str(path), "--units", "m", "--size", "100", "120", "156", "--tolerance", "0.5"])
             self.assertEqual(code, 0)
             scaled = json.loads(out.getvalue())

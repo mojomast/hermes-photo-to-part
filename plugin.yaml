@@ -1,10 +1,14 @@
 name: photo-to-part
-version: "0.1.1"
+version: "0.1.2"
 description: >-
-  Turn photos, a few measurements, or a messy scan into a parametric printable
-  part and check the mesh locally. Tools read and write only the paths you
-  pass. No credentials and no printer connection. A STEP kernel is a separate
-  install in the project environment.
+  Skill id photo-to-part:photo-to-printable-part. Turn photos, a few
+  measurements, or a messy scan into a parametric printable part and check
+  the mesh locally. Tools read and write only the paths you pass (STL, 3MF,
+  PNG, JSON). No credentials and no printer connection. Enabling the plugin
+  installs its Python packages from PyPI after Hermes dependency consent.
+  A STEP solid needs CadQuery or build123d in the project environment; that
+  install downloads packages and can take several minutes. Chat photos still
+  go to your model provider.
 author: mojomast
 license: MIT
 homepage: https://github.com/mojomast/hermes-photo-to-part
@@ -20,12 +24,14 @@ provides_tools:
   - photo_part_render
   - photo_part_heal
   - photo_part_template
+  - photo_part_measure
 provides_hooks: []
 provides_middleware: []
 requires_env: []
 # Kept in step with pyproject.toml. pyproject.toml is what Hermes installs.
 python_dependencies:
   - "trimesh>=4.6.0,<5.3"
+  - "manifold3d>=3.2,<3.6"
   - "fast-simplification>=0.1.8,<0.3"
   - "shapely>=2.0.1,<2.3"
   - "mapbox-earcut>=1.0.3,<2.2"

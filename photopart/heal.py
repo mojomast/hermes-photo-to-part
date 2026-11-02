@@ -42,6 +42,7 @@ def heal_mesh(
     *,
     use_fan: bool = False,
     keep_largest: bool = True,
+    union: bool = False,
 ) -> tuple[trimesh.Trimesh, dict]:
     """Return a repaired copy and a before/after report. The input is unchanged."""
     before = measure(mesh)
@@ -64,6 +65,11 @@ def heal_mesh(
         repair.fill_holes(repaired, use_fan=True)
         fan_used = True
         fan_fallback = True
+    union_applied = False
+    if union:
+        from photopart.manifold_util import union_components
+
+        repaired, union_applied = union_components(repaired)
     shells_dropped = 0
     repair_fragments_removed = 0
     if keep_largest:
@@ -98,6 +104,7 @@ def heal_mesh(
         "shells_dropped": shells_dropped,
         "repair_fragments_removed": repair_fragments_removed,
         "keep_largest": keep_largest,
+        "union_applied": union_applied,
         "note": note,
     }
     return repaired, report
@@ -119,6 +126,16 @@ def run_heal(argv: list[str] | None = None) -> tuple[int, dict]:
         action="store_true",
         help="Keep every shell. The default keeps the shell with the most triangles.",
     )
+    parser.add_argument(
+        "--union",
+        action="store_true",
+        help="Boolean-union shells with manifold3d. Overlapping shells merge. Disjoint shells stay separate.",
+    )
+    parser.add_argument(
+        "--allow-size",
+        action="store_true",
+        help="Accept a longest side under 1 mm or over 2 m. Without this, that size fails.",
+    )
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     add_unit_arguments(parser)
     args = parser.parse_args(argv)
@@ -132,14 +149,24 @@ def run_heal(argv: list[str] | None = None) -> tuple[int, dict]:
         loaded = load_mesh(in_path, max_bytes=args.max_bytes)
         mesh, meta = prepare_mesh(loaded, args.units, args.scale)
         repaired, report = heal_mesh(
-            mesh, use_fan=args.fan, keep_largest=not args.keep_all
+            mesh,
+            use_fan=args.fan,
+            keep_largest=not args.keep_all,
+            union=args.union,
         )
         export_stl(repaired, out_path, ascii_stl=args.ascii)
     except (OSError, ValueError) as exc:
         return 1, {"ok": False, "error": str(exc)}
     report["input"] = str(in_path)
     report["output"] = str(out_path)
-    report["ok"] = bool(report["after"]["watertight"])
+    failures: list[str] = []
+    if not report["after"]["watertight"]:
+        failures.append("healed mesh is still open")
+    if meta["unit_warning"] and not args.allow_size:
+        failures.append(meta["unit_warning"])
+    report["failures"] = failures
+    report["allow_size"] = bool(args.allow_size)
+    report["ok"] = not failures
     attach_units(report, meta)
     if report["ok"]:
         return 0, report
@@ -149,10 +176,14 @@ def run_heal(argv: list[str] | None = None) -> tuple[int, dict]:
 def main(argv: list[str] | None = None) -> int:
     code, report = run_heal(argv)
     print(json.dumps(report, indent=2, sort_keys=True))
+    if report.get("unit_warning"):
+        status(report["unit_warning"])
     if code == 0:
         status("ok")
     elif report.get("error"):
         status(f"error: {report['error']}")
+    elif report.get("failures"):
+        status("FAILED: " + "; ".join(report["failures"]))
     else:
         status(
             "healed mesh is still open. Rebuild the part as a solid, "

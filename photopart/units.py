@@ -45,6 +45,33 @@ def conversion_factor(units: str | None, scale: float | None) -> float:
     return factor * extra
 
 
+def _size_warning(longest: float, factor: float, units: str | None, scale: float | None) -> str | None:
+    """Name a unit mistake without repeating a flag the caller already passed."""
+    if IMPLAUSIBLE_MIN_MM <= longest <= IMPLAUSIBLE_MAX_MM:
+        return None
+    applied: list[str] = []
+    if units not in (None, "mm"):
+        applied.append(f"--units {units}")
+    if scale is not None and float(scale) != 1.0:
+        applied.append(f"--scale {float(scale):g}")
+    if applied:
+        flags = " and ".join(applied)
+        return (
+            f"after {flags} the part is {longest:.6g} mm long (scale {factor:.6g}). "
+            "That is under 1 mm or over 2 m, which is implausible for a printable part. "
+            f"The conversion was already applied. If the file was already millimetres, drop {flags}."
+        )
+    warning = (
+        f"longest side is {longest:.6g} mm after scale {factor:.6g}. "
+        "That is under 1 mm or over 2 m, which is implausible for a printable part. "
+        "If the file is metres, centimetres, or inches, pass --units m, cm, or in, or pass --scale. "
+        "Nothing was rescaled automatically."
+    )
+    if factor == 1.0:
+        warning += " File numbers are still being treated as millimetres."
+    return warning
+
+
 def file_extents(mesh) -> dict[str, float]:
     extents = np.asarray(mesh.extents, dtype=float)
     return {"x": float(extents[0]), "y": float(extents[1]), "z": float(extents[2])}
@@ -64,16 +91,7 @@ def prepare_mesh(mesh, units: str | None, scale: float | None):
         scaled = mesh.copy()
         scaled.apply_scale(factor)
     longest = float(np.max(np.asarray(scaled.extents, dtype=float)))
-    warning = None
-    if longest < IMPLAUSIBLE_MIN_MM or longest > IMPLAUSIBLE_MAX_MM:
-        warning = (
-            f"longest side is {longest:.6g} mm after scale {factor:.6g}. "
-            "That is under 1 mm or over 2 m, which is implausible for a printable part. "
-            "If the file is metres, centimetres, or inches, pass --units m, cm, or in, or pass --scale. "
-            "Nothing was rescaled automatically."
-        )
-        if factor == 1.0:
-            warning += " File numbers are still being treated as millimetres."
+    warning = _size_warning(longest, factor, units, scale)
     # Call the axes millimetres only after a real conversion, or when the numbers already look like millimetres.
     if factor == 1.0 and warning:
         length_unit = "file units"
