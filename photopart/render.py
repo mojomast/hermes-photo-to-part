@@ -16,7 +16,10 @@ import numpy as np
 import trimesh
 from PIL import Image, ImageDraw, ImageFont
 
+from photopart.flow import attach_flow, failed, step_render
 from photopart.io import DEFAULT_MAX_BYTES, load_mesh, resolve_file
+from photopart.paths import absolute_path
+from photopart.stamp import stamp_status
 from photopart.status import status
 from photopart.units import add_unit_arguments, attach_units, prepare_mesh
 
@@ -461,6 +464,10 @@ def overlay_outline(
     photo_scale: float,
     origin: tuple[float, float] | None = None,
     fit: str = "center",
+    roi: tuple[float, float, float, float] | None = None,
+    seed: tuple[float, float] | None = None,
+    exclude: list | None = None,
+    angled: bool = False,
 ) -> dict:
     """Draw the silhouette contour onto a copy of the photo.
 
@@ -468,6 +475,7 @@ def overlay_outline(
     on the image center. ``auto`` scales and translates that silhouette onto
     the part segmented from the photo. ``origin`` is the image pixel of the
     model's minimum corner (image y grows downward) and overrides fit.
+    ``roi`` and ``seed`` pick the part. ``exclude`` drops a coin or ruler.
     The line is the contour of the z-buffer mask, not the facet edges.
     """
     if photo_scale <= 0 or not np.isfinite(photo_scale):
@@ -484,6 +492,10 @@ def overlay_outline(
         photo_scale=photo_scale,
         origin=origin,
         fit=fit,
+        roi=roi,
+        seed=seed,
+        exclude=exclude,
+        angled=angled,
     )
 
 
@@ -496,6 +508,10 @@ def render_views(
     photo_scale: float | None = None,
     overlay_origin: tuple[float, float] | None = None,
     overlay_fit: str = "center",
+    overlay_roi: tuple[float, float, float, float] | None = None,
+    overlay_seed: tuple[float, float] | None = None,
+    overlay_exclude: list | None = None,
+    overlay_angled: bool = False,
     up: str | None = None,
     front_axis: str | None = None,
     pixels: int = 720,
@@ -511,6 +527,7 @@ def render_views(
         raise ValueError("overlay fit must be center or auto")
     if overlay_fit == "auto" and (photo is None or photo_scale is None):
         raise ValueError("--overlay-fit auto needs --photo and --photo-scale")
+    out_dir = absolute_path(out_dir)
     axes = choose_axes(mesh.extents, up=up, front_axis=front_axis)
     preview, info = _preview_mesh(mesh)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -546,6 +563,8 @@ def render_views(
         "overlay_iou": None,
         "overlay_diff": None,
         "overlay_fit_note": None,
+        "overlay_blob": None,
+        "overlay_warnings": [],
     }
     if photo is not None and photo_scale is not None:
         overlay_path = out_dir / "overlay.png"
@@ -558,6 +577,10 @@ def render_views(
             photo_scale=photo_scale,
             origin=overlay_origin,
             fit=overlay_fit,
+            roi=overlay_roi,
+            seed=overlay_seed,
+            exclude=overlay_exclude,
+            angled=overlay_angled,
         )
         overlay = str(overlay_path)
         written.append(overlay)
@@ -574,6 +597,8 @@ def render_views(
         "overlay_iou": overlay_report.get("overlay_iou"),
         "overlay_diff": overlay_report.get("overlay_diff"),
         "overlay_fit_note": overlay_report.get("overlay_fit_note"),
+        "overlay_blob": overlay_report.get("overlay_blob"),
+        "overlay_warnings": overlay_report.get("overlay_warnings") or [],
         "photo_scale_px_per_mm": photo_scale,
         "view_axes": axes,
         "units": length_unit,
@@ -587,17 +612,34 @@ def render_views(
     return manifest
 
 
-def _parse_origin(text: str) -> tuple[float, float]:
+def _parse_pair(text: str, label: str) -> tuple[float, float]:
     parts = text.split(",")
     if len(parts) != 2:
-        raise ValueError("--overlay-origin must be x,y in image pixels")
+        raise ValueError(f"{label} must be x,y in image pixels")
     try:
-        origin = (float(parts[0]), float(parts[1]))
+        pair = (float(parts[0]), float(parts[1]))
     except ValueError as exc:
-        raise ValueError("--overlay-origin must be x,y in image pixels") from exc
-    if not np.isfinite(origin).all():
-        raise ValueError("--overlay-origin must be finite")
-    return origin
+        raise ValueError(f"{label} must be x,y in image pixels") from exc
+    if not np.isfinite(pair).all():
+        raise ValueError(f"{label} must be finite")
+    return pair
+
+
+def _parse_origin(text: str) -> tuple[float, float]:
+    return _parse_pair(text, "--overlay-origin")
+
+
+def _parse_rect(text: str) -> tuple[float, float, float, float]:
+    parts = text.split(",")
+    if len(parts) != 4:
+        raise ValueError("--roi and --exclude-roi must be x,y,w,h in image pixels")
+    try:
+        rect = (float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3]))
+    except ValueError as exc:
+        raise ValueError("--roi and --exclude-roi must be x,y,w,h in image pixels") from exc
+    if not np.isfinite(rect).all() or rect[2] <= 0 or rect[3] <= 0:
+        raise ValueError("roi width and height must be positive")
+    return rect
 
 
 def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
@@ -620,6 +662,23 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         default="center",
         help="center keeps the outline on the image center. auto aligns it to the part in the photo and reports IoU.",
     )
+    parser.add_argument("--roi", help="Part region x,y,w,h in image pixels. Limits auto-fit.")
+    parser.add_argument("--seed", help="One pixel x,y on the part. auto-fit uses that object.")
+    parser.add_argument(
+        "--exclude-roi",
+        action="append",
+        default=[],
+        help="Rectangle x,y,w,h to ignore, such as a coin. Repeatable.",
+    )
+    parser.add_argument(
+        "--measure-json",
+        help="photo_part_measure JSON. Uses reference_bbox and angled.",
+    )
+    parser.add_argument(
+        "--angled",
+        action="store_true",
+        help="The photo is not straight-on. The JSON warns that the overlay can miss.",
+    )
     parser.add_argument("--grid-mm", type=float, help="Draw a square grid of this size, in mm.")
     parser.add_argument("--up", choices=("x", "y", "z"), help="Axis that points up. Default: the longest side.")
     parser.add_argument(
@@ -627,13 +686,17 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         choices=("x", "y", "z"),
         help="Axis the front camera looks along. Default: the shortest axis that is not up.",
     )
-    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--force", action="store_true", help="Replace files in a directory that is not empty.")
+    parser.add_argument("--overwrite", action="store_true", help="Same as --force.")
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     add_unit_arguments(parser)
     args = parser.parse_args(argv)
-    out_dir = Path(args.out_dir).expanduser().resolve()
-    if out_dir.exists() and any(out_dir.iterdir()) and not args.force:
-        return 1, {"ok": False, "error": f"{out_dir} is not empty. Pass --force."}
+    try:
+        out_dir = absolute_path(args.out_dir)
+    except ValueError as exc:
+        return 1, failed(str(exc))
+    if out_dir.exists() and any(out_dir.iterdir()) and not (args.force or args.overwrite):
+        return 1, failed(f"{out_dir} is not empty. Pass --overwrite.")
     try:
         loaded = load_mesh(args.mesh, max_bytes=args.max_bytes)
         mesh, meta = prepare_mesh(loaded, args.units, args.scale)
@@ -641,6 +704,19 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         if args.photo:
             photo = resolve_file(args.photo, max_bytes=args.max_bytes, label="photo")
         origin = None if args.overlay_origin is None else _parse_origin(args.overlay_origin)
+        roi = None if args.roi is None else _parse_rect(args.roi)
+        seed = None if args.seed is None else _parse_pair(args.seed, "--seed")
+        exclude = [_parse_rect(item) for item in args.exclude_roi]
+        angled = bool(args.angled)
+        if args.measure_json:
+            from photopart.measure import load_measure_hints
+
+            payload = json.loads(Path(args.measure_json).expanduser().read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("--measure-json must contain an object")
+            extra, flagged = load_measure_hints(payload)
+            exclude.extend(extra)
+            angled = angled or flagged
         manifest = render_views(
             mesh,
             out_dir,
@@ -649,14 +725,33 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
             photo_scale=args.photo_scale,
             overlay_origin=origin,
             overlay_fit=args.overlay_fit,
+            overlay_roi=roi,
+            overlay_seed=seed,
+            overlay_exclude=exclude,
+            overlay_angled=angled,
             up=args.up,
             front_axis=args.front_axis,
             length_unit=meta["length_unit"],
             unit_meta=meta,
         )
-    except (OSError, ValueError) as exc:
-        return 1, {"ok": False, "error": str(exc)}
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return 1, failed(str(exc))
+    mesh_path = Path(args.mesh).expanduser().resolve()
+    stamp = stamp_status(mesh_path)
     manifest["ok"] = True
+    manifest["file"] = str(mesh_path)
+    manifest["sha256"] = stamp["sha256"]
+    manifest["stale_validation"] = stamp["stale_validation"]
+    manifest["validation_sidecar"] = stamp["validation_sidecar"]
+    manifest["validation_ok"] = stamp["validation_ok"]
+    attach_flow(
+        manifest,
+        step_render(
+            str(mesh_path),
+            stale=stamp["stale_validation"],
+            validation_ok=stamp["validation_ok"],
+        ),
+    )
     return 0, manifest
 
 

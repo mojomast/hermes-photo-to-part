@@ -18,9 +18,10 @@ REEXEC_FLAG = "PHOTO_PART_PYTHON_REEXEC"
 
 _MISSING = (
     "error: this Python cannot import trimesh, and no Hermes plugin environment "
-    "was found under HERMES_HOME. Use the photo_part_validate, photo_part_render, "
-    "photo_part_heal, or photo_part_template tools, which run inside the plugin "
-    "environment. Do not pip install into the system Python."
+    "was found under HERMES_HOME. Use the tools photo_part_validate, photo_part_render, "
+    "photo_part_heal, photo_part_template, photo_part_measure, or photo_part_build. "
+    "Skill id: photo-to-part:photo-to-printable-part. "
+    "Do not pip install into the system Python."
 )
 
 
@@ -96,6 +97,30 @@ def candidate_pythons(home: Path | None = None, *, include_virtualenv: bool = Tr
             seen.add(key)
             unique.append(Path(key))
     return unique
+
+
+def plugin_python() -> str:
+    """Interpreter for photo_part_build. Keeps a venv symlink unresolved.
+
+    When this process is the base binary a venv symlink points at, return that
+    symlink so the child keeps the venv's site-packages. Otherwise stay on this
+    interpreter when it can already import trimesh.
+    """
+    current = Path(sys.executable)
+    candidates = candidate_pythons()
+    try:
+        current_real = Path(os.path.realpath(current))
+    except OSError:
+        current_real = current
+    for candidate in candidates:
+        try:
+            if Path(os.path.realpath(candidate)) == current_real:
+                return str(Path(_path_key(candidate)))
+        except OSError:
+            continue
+    if candidates and not _can_import_trimesh():
+        return str(candidates[0])
+    return sys.executable
 
 
 def _path_key(path: Path) -> str:

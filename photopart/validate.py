@@ -8,8 +8,11 @@ from pathlib import Path
 
 import numpy as np
 
+from photopart.flow import attach_flow, failed, step_validate
 from photopart.io import DEFAULT_MAX_BYTES, load_mesh
+from photopart.paths import absolute_path
 from photopart.report import measure
+from photopart.stamp import stamp_status, write_sidecar
 from photopart.status import status
 from photopart.units import add_unit_arguments, attach_units, prepare_mesh
 
@@ -208,9 +211,9 @@ def run_validate(
 ) -> tuple[int, dict]:
     """Load, scale, and check a mesh. The report is the stdout document."""
     if tolerance < 0:
-        return 1, {"ok": False, "error": "--tolerance must be >= 0"}
+        return 1, failed("--tolerance must be >= 0")
     if expected_shells is not None and int(expected_shells) < 1:
-        return 1, {"ok": False, "error": "--expected-shells must be >= 1"}
+        return 1, failed("--expected-shells must be >= 1")
     try:
         hole_specs = _load_holes(holes)
         loaded = load_mesh(mesh_path, max_bytes=max_bytes)
@@ -226,19 +229,35 @@ def run_validate(
             holes=hole_specs,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        return 1, {"ok": False, "error": str(exc)}
-    report["file"] = str(Path(mesh_path).expanduser().resolve())
+        return 1, failed(str(exc))
+    resolved = Path(mesh_path).expanduser().resolve()
+    report["file"] = str(resolved)
     attach_units(report, meta)
     if meta["unit_warning"] and not allow_size:
         report["failures"].append(meta["unit_warning"])
         report["ok"] = False
     report["allow_size"] = bool(allow_size)
-    if json_out:
-        destination = Path(json_out).expanduser().resolve()
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(
-            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    try:
+        prior = stamp_status(resolved)
+        attach_flow(
+            report,
+            step_validate(str(resolved), ok=bool(report["ok"]), was_stale=prior["stale_validation"]),
         )
+        stamp = write_sidecar(resolved, report)
+    except OSError as exc:
+        return 1, failed(str(exc))
+    report["sha256"] = stamp["sha256"]
+    report["stale_validation"] = stamp["stale_validation"]
+    report["validation_sidecar"] = stamp["validation_sidecar"]
+    if json_out:
+        try:
+            destination = absolute_path(json_out)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(
+                json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+        except (OSError, ValueError) as exc:
+            return 1, failed(str(exc))
     return (0 if report["ok"] else 2), report
 
 

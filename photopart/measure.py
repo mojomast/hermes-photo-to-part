@@ -13,6 +13,9 @@ from pathlib import Path
 
 import numpy as np
 
+from photopart.flow import attach_flow, failed, step_measure
+from photopart.paths import absolute_path, default_output
+
 # Nominal diameters in millimetres.
 COIN_DIAMETERS_MM = {
     "euro_1": 23.25,
@@ -263,6 +266,11 @@ def measure(payload: dict) -> dict:
             px_per_mm,
             payload.get("out"),
         )
+    bbox_pair = None
+    if kind == "ruler" and points is not None:
+        bbox_pair = _pair(points, "ruler")
+    elif kind in ("coin", "diameter") and points is not None:
+        bbox_pair = _pair(points, "reference")
     report = {
         "ok": True,
         "kind": kind,
@@ -270,23 +278,78 @@ def measure(payload: dict) -> dict:
         "diameter_mm": None if diameter_mm is None else float(diameter_mm),
         "ruler_mm": None if ruler_mm is None else float(ruler_mm),
         "reference_px": reference_px,
+        "reference_bbox": _reference_bbox(kind, bbox_pair, reference_px),
         "px_per_mm": float(px_per_mm),
         "mm_per_px": float(1.0 / px_per_mm),
         "measurements": _measurements(payload.get("measurements"), float(px_per_mm)),
         "rectified": rectified,
         "rectified_px_per_mm": rectified_px,
+        "angled": bool(payload.get("angled", False)),
         "note": _PLANE_NOTE,
     }
-    return report
+    return attach_flow(report, step_measure())
+
+
+def load_measure_hints(payload: dict) -> tuple[list[tuple[float, float, float, float]], bool]:
+    """Rectangles to keep out of an overlay, plus whether the photo was angled."""
+    if not isinstance(payload, dict):
+        raise ValueError("measure JSON must be an object")
+    rects: list[tuple[float, float, float, float]] = []
+
+    def add(value) -> None:
+        if value is None:
+            return
+        if isinstance(value, dict):
+            if not all(key in value for key in ("x", "y", "w", "h")):
+                return
+            rects.append((float(value["x"]), float(value["y"]), float(value["w"]), float(value["h"])))
+            return
+        if isinstance(value, (list, tuple)):
+            if len(value) == 4 and not isinstance(value[0], (list, tuple, dict)):
+                rects.append(tuple(float(item) for item in value))  # type: ignore[arg-type]
+                return
+            for item in value:
+                add(item)
+
+    add(payload.get("reference_bbox"))
+    add(payload.get("exclude_roi"))
+    add(payload.get("exclude_rois"))
+    return rects, bool(payload.get("angled", False))
+
+
+def _reference_bbox(kind: str | None, pair, reference_px) -> dict | None:
+    """Circle around a coin, or a padded box around a ruler span."""
+    if pair is None or reference_px is None:
+        return None
+    points = np.asarray(pair, dtype=float).reshape(2, 2)
+    if kind == "ruler":
+        pad = max(3.0, float(reference_px) * 0.08)
+        x0 = float(points[:, 0].min()) - pad
+        y0 = float(points[:, 1].min()) - pad
+        x1 = float(points[:, 0].max()) + pad
+        y1 = float(points[:, 1].max()) + pad
+        return {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0}
+    radius = float(reference_px) / 2.0
+    mid = (points[0] + points[1]) / 2.0
+    pad = max(2.0, radius * 0.08)
+    reach = radius + pad
+    return {
+        "x": float(mid[0] - reach),
+        "y": float(mid[1] - reach),
+        "w": float(2.0 * reach),
+        "h": float(2.0 * reach),
+    }
 
 
 def _rectify(image_path, quad, width_mm, height_mm, px_per_mm, out) -> tuple[str, float]:
     from PIL import Image
 
     path = Path(image_path).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
     if not path.is_file():
         raise FileNotFoundError(f"image not found: {path}")
-    image = np.asarray(Image.open(path).convert("RGB"))
+    image = np.array(Image.open(path).convert("RGB"))
     scale = float(px_per_mm)
     out_w = max(2, int(round(width_mm * scale)))
     out_h = max(2, int(round(height_mm * scale)))
@@ -299,10 +362,11 @@ def _rectify(image_path, quad, width_mm, height_mm, px_per_mm, out) -> tuple[str
     dest = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=float)
     matrix = homography(quad, dest)
     warped = _warp(image, matrix, out_w, out_h)
+    fallback = path.stem + "_rectified.png"
     if out:
-        destination = Path(out).expanduser()
+        destination = absolute_path(out)
     else:
-        destination = path.with_name(path.stem + "_rectified.png")
+        destination = default_output(path.with_name(fallback), fallback)
     destination.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(warped, mode="RGB").save(destination, format="PNG")
     return str(destination.resolve()), float(scale)
@@ -321,7 +385,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--width-mm", type=float)
     parser.add_argument("--height-mm", type=float)
     parser.add_argument("--image", help="Photo to rectify when --quad is set.")
-    parser.add_argument("--out", help="Rectified PNG path.")
+    parser.add_argument("--out", help="Rectified PNG path. Default: the working directory, never HERMES_HOME/cache.")
+    parser.add_argument("--angled", action="store_true", help="Record that this photo is not straight-on.")
     parser.add_argument(
         "--measure",
         action="append",
@@ -350,6 +415,8 @@ def main(argv: list[str] | None = None) -> int:
             payload["image"] = args.image
         if args.out:
             payload["out"] = args.out
+        if args.angled:
+            payload["angled"] = True
         if args.points:
             payload["points"] = _csv_pairs(args.points, 2)
         if args.quad:
@@ -365,7 +432,7 @@ def main(argv: list[str] | None = None) -> int:
             payload["measurements"].extend(extra)
         report = measure(payload)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}))
+        print(json.dumps(failed(str(exc)), indent=2, sort_keys=True))
         return 1
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

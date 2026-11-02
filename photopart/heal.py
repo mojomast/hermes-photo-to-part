@@ -14,8 +14,10 @@ from pathlib import Path
 import trimesh
 from trimesh import repair
 
+from photopart.flow import attach_flow, failed, step_heal
 from photopart.geometry import export_stl
 from photopart.io import DEFAULT_MAX_BYTES, load_mesh
+from photopart.paths import absolute_path
 from photopart.report import measure
 from photopart.status import status
 from photopart.units import add_unit_arguments, attach_units, prepare_mesh
@@ -115,6 +117,7 @@ def run_heal(argv: list[str] | None = None) -> tuple[int, dict]:
     parser.add_argument("mesh")
     parser.add_argument("--out", required=True, help="Output STL. Will not replace the input.")
     parser.add_argument("--force", action="store_true", help="Overwrite --out if it exists.")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite --out if it exists.")
     parser.add_argument("--ascii", action="store_true")
     parser.add_argument(
         "--fan",
@@ -139,12 +142,15 @@ def run_heal(argv: list[str] | None = None) -> tuple[int, dict]:
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     add_unit_arguments(parser)
     args = parser.parse_args(argv)
-    out_path = Path(args.out).expanduser().resolve()
+    try:
+        out_path = absolute_path(args.out)
+    except ValueError as exc:
+        return 1, failed(str(exc))
     in_path = Path(args.mesh).expanduser().resolve()
     if out_path == in_path:
-        return 1, {"ok": False, "error": "--out must be a different file from the input"}
-    if out_path.exists() and not args.force:
-        return 1, {"ok": False, "error": f"{out_path} exists. Pass --force to overwrite."}
+        return 1, failed("--out must be a different file from the input")
+    if out_path.exists() and not (args.force or args.overwrite):
+        return 1, failed(f"{out_path} exists. Pass --overwrite to replace it.")
     try:
         loaded = load_mesh(in_path, max_bytes=args.max_bytes)
         mesh, meta = prepare_mesh(loaded, args.units, args.scale)
@@ -156,7 +162,7 @@ def run_heal(argv: list[str] | None = None) -> tuple[int, dict]:
         )
         export_stl(repaired, out_path, ascii_stl=args.ascii)
     except (OSError, ValueError) as exc:
-        return 1, {"ok": False, "error": str(exc)}
+        return 1, failed(str(exc))
     report["input"] = str(in_path)
     report["output"] = str(out_path)
     failures: list[str] = []
@@ -168,6 +174,7 @@ def run_heal(argv: list[str] | None = None) -> tuple[int, dict]:
     report["allow_size"] = bool(args.allow_size)
     report["ok"] = not failures
     attach_units(report, meta)
+    attach_flow(report, step_heal(str(out_path)))
     if report["ok"]:
         return 0, report
     return 2, report

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hermes-photo-to-part"
-version = "0.1.2"
+version = "0.1.3"
 description = "Hermes plugin: photos, measurements, or a scan to a checked printable part."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -41,6 +41,7 @@ photo-part-validate = "photopart.validate:main"
 photo-part-render = "photopart.render:main"
 photo-part-heal = "photopart.heal:main"
 photo-part-measure = "photopart.measure:main"
+photo-part-build = "photopart.build_run:main"
 
 [tool.setuptools.packages.find]
 include = ["photopart*"]
