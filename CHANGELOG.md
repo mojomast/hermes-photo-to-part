@@ -7,6 +7,9 @@
 - A render of `name_vN` without a fresh sidecar is refused and marked `unvalidated`. Build `next_step` always names `photo_part_validate`, including a failed script.
 - The skill writes `spec.json` first. Template and build warn when that file is missing. The deliver step lists every spec deviation, including a removed template check.
 - Each validate appends the previous record to `history` in `<file>.validate.json` instead of dropping it.
+- `spur_gear` in `photopart.features`, and the `spur_gear` template shape. Involute teeth from module, tooth count, and pressure angle (default 20°), plus face width. Optional bore with a keyway or a D-flat, and an optional hub. Tip diameter is module × (teeth + 2). Root diameter is module × (teeth − 2.5). One watertight body.
+- `spiral_scroll` and the `scroll` template shape: an Archimedean or log spiral strip with width, thickness, turns, and end radius. `strap_hinge` attaches one or two of those scrolls to a straight strap. Each is one watertight body. A build script imports `spur_gear`, `spiral_scroll`, and `strap_hinge`.
+- `--overlay-fit auto` tries front, side, and top. Rotation is a 15° search followed by 1°, and a mirror is included. `overlay_poses` lists each view's best pose. A photo flagged angled is still scored, and `overlay_iou_label` is `guide_only`. An `--roi` that meets the silhouette edge is expanded, with a warning and `overlay_roi_expanded`.
 
 ## 0.1.4 — 2026-11-02
 

@@ -449,8 +449,11 @@ def tool_specs() -> list[dict]:
                 "Write front, side, top, iso, and contact PNGs fitted to the part. "
                 "up defaults to the longest axis. "
                 "Pass photo and photo_scale (pixels per millimetre) to draw overlay.png, the silhouette contour, on the photo. "
-                "overlay_fit auto aligns that contour. Pass roi or seed, and measure_json, so a coin is not the blob. "
-                "Writes overlay_iou plus overlay_diff.png. Warns when IoU is below 0.5 or the photo is angled. "
+                "overlay_fit auto tries front, side, and top, rotation at 15 degrees then 1 degree, and a mirror. "
+                "Pass roi or seed, and measure_json, so a coin is not the blob. "
+                "An roi that crops the silhouette is expanded. "
+                "Writes overlay_iou, overlay_iou_label, and overlay_poses. "
+                "An angled photo is still scored and the label is guide_only. "
                 "Also writes compare_front.png when photo is set. Do not write an overlay script. "
                 "Reports stale_validation against <file>.validate.json."
             ),
@@ -469,7 +472,7 @@ def tool_specs() -> list[dict]:
                 },
                 "overlay_fit": {
                     "type": "string",
-                    "description": "center (default) or auto. auto searches rotation and mirror, then front, side, and top. Returns overlay_rotation_deg, overlay_mirror, overlay_view, and overlay_iou.",
+                    "description": "center (default) or auto. auto tries front, side, and top at 15° then 1°, plus a mirror. Returns overlay_rotation_deg, overlay_mirror, overlay_view, overlay_iou, overlay_iou_label, and overlay_poses.",
                 },
                 "final": {
                     "type": "boolean",
@@ -494,7 +497,7 @@ def tool_specs() -> list[dict]:
                 },
                 "angled": {
                     "type": "boolean",
-                    "description": "The photo is not straight-on. The JSON warns.",
+                    "description": "The photo is not straight-on. IoU is still computed and overlay_iou_label is guide_only.",
                 },
                 "grid_mm": {"type": "number", "description": "Square grid spacing in millimetres. Not drawn on the iso view."},
                 "up": {"type": "string", "description": "x, y, or z. Default is the longest side."},
@@ -559,7 +562,8 @@ def tool_specs() -> list[dict]:
             _lead(
                 "Write a watertight building block. shape defaults to plate_clip, the sample plate. "
                 "Other shapes: plate, countersink, revolve, ribs, l_bracket, hinge, "
-                "thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap. "
+                "thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, "
+                "spur_gear, scroll, strap_hinge. "
                 "Try these before photo_part_build. "
                 "hinge is a print-in-place part with two shells. "
                 "Reject a countersink deeper than the sheet before calling this. "
@@ -572,7 +576,7 @@ def tool_specs() -> list[dict]:
                 },
                 "shape": {
                     "type": "string",
-                    "description": "plate_clip, plate, countersink, revolve, ribs, l_bracket, hinge, thread, knurl, sweep, hex_screw, hex_standoff, or bottle_cap.",
+                    "description": "plate_clip, plate, countersink, revolve, ribs, l_bracket, hinge, thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, spur_gear, scroll, or strap_hinge.",
                 },
                 "params": {"type": "object", "description": "Millimetre overrides. plate holes is a list of {x, y, diameter}."},
                 "ascii": {"type": "boolean", "description": "Write an ASCII STL."},
@@ -634,7 +638,7 @@ def tool_specs() -> list[dict]:
         "name": "photo_part_build",
         "description": _lead(
             "Run one local .py build script with the plugin interpreter. "
-            "Import photopart.features for a thread, knurl, revolve, sweep, hex screw, or standoff. "
+            "Import photopart.features for a thread, knurl, revolve, sweep, hex screw, standoff, spur gear, or spiral scroll. "
             "Overlapping shells are unioned. The error field is the exception, not a status line. "
             "No shell. Try photo_part_template first."
         ),
@@ -642,7 +646,7 @@ def tool_specs() -> list[dict]:
             "photo_part_build",
             _lead(
                 "Run a Python file with the plugin environment interpreter and return the new files. "
-                "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff. "
+                "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff, spur_gear, spiral_scroll, strap_hinge. "
                 "Each returns one watertight trimesh in millimetres. Overlapping shells are unioned; shells_before and shells_after are in the JSON. "
                 "On failure the error field starts with the exception. "
                 "Pass cwd as an absolute project path. Do not write into HERMES_HOME/cache. "

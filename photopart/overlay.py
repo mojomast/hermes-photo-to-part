@@ -2,8 +2,9 @@
 
 The line is the outer contour of the z-buffer mask, not the mesh's facet edges.
 ``center`` places that mask on the image center. ``auto`` scales, rotates,
-and optionally mirrors it onto the part, then picks the render view whose
-silhouette overlaps the photo best.
+and optionally mirrors it onto the part. It tries front, side, and top,
+searching rotation at 15° and then 1°. An angled photo still gets an IoU,
+labelled ``guide_only``. An ROI that cuts the silhouette is expanded.
 """
 
 from __future__ import annotations
@@ -50,13 +51,19 @@ def paint_overlay(
     foreground = None
     rotation = 0.0
     mirror = False
+    roi_warnings: list[str] = []
+    roi_expanded = False
     hints = bool(roi or seed or exclude)
     if origin is not None:
         placed = _blit_origin(model, (height, width), minimum, maximum, photo_scale, origin)
         used = "origin"
-        foreground, blob = _foreground_for_score(image, roi=roi, seed=seed, exclude=exclude, hints=hints)
+        foreground, blob, roi_warnings, roi_expanded = _foreground_for_overlay(
+            image, roi=roi, seed=seed, exclude=exclude, hints=hints
+        )
     elif fit == "auto":
-        foreground, blob = _foreground_for_score(image, roi=roi, seed=seed, exclude=exclude, hints=True)
+        foreground, blob, roi_warnings, roi_expanded = _foreground_for_overlay(
+            image, roi=roi, seed=seed, exclude=exclude, hints=True
+        )
         if foreground is None:
             placed = _blit_center(model, (height, width), minimum, maximum, photo_scale, points)
             used = "center"
@@ -73,29 +80,44 @@ def paint_overlay(
             used = "auto"
     else:
         placed = _blit_center(model, (height, width), minimum, maximum, photo_scale, points)
-        foreground, blob = _foreground_for_score(image, roi=roi, seed=seed, exclude=exclude, hints=hints)
+        foreground, blob, roi_warnings, roi_expanded = _foreground_for_overlay(
+            image, roi=roi, seed=seed, exclude=exclude, hints=hints
+        )
     iou = None if foreground is None else _iou(placed, foreground)
-    warnings = _overlay_warnings(iou, blob, angled=angled, missed=foreground is None and (fit == "auto" or hints))
-    if warnings and note:
-        note = note + " " + " ".join(warnings)
-    elif warnings:
-        note = " ".join(warnings)
-    painted = _draw_contour(image, placed)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(painted, mode="RGB").save(destination, format="PNG")
-    diff = _diff_image(image, placed, foreground)
-    Image.fromarray(diff, mode="RGB").save(diff_destination, format="PNG")
-    return {
-        "overlay_fit": used,
-        "overlay_iou": None if iou is None else round(float(iou), 4),
-        "overlay_diff": str(Path(diff_destination).resolve()),
-        "overlay_fit_note": note,
-        "overlay_blob": blob,
-        "overlay_warnings": warnings,
-        "overlay_rotation_deg": rotation,
-        "overlay_mirror": bool(mirror),
-        "overlay_view": view,
-    }
+    poses = []
+    if used == "auto" and iou is not None:
+        poses = [
+            {
+                "view": view,
+                "rotation_deg": float(rotation),
+                "mirror": bool(mirror),
+                "iou": round(float(iou), 4),
+            }
+        ]
+    return _write_overlay(
+        image,
+        placed,
+        foreground,
+        blob,
+        destination,
+        diff_destination,
+        fit=used,
+        note=note,
+        iou=iou,
+        warnings=_overlay_warnings(
+            iou,
+            blob,
+            angled=angled,
+            missed=foreground is None and (fit == "auto" or hints),
+            extra=roi_warnings,
+        ),
+        rotation=rotation,
+        mirror=mirror,
+        view=view,
+        poses=poses,
+        roi_expanded=roi_expanded,
+        angled=angled,
+    )
 
 
 def paint_auto_views(
@@ -112,20 +134,36 @@ def paint_auto_views(
 ) -> dict:
     """Try front, side, and top. Keep the pose with the best overlap.
 
-    ``views`` is ``(name, points, faces)`` in preference order. Within 0.01
-    IoU the earlier view wins, so a rectangle does not flip to top.
+    ``views`` is ``(name, points, faces)`` in preference order. Each view is
+    searched at 15°, then at 1°, including a mirror. Within 0.01 IoU the
+    earlier view wins, so a rectangle does not flip to top. ``overlay_poses``
+    lists every view's best pose, winner first. An angled photo is still
+    scored; its IoU is labelled ``guide_only``.
     """
     if not views:
         raise ValueError("overlay auto needs at least one view")
     image = np.array(Image.open(photo).convert("RGB"))
-    foreground, blob = _foreground_for_score(image, roi=roi, seed=seed, exclude=exclude, hints=True)
+    foreground, blob, roi_warnings, roi_expanded = _foreground_for_overlay(
+        image, roi=roi, seed=seed, exclude=exclude, hints=True
+    )
     chosen = None
+    found = []
     if foreground is not None:
         for index, (name, points, faces) in enumerate(views):
             model, _minimum, _maximum = raster_model(points, faces, photo_scale)
             pose = search_alignment(model, foreground)
+            row = {
+                "pose": pose,
+                "name": name,
+                "index": index,
+                "iou": pose["iou"],
+                "rotation_deg": pose["rotation_deg"],
+                "mirror": pose["mirror"],
+            }
+            found.append(row)
             if chosen is None or _prefer_pose(pose["iou"], index, chosen["iou"], chosen["index"]):
-                chosen = {"pose": pose, "name": name, "index": index, "iou": pose["iou"]}
+                chosen = row
+    poses = []
     if chosen is None:
         name, points, faces = views[0]
         model, minimum, maximum = raster_model(points, faces, photo_scale)
@@ -141,16 +179,25 @@ def paint_auto_views(
     else:
         placed = chosen["pose"]["placed"]
         note = chosen["pose"]["note"]
-        rotation = chosen["pose"]["rotation_deg"]
-        mirror = chosen["pose"]["mirror"]
+        rotation = chosen["rotation_deg"]
+        mirror = chosen["mirror"]
         view_name = chosen["name"]
         iou = chosen["iou"]
         note = f"{note} View {view_name}."
-    warnings = _overlay_warnings(iou, blob, angled=angled, missed=foreground is None)
-    if warnings and note:
-        note = note + " " + " ".join(warnings)
-    elif warnings:
-        note = " ".join(warnings)
+        rest = [row for row in found if row is not chosen]
+        rest.sort(key=lambda row: (-row["iou"], row["index"]))
+        poses = [
+            {
+                "view": row["name"],
+                "rotation_deg": float(row["rotation_deg"]),
+                "mirror": bool(row["mirror"]),
+                "iou": round(float(row["iou"]), 4),
+            }
+            for row in (chosen, *rest)
+        ]
+    warnings = _overlay_warnings(
+        iou, blob, angled=angled, missed=foreground is None, extra=roi_warnings
+    )
     return _write_overlay(
         image,
         placed,
@@ -165,11 +212,14 @@ def paint_auto_views(
         rotation=rotation,
         mirror=mirror,
         view=view_name,
+        poses=poses,
+        roi_expanded=roi_expanded,
+        angled=angled,
     )
 
 
 def search_alignment(model: np.ndarray, foreground: np.ndarray) -> dict:
-    """Coarse 15° search, then ±12° at 3°, including a mirror.
+    """Coarse 15° search, then ±15° at 1°, including a mirror.
 
     The search runs on masks no wider than 160 px. The reported IoU is the
     full-resolution overlap of the winning pose. Ties within 0.01 IoU prefer
@@ -195,7 +245,7 @@ def search_alignment(model: np.ndarray, foreground: np.ndarray) -> dict:
     assert best is not None
     center = best["angle"]
     for mirror in (False, True):
-        for delta in range(-12, 13, 3):
+        for delta in range(-15, 16, 1):
             consider(center + delta, mirror)
     angle = float(best["angle"])
     mirror = bool(best["mirror"])
@@ -253,8 +303,10 @@ def _place(model: np.ndarray, foreground: np.ndarray, angle_deg: float, mirror: 
         return np.zeros_like(foreground)
     mx0, my0, mx1, my1 = model_box
     px0, py0, px1, py1 = photo_box
-    model_pixels = int(np.count_nonzero(model))
-    photo_pixels = int(np.count_nonzero(foreground))
+    ys, xs = np.nonzero(model)
+    pys, pxs = np.nonzero(foreground)
+    model_pixels = int(xs.size)
+    photo_pixels = int(pxs.size)
     if model_pixels > 0 and photo_pixels > 0:
         # Pixel area stays stable when the part is rotated. The axis-aligned
         # box of a rotated silhouette is larger than the part.
@@ -265,11 +317,12 @@ def _place(model: np.ndarray, foreground: np.ndarray, angle_deg: float, mirror: 
         fw = max(1, px1 - px0)
         fh = max(1, py1 - py0)
         scale = math.sqrt((fw * fh) / (mw * mh))
-    mcx = (mx0 + mx1 - 1) / 2.0
-    mcy = (my0 + my1 - 1) / 2.0
-    pcx = (px0 + px1 - 1) / 2.0
-    pcy = (py0 + py1 - 1) / 2.0
-    ys, xs = np.nonzero(model)
+    # Centroid, not the box centre. An L rotated 45° moves its box centre
+    # and would otherwise miss the photo by a wide margin.
+    mcx = float(xs.mean()) if model_pixels else (mx0 + mx1 - 1) / 2.0
+    mcy = float(ys.mean()) if model_pixels else (my0 + my1 - 1) / 2.0
+    pcx = float(pxs.mean()) if photo_pixels else (px0 + px1 - 1) / 2.0
+    pcy = float(pys.mean()) if photo_pixels else (py0 + py1 - 1) / 2.0
     dx = (xs.astype(float) - mcx) * scale
     dy = (ys.astype(float) - mcy) * scale
     if mirror:
@@ -304,16 +357,27 @@ def _write_overlay(
     rotation,
     mirror,
     view,
+    poses=None,
+    roi_expanded=False,
+    angled=False,
 ) -> dict:
+    if warnings and note:
+        note = note + " " + " ".join(warnings)
+    elif warnings:
+        note = " ".join(warnings)
     painted = _draw_contour(image, placed)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(painted, mode="RGB").save(destination, format="PNG")
     diff = _diff_image(image, placed, foreground)
     Image.fromarray(diff, mode="RGB").save(diff_destination, format="PNG")
+    label = None
+    if iou is not None:
+        label = "guide_only" if angled else "measured"
     return {
         "overlay_fit": fit,
         "overlay_iou": None if iou is None else round(float(iou), 4),
+        "overlay_iou_label": label,
         "overlay_diff": str(Path(diff_destination).resolve()),
         "overlay_fit_note": note,
         "overlay_blob": blob,
@@ -321,6 +385,8 @@ def _write_overlay(
         "overlay_rotation_deg": float(rotation),
         "overlay_mirror": bool(mirror),
         "overlay_view": view,
+        "overlay_poses": list(poses or []),
+        "overlay_roi_expanded": bool(roi_expanded),
     }
 
 
@@ -431,8 +497,8 @@ def _foreground_for_score(image, *, roi, seed, exclude, hints: bool):
     return mask, blob
 
 
-def _overlay_warnings(iou, blob, *, angled: bool, missed: bool) -> list[str]:
-    warnings = []
+def _overlay_warnings(iou, blob, *, angled: bool, missed: bool, extra: list | None = None) -> list[str]:
+    warnings = list(extra or [])
     if iou is not None and iou < 0.5:
         where = ""
         if blob is not None and blob.get("source") == "largest":
@@ -447,10 +513,79 @@ def _overlay_warnings(iou, blob, *, angled: bool, missed: bool) -> list[str]:
         )
     if angled:
         warnings.append(
-            "The photo was flagged as angled. A flat overlay misses a tilted part. "
-            "Rectify with photo_part_measure or skip the overlay."
+            "The photo was flagged as angled. overlay_iou_label is guide_only: "
+            "the fit was still computed, but perspective can move the outline. "
+            "Rectify with photo_part_measure before treating the IoU as a measurement."
         )
     return warnings
+
+
+def _foreground_for_overlay(image, *, roi, seed, exclude, hints: bool):
+    """Segment the part. Expand an ROI that cuts the silhouette."""
+    if not hints:
+        mask, blob = _foreground_for_score(image, roi=None, seed=None, exclude=None, hints=False)
+        return mask, blob, [], False
+    if roi is None:
+        mask, blob = select_foreground(image, roi=None, seed=seed, exclude=exclude)
+        return mask, blob, [], False
+    current = (float(roi[0]), float(roi[1]), float(roi[2]), float(roi[3]))
+    mask, blob = select_foreground(image, roi=current, seed=seed, exclude=exclude)
+    warnings = []
+    grew = False
+    for _ in range(4):
+        if mask is None or not _mask_meets_roi_edge(mask, current):
+            break
+        grown = _grow_roi(current, image.shape)
+        if _roi_same(grown, current):
+            warnings.append(
+                "ROI crops the silhouette and meets the image edge, so it cannot expand further. "
+                "The IoU may score only the visible band."
+            )
+            break
+        current = grown
+        grew = True
+        mask, blob = select_foreground(image, roi=current, seed=seed, exclude=exclude)
+    if grew:
+        x, y, w, h = current
+        warnings.append(
+            "ROI cropped the silhouette (the mask meets the ROI edge). "
+            f"Expanded the ROI to x={x:.0f}, y={y:.0f}, w={w:.0f}, h={h:.0f}."
+        )
+    if (
+        mask is not None
+        and _mask_meets_roi_edge(mask, current)
+        and not any("image edge" in item for item in warnings)
+    ):
+        warnings.append(
+            "ROI still crops the silhouette after expanding. The IoU may score only part of the part."
+        )
+    return mask, blob, warnings, grew
+
+
+def _mask_meets_roi_edge(mask: np.ndarray, rect) -> bool:
+    y0, y1, x0, x1 = _rect_bounds(mask.shape, rect)
+    if y1 - y0 < 2 or x1 - x0 < 2:
+        return False
+    return bool(
+        mask[y0, x0:x1].any()
+        or mask[y1 - 1, x0:x1].any()
+        or mask[y0:y1, x0].any()
+        or mask[y0:y1, x1 - 1].any()
+    )
+
+
+def _grow_roi(rect, shape, fraction: float = 0.5):
+    height, width = shape[:2]
+    x, y, w, h = (float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3]))
+    x0 = max(0.0, x - w * fraction)
+    y0 = max(0.0, y - h * fraction)
+    x1 = min(float(width), x + w + w * fraction)
+    y1 = min(float(height), y + h + h * fraction)
+    return (x0, y0, max(1.0, x1 - x0), max(1.0, y1 - y0))
+
+
+def _roi_same(left, right) -> bool:
+    return all(abs(float(left[index]) - float(right[index])) < 0.5 for index in range(4))
 
 
 def _zero_rect(mask: np.ndarray, rect) -> None:
