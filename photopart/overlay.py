@@ -27,35 +27,51 @@ def paint_overlay(
     photo_scale: float,
     origin: tuple[float, float] | None,
     fit: str,
+    roi: tuple[float, float, float, float] | None = None,
+    seed: tuple[float, float] | None = None,
+    exclude: list | None = None,
+    angled: bool = False,
 ) -> dict:
-    """Draw the front silhouette on a copy of ``photo`` and write a diff image."""
+    """Draw the front silhouette on a copy of ``photo`` and write a diff image.
+
+    ``roi`` is ``x, y, w, h`` in image pixels. ``seed`` is one pixel on the part.
+    ``exclude`` drops rectangles (the coin or ruler) before the largest blob is chosen.
+    """
     if fit not in ("center", "auto"):
         raise ValueError("overlay fit must be center or auto")
-    image = np.asarray(Image.open(photo).convert("RGB"))
+    image = np.array(Image.open(photo).convert("RGB"))
     height, width = image.shape[:2]
     model, minimum, maximum = raster_model(points, faces, photo_scale)
     note = None
     used = fit
+    blob = None
     foreground = None
+    hints = bool(roi or seed or exclude)
     if origin is not None:
         placed = _blit_origin(model, (height, width), minimum, maximum, photo_scale, origin)
         used = "origin"
+        foreground, blob = _foreground_for_score(image, roi=roi, seed=seed, exclude=exclude, hints=hints)
     elif fit == "auto":
-        foreground = foreground_mask(image)
+        foreground, blob = _foreground_for_score(image, roi=roi, seed=seed, exclude=exclude, hints=True)
         if foreground is None:
             placed = _blit_center(model, (height, width), minimum, maximum, photo_scale, points)
             used = "center"
             note = (
                 "Could not segment a part from the photo, so the outline stayed centered. "
-                "auto needs the part to stand out from the border color."
+                "Pass roi or seed on the part, and exclude the coin."
             )
         else:
             placed, note = _align(model, foreground)
             used = "auto"
     else:
         placed = _blit_center(model, (height, width), minimum, maximum, photo_scale, points)
-        foreground = foreground_mask(image)
+        foreground, blob = _foreground_for_score(image, roi=roi, seed=seed, exclude=exclude, hints=hints)
     iou = None if foreground is None else _iou(placed, foreground)
+    warnings = _overlay_warnings(iou, blob, angled=angled, missed=foreground is None and (fit == "auto" or hints))
+    if warnings and note:
+        note = note + " " + " ".join(warnings)
+    elif warnings:
+        note = " ".join(warnings)
     painted = _draw_contour(image, placed)
     destination.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(painted, mode="RGB").save(destination, format="PNG")
@@ -64,8 +80,10 @@ def paint_overlay(
     return {
         "overlay_fit": used,
         "overlay_iou": None if iou is None else round(float(iou), 4),
-        "overlay_diff": str(diff_destination),
+        "overlay_diff": str(Path(diff_destination).resolve()),
         "overlay_fit_note": note,
+        "overlay_blob": blob,
+        "overlay_warnings": warnings,
     }
 
 
@@ -93,6 +111,18 @@ def raster_model(points: np.ndarray, faces: np.ndarray, photo_scale: float) -> t
 
 def foreground_mask(image: np.ndarray) -> np.ndarray | None:
     """Largest region whose color differs from the border. None when that fails."""
+    mask = color_mask(image)
+    if mask is None:
+        return None
+    component = _largest_component(mask)
+    fraction = float(component.mean())
+    if fraction < 0.005 or fraction > 0.90:
+        return None
+    return component
+
+
+def color_mask(image: np.ndarray) -> np.ndarray | None:
+    """Pixels that differ from the border color, before a blob is chosen."""
     if image.ndim != 3 or image.shape[0] < 4 or image.shape[1] < 4:
         return None
     border = np.concatenate([image[0], image[-1], image[:, 0], image[:, -1]], axis=0).astype(np.float64)
@@ -102,11 +132,155 @@ def foreground_mask(image: np.ndarray) -> np.ndarray | None:
     mask = distance > max(18.0, spread * 4.0 + 12.0)
     if int(mask.sum()) < 16:
         return None
-    component = _largest_component(mask)
+    return mask
+
+
+def select_foreground(
+    image: np.ndarray,
+    *,
+    roi: tuple[float, float, float, float] | None = None,
+    seed: tuple[float, float] | None = None,
+    exclude: list | None = None,
+) -> tuple[np.ndarray | None, dict | None]:
+    """Pick one blob. Seed wins, then the region inside roi, otherwise the largest.
+
+    Exclude rectangles are cleared first so a coin is not the largest object.
+    A seed is flood-filled at full resolution. If that pixel is background, a
+    small neighborhood is searched.
+    """
+    mask = color_mask(image)
+    if mask is None:
+        return None, None
+    chosen = mask.copy()
+    for rect in exclude or []:
+        _zero_rect(chosen, rect)
+    source = "largest"
+    if roi is not None:
+        gated = np.zeros_like(chosen)
+        _copy_rect(chosen, gated, roi)
+        chosen = gated
+        source = "roi"
+    if seed is not None:
+        component = _component_at(chosen, seed)
+        source = "seed"
+    else:
+        component = _largest_component(chosen)
+    if component is None or int(component.sum()) < 16:
+        return None, None
     fraction = float(component.mean())
-    if fraction < 0.005 or fraction > 0.90:
-        return None
-    return component
+    if seed is None and roi is None and (fraction < 0.005 or fraction > 0.90):
+        return None, None
+    if fraction > 0.90:
+        return None, None
+    box = _bbox(component)
+    blob = None
+    if box is not None:
+        x0, y0, x1, y1 = box
+        blob = {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "source": source}
+    return component, blob
+
+
+def _foreground_for_score(image, *, roi, seed, exclude, hints: bool):
+    if hints:
+        return select_foreground(image, roi=roi, seed=seed, exclude=exclude)
+    mask = foreground_mask(image)
+    if mask is None:
+        return None, None
+    box = _bbox(mask)
+    blob = None
+    if box is not None:
+        x0, y0, x1, y1 = box
+        blob = {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "source": "largest"}
+    return mask, blob
+
+
+def _overlay_warnings(iou, blob, *, angled: bool, missed: bool) -> list[str]:
+    warnings = []
+    if iou is not None and iou < 0.5:
+        where = ""
+        if blob is not None and blob.get("source") == "largest":
+            where = " The largest object in the photo was used."
+        warnings.append(
+            f"overlay IoU {iou:.2f} is below 0.5.{where} "
+            "Pass roi or seed on the part, and exclude the coin with measure JSON or exclude_roi."
+        )
+    elif missed:
+        warnings.append(
+            "overlay could not find the part. Pass roi or seed, and exclude the coin. IoU was not computed."
+        )
+    if angled:
+        warnings.append(
+            "The photo was flagged as angled. A flat overlay misses a tilted part. "
+            "Rectify with photo_part_measure or skip the overlay."
+        )
+    return warnings
+
+
+def _zero_rect(mask: np.ndarray, rect) -> None:
+    y0, y1, x0, x1 = _rect_bounds(mask.shape, rect)
+    if y1 > y0 and x1 > x0:
+        mask[y0:y1, x0:x1] = False
+
+
+def _copy_rect(source: np.ndarray, dest: np.ndarray, rect) -> None:
+    y0, y1, x0, x1 = _rect_bounds(source.shape, rect)
+    if y1 > y0 and x1 > x0:
+        dest[y0:y1, x0:x1] = source[y0:y1, x0:x1]
+
+
+def _rect_bounds(shape, rect) -> tuple[int, int, int, int]:
+    height, width = shape[:2]
+    x, y, w, h = (float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3]))
+    x0 = max(0, int(math.floor(x)))
+    y0 = max(0, int(math.floor(y)))
+    x1 = min(width, int(math.ceil(x + w)))
+    y1 = min(height, int(math.ceil(y + h)))
+    return y0, y1, x0, x1
+
+
+def _component_at(mask: np.ndarray, seed, radius: int = 24) -> np.ndarray:
+    height, width = mask.shape
+    sx = int(round(float(seed[0])))
+    sy = int(round(float(seed[1])))
+    if sx < 0 or sy < 0 or sx >= width or sy >= height:
+        raise ValueError("seed is outside the photo")
+    if not mask[sy, sx]:
+        found = None
+        for ring in range(1, radius + 1):
+            for dy in range(-ring, ring + 1):
+                for dx in range(-ring, ring + 1):
+                    if max(abs(dx), abs(dy)) != ring:
+                        continue
+                    ny = sy + dy
+                    nx = sx + dx
+                    if 0 <= nx < width and 0 <= ny < height and mask[ny, nx]:
+                        found = (ny, nx)
+                        break
+                if found is not None:
+                    break
+            if found is not None:
+                break
+        if found is None:
+            return np.zeros_like(mask)
+        sy, sx = found
+    return _flood(mask, sy, sx)
+
+
+def _flood(mask: np.ndarray, y: int, x: int) -> np.ndarray:
+    height, width = mask.shape
+    out = np.zeros((height, width), dtype=bool)
+    seen = np.zeros((height, width), dtype=bool)
+    seen[y, x] = True
+    stack = [(y, x)]
+    while stack:
+        cy, cx = stack.pop()
+        out[cy, cx] = True
+        for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+            if ny < 0 or nx < 0 or ny >= height or nx >= width or seen[ny, nx] or not mask[ny, nx]:
+                continue
+            seen[ny, nx] = True
+            stack.append((ny, nx))
+    return out
 
 
 def _largest_component(mask: np.ndarray) -> np.ndarray:

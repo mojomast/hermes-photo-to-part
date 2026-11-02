@@ -45,7 +45,9 @@ Pass `coin` plus `diameter_px` or two `points` across the coin. A ruler is `rule
 
 Pass `photo_scale` (pixels per millimetre) to `photo_part_render` along with `photo`. The tool writes `overlay.png`: the silhouette contour of the front view, not the facet edges. It also writes `overlay_diff.png` and `overlay_iou`, and the side-by-side `compare_front.png`. Default placement (`overlay_fit: center`) puts the model center on the image center. `overlay_fit: auto` scales and translates that contour onto the part segmented from a straight-on photo. `overlay_origin` is `[x, y]`, the image pixel of the model's minimum corner, with y growing downward.
 
-`--photo-scale` and `overlay_fit` assume a straight-on photo. Skip the overlay when the photo is angled, unless `photo_part_measure` already rectified it, and say why: perspective moves the far edge, so the outline will not sit on the part.
+`--photo-scale` and `overlay_fit` assume a straight-on photo. Skip the overlay when the photo is angled, unless `photo_part_measure` already rectified it, and say why: perspective moves the far edge, so the outline will not sit on the part. `auto` uses the largest object unless you pass `roi` (`x, y, w, h`), `seed` (one pixel on the part), or `exclude_roi`. Passing the measure JSON excludes `reference_bbox` (the coin or the ruler). The result warns when `overlay_iou` is below 0.5 or `angled` is set, and it names the blob.
+
+A single straight-on photo does not show thickness or depth. Say those dimensions are unobserved. Ask, or mark them assumed. Do not copy an in-plane width into thickness.
 
 On 2 mm grid paper, `photo_scale` is the pixel width of one square divided by 2. Do not write an overlay script. The tool is the overlay.
 

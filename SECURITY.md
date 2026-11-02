@@ -6,8 +6,9 @@ This plugin is trusted in-process Python, the same as any other Hermes plugin. R
 
 What it does:
 
-- `register()` calls `ctx.register_skill` and `ctx.register_tool` for `photo_part_validate`, `photo_part_render`, `photo_part_heal`, `photo_part_template`, and `photo_part_measure`. It does not register hooks or middleware, and it does not read credentials. A colon cannot appear in a skill name, so the `plugin:` form of the skill id is not registered as an alias. The skill description states the real id.
-- The tools and helper scripts read the mesh and image paths you pass them and write the output paths you pass them. They refuse to overwrite an input with the healed output.
+- `register()` calls `ctx.register_skill` and `ctx.register_tool` for `photo_part_validate`, `photo_part_render`, `photo_part_heal`, `photo_part_template`, `photo_part_measure`, and `photo_part_build`. It does not register hooks or middleware, and it does not read credentials. A colon cannot appear in a skill name, so the `plugin:` form of the skill id is not registered as an alias. The skill description and each tool description state the real id.
+- The tools and helper scripts read the mesh and image paths you pass them and write the output paths you pass them. They refuse paths under `HERMES_HOME/cache`. Template and heal refuse to replace an existing output unless you pass `--overwrite`. Heal still refuses to overwrite its input.
+- `photo_part_build` runs one local `.py` file you pass, with the plugin interpreter, a timeout of at most 300 seconds, and a captured argument list. It does not use a shell string. It does not open a socket of its own and it does not add credentials. The script itself is code you or the agent wrote.
 - They do not open sockets, read `.env` files, or read Hermes credential stores.
 - If a helper script is started with a Python that cannot import trimesh, it re-executes itself with the plugin environment's Python. It finds that interpreter from `HERMES_HOME` install metadata (`facts.json` and the install venv layout). It does not run a shell string and it does not install packages.
 - There is no telemetry and no self-updater.

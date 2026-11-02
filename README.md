@@ -8,23 +8,26 @@ It is a community plugin by [Kyle Durepos](https://github.com/mojomast). It is n
 
 ## What you get
 
-One skill and five tools. The skill id is `photo-to-part:photo-to-printable-part`. That is the whole id. `plugin:photo-to-part:photo-to-printable-part` is not a skill name. A `plugin:` prefix in Hermes docs is a placeholder.
+One skill and six tools. The skill id is `photo-to-part:photo-to-printable-part`. That is the whole id. `plugin:photo-to-part:photo-to-printable-part` is not a skill name. A `plugin:` prefix in Hermes docs is a placeholder, and a skill name cannot contain a colon, so that string is not registered as an alias.
 
 | Tool | Job |
 | --- | --- |
-| `photo_part_template` | A watertight block: sample plate, plate with holes, countersink, revolved profile, radial ribs, L-bracket, or a print-in-place hinge. |
-| `photo_part_validate` | Watertightness, shell count (`expected_shells` for a print-in-place part), bounding box, and optional hole positions. A longest side under 1 mm or over 2 m fails unless `allow_size` is set. |
-| `photo_part_render` | Front, side, top, and iso previews fitted to the part, a side-by-side, and a silhouette overlay. `overlay_fit: auto` reports an IoU. |
-| `photo_part_heal` | Weld, fill holes, and keep the largest shell of a scan. `--union` merges overlapping shells. Flat caps are not a finished surface. |
-| `photo_part_measure` | Pixels per millimetre from a coin or a ruler, and an optional four-point rectified image. |
+| `photo_part_template` | A watertight block: sample plate, plate with holes, countersink, revolved profile, radial ribs, L-bracket, or a print-in-place hinge. Try one of these before a custom script. |
+| `photo_part_build` | Runs one local `.py` file with the plugin interpreter (`interpreter` in the JSON). Working directory, timeout, captured output. No shell. |
+| `photo_part_validate` | Watertightness, shell count (`expected_shells` for a print-in-place part), bounding box, and optional hole positions. A longest side under 1 mm or over 2 m fails unless `allow_size` is set. Writes `<file>.validate.json` with the mesh hash. |
+| `photo_part_render` | Front, side, top, and iso previews fitted to the part, a side-by-side, and a silhouette overlay. `overlay_fit: auto` reports an IoU. `--roi`, `--seed`, and a measure JSON keep a coin from winning. `stale_validation` is true when the file changed after validate. |
+| `photo_part_heal` | Weld, fill holes, and keep the largest shell of a scan. `--union` merges overlapping shells. Flat caps are not a finished surface. Refuses to replace an existing file unless `--overwrite`. |
+| `photo_part_measure` | Pixels per millimetre from a coin or a ruler, a `reference_bbox` for that object, and an optional four-point rectified image. |
 
-The same jobs are available as scripts under `skills/photo-to-printable-part/scripts/` for a person at a shell. Hermes should call the tools. The tools already run where trimesh and manifold3d are installed. A system `python script.py` re-execs into that environment without resolving the venv interpreter symlink. Do not pip install into the system Python.
+The same jobs are available as scripts under `skills/photo-to-printable-part/scripts/` for a person at a shell. Hermes should call the tools. The tools already run where trimesh and manifold3d are installed. A system `python script.py` re-execs into that environment without resolving the venv interpreter symlink. `photo_part_build` uses that same unresolved interpreter and returns it as `interpreter`. Do not pip install into the system Python.
+
+Write `name_vN.stl` and do not overwrite it. Pass absolute paths in the project. The tools refuse `$HERMES_HOME/cache`. Each tool JSON includes `next_step`. From one flat photo, thickness and depth are unobserved: ask, or mark them assumed.
 
 `register()` adds those tools and the skill. It does not add hooks or middleware, and it does not read secrets. Enabling the plugin installs the packages in `pyproject.toml` from PyPI after you accept them. CadQuery, build123d, and OpenSCAD are not installed for you. Installing one in the project environment, when you want a STEP file, downloads packages and can take several minutes. The pinned lines are in the skill's `references/cad-backends.md`.
 
 ## Disclosure
 
-The tools and scripts read the mesh and image paths you give them and write the output paths you give them. They do not open network connections, read credentials, talk to a printer, or update themselves. If a script is started with a Python that cannot import trimesh, it re-executes itself with the plugin environment's Python. That interpreter path comes from `HERMES_HOME`. Photos you attach in a Hermes chat still go to your model provider. That is Hermes, not an extra upload from this plugin. Details are in [SECURITY.md](SECURITY.md).
+The tools and scripts read the mesh and image paths you give them and write the output paths you give them. They do not open network connections, read credentials, talk to a printer, or update themselves. `photo_part_build` runs a local Python file with a timeout and does not add a socket or a credential. If a script is started with a Python that cannot import trimesh, it re-executes itself with the plugin environment's Python. That interpreter path comes from `HERMES_HOME`. Photos you attach in a Hermes chat still go to your model provider. That is Hermes, not an extra upload from this plugin. Details are in [SECURITY.md](SECURITY.md).
 
 ## Install
 

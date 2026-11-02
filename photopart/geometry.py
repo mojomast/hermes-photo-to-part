@@ -17,7 +17,10 @@ import numpy as np
 import trimesh
 from shapely.geometry import Polygon, box
 
+from photopart.flow import attach_flow, failed, step_model
 from photopart.io import DEFAULT_MAX_BYTES
+from photopart.launcher import plugin_python
+from photopart.paths import absolute_path
 from photopart.status import status
 
 # name, default millimetres, minimum, what it controls
@@ -260,17 +263,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ascii", action="store_true", help="Write an ASCII STL.")
     parser.add_argument("--no-3mf", action="store_true", help="Skip the 3MF file.")
     parser.add_argument("--force", action="store_true", help="Overwrite files in --out-dir.")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite files in --out-dir.")
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     args = parser.parse_args(argv)
-    out_dir = Path(args.out_dir).expanduser().resolve()
+    try:
+        out_dir = absolute_path(args.out_dir)
+    except ValueError as exc:
+        print(json.dumps(failed(str(exc)), indent=2, sort_keys=True))
+        status(f"error: {exc}")
+        return 1
     targets = [out_dir / "plate_clip.stl", out_dir / "plate_clip.scad", out_dir / "params.json"]
     if not args.no_3mf:
         targets.append(out_dir / "plate_clip.3mf")
     existing = [path for path in targets if path.exists()]
-    if existing and not args.force:
+    if existing and not (args.force or args.overwrite):
         names = ", ".join(path.name for path in existing)
-        status(f"refusing to overwrite {names}. Pass --force.")
-        print(json.dumps({"ok": False, "error": f"refusing to overwrite {names}. Pass --force."}))
+        status(f"refusing to overwrite {names}. Pass --overwrite.")
+        print(json.dumps(failed(f"refusing to overwrite {names}. Pass --overwrite."), indent=2, sort_keys=True))
         return 1
     try:
         params = _load_overrides(args.params, args.set)
@@ -278,14 +287,15 @@ def main(argv: list[str] | None = None) -> int:
             out_dir, params, ascii_stl=args.ascii, write_3mf=not args.no_3mf
         )
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
-        print(json.dumps({"ok": False, "error": str(exc)}))
+        print(json.dumps(failed(str(exc)), indent=2, sort_keys=True))
         status(f"error: {exc}")
         return 1
     summary = {
-        "stl": str(written["stl"]),
-        "scad": str(written["scad"]),
-        "threemf": None if written["threemf"] is None else str(written["threemf"]),
+        "stl": str(Path(written["stl"]).resolve()),
+        "scad": None if written["scad"] is None else str(Path(written["scad"]).resolve()),
+        "threemf": None if written["threemf"] is None else str(Path(written["threemf"]).resolve()),
         "threemf_error": written["threemf_error"],
+        "interpreter": plugin_python(),
         "expected_extents_mm": {
             "x": written["expected_extents_mm"][0],
             "y": written["expected_extents_mm"][1],
@@ -295,6 +305,7 @@ def main(argv: list[str] | None = None) -> int:
         "watertight": bool(written["mesh"].is_watertight),
     }
     summary["ok"] = summary["watertight"]
+    attach_flow(summary, step_model(summary["stl"]))
     print(json.dumps(summary, indent=2, sort_keys=True))
     if summary["ok"]:
         status("ok")

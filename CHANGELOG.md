@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.3 — 2026-11-02
+
+- `--roi`, `--seed`, and `--exclude-roi` choose the part for `--overlay-fit auto`. A `photo_part_measure` JSON supplies the coin or ruler box. The JSON names the blob that was used and warns when IoU is below 0.5 or the photo is angled.
+- `photo_part_validate` writes `<file>.validate.json` with the mesh hash. Render and validate set `stale_validation` when the file no longer matches that sidecar. Template and heal refuse to replace an existing output unless `--overwrite` (`--force` still works).
+- `photo_part_build` runs one local `.py` file with the plugin interpreter, a working directory, a timeout, and captured output. It does not start a shell. The interpreter path is in the JSON from template and build.
+- Template and measure default to the working directory, refuse `$HERMES_HOME/cache`, and return absolute paths.
+- Every tool description starts with `photo-to-part:photo-to-printable-part`, and every JSON result has `next_step` for measure, template or build, validate, render, deliver. The skill tells the agent to stay under 25 calls, to write `name_vN.stl` and not overwrite it, and to mark thickness or depth from a single flat photo as unobserved.
+- Hermes still cannot register a skill name that contains a colon, so the mistaken `plugin:` id is not an alias. The description is what `skills_list` shows.
+
 ## 0.1.2 — 2026-11-02
 
 - Helper scripts exec the venv `bin/python` symlink instead of the base interpreter it points at, so `python3 scripts/*.py` keeps the plugin's site-packages.

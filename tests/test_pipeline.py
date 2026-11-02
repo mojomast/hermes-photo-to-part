@@ -239,6 +239,7 @@ class PluginTests(unittest.TestCase):
             "photo_part_heal",
             "photo_part_template",
             "photo_part_measure",
+            "photo_part_build",
         ])
         for item in tools:
             self.assertEqual(item["toolset"], "photo-to-part")
@@ -254,7 +255,7 @@ class PluginTests(unittest.TestCase):
         front = text.split("---", 2)[1]
         meta = yaml.safe_load(front)
         self.assertEqual(meta["name"], "photo-to-printable-part")
-        self.assertEqual(meta["version"], "0.1.2")
+        self.assertEqual(meta["version"], "0.1.3")
         description = meta["description"].strip()
         self.assertLessEqual(len(description), 1024)
         self.assertIn("STL", description)
@@ -275,8 +276,8 @@ class PluginTests(unittest.TestCase):
         manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "photo-to-part")
-        self.assertEqual(manifest["version"], "0.1.2")
-        self.assertEqual(project["project"]["version"], "0.1.2")
+        self.assertEqual(manifest["version"], "0.1.3")
+        self.assertEqual(project["project"]["version"], "0.1.3")
         self.assertEqual(manifest["python_dependencies"], project["project"]["dependencies"])
         from photopart.tools import TOOL_NAMES
 
@@ -303,19 +304,34 @@ class PluginTests(unittest.TestCase):
                     names = [node.module.split(".")[0]]
                 else:
                     names = []
+                if path.name == "build_run.py":
+                    names = [name for name in names if name != "subprocess"]
                 self.assertFalse(banned.intersection(names), f"{path.name} imports {names}")
+                if isinstance(node, ast.Call):
+                    for keyword in node.keywords:
+                        if (
+                            keyword.arg == "shell"
+                            and isinstance(keyword.value, ast.Constant)
+                            and keyword.value.value is True
+                        ):
+                            self.fail(f"{path} uses shell=True")
 
 
 class ExampleTests(unittest.TestCase):
     def test_checked_in_sample_still_validates(self):
         stl = ROOT / "examples" / "plate-clip" / "plate_clip.stl"
         report_path = ROOT / "examples" / "plate-clip" / "report.json"
+        sidecar = Path(str(stl) + ".validate.json")
         self.assertTrue(stl.is_file(), "run python -m photopart.showcase to build the sample")
-        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-            code = validate_main([str(stl), "--size", "51", "72.6", "6", "--tolerance", "0.05"])
-        self.assertEqual(code, 0)
-        report = json.loads(report_path.read_text(encoding="utf-8"))
-        self.assertTrue(report["ok"])
+        try:
+            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                code = validate_main([str(stl), "--size", "51", "72.6", "6", "--tolerance", "0.05"])
+            self.assertEqual(code, 0)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertTrue(report["ok"])
+        finally:
+            if sidecar.is_file():
+                sidecar.unlink()
 
 
 class StdoutContractTests(unittest.TestCase):
