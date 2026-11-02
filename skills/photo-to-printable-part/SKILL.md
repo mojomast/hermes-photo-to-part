@@ -39,17 +39,17 @@ from Hermes. Those scripts are for a person at a shell. Do not write a
 photo-measurement, perspective, overlay, or checker script. Try
 `photo_part_template` shapes before any custom code: plate_clip, plate,
 countersink, revolve, ribs, l_bracket, hinge, thread, knurl, sweep, hex_screw,
-hex_standoff, bottle_cap. A custom solid is a `.py` file run only by
+hex_standoff, bottle_cap, spur_gear, scroll, strap_hinge. A custom solid is a `.py` file run only by
 `photo_part_build`. That tool uses the plugin interpreter. The path is the
 `interpreter` field. It is the unresolved Hermes venv `bin/python` when one
 matches this process, otherwise the Python running the tool. The script can
 import the same solids the template uses:
 
 ```python
-from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff
+from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff, spur_gear, spiral_scroll, strap_hinge
 ```
 
-Each call returns one watertight trimesh, in millimetres. `photo_part_build`
+Each call returns one watertight trimesh, in millimetres. `spur_gear(module, teeth, pressure_angle=20, face_width, bore=None)` is an involute gear: tip diameter `module * (teeth + 2)`, root diameter `module * (teeth - 2.5)`, optional keyway or D-flat, optional hub. `spiral_scroll(width, thickness, turns, end_radius, kind="archimedean")` is a spiral strip (`kind` `log` is the other). `strap_hinge` attaches one or two of those scrolls to a strap. `photo_part_build`
 unions overlapping shells and reports `shells_before` and `shells_after`.
 On failure the `error` field is the exception, not a status sentence.
 
@@ -76,10 +76,10 @@ Write `name_vN.stl`. Never overwrite a file. Never `rm`, unlink, or otherwise de
 
 | Tool | Job |
 | --- | --- |
-| `photo_part_template` | Shapes above, including thread, knurl, sweep, hex_screw, hex_standoff, and bottle_cap. Absolute `out_dir`. Returns `interpreter`. |
+| `photo_part_template` | Shapes above, including thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, spur_gear, scroll, and strap_hinge. Absolute `out_dir`. Returns `interpreter`. |
 | `photo_part_build` | One local `.py` with the plugin interpreter. Unions overlapping shells. Timeout, no shell. |
 | `photo_part_validate` | Watertight, shells, box, holes, and `spec.json` or `--dim`. The only sidecar is `<file>.validate.json`. A new run appends the previous record to `history`. |
-| `photo_part_render` | Fitted views and silhouette overlay. `overlay_fit auto` reports rotation, mirror, and view. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`), including when `final` is set. `stale_validation` when the hash differs. |
+| `photo_part_render` | Fitted views and silhouette overlay. `overlay_fit auto` tries front, side, and top at 15° then 1°, plus a mirror, and reports rotation, mirror, view, and `overlay_poses`. An angled photo is still scored with `overlay_iou_label` `guide_only`. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`), including when `final` is set. `stale_validation` when the hash differs. |
 | `photo_part_heal` | Weld and fill. `--union` merges overlapping shells. |
 | `photo_part_measure` | px/mm, `reference_bbox` for the coin or ruler, absolute paths. |
 
@@ -89,7 +89,7 @@ A print-in-place part (the hinge template has 2 shells) needs `expected_shells`.
 
 `holes` is a list of `{x, y, diameter}` in millimetres, `axis` optional (default `z`).
 
-`--photo-scale` is pixels per millimetre. It writes `overlay.png` (the silhouette contour, not facet edges), `overlay_diff.png`, and `overlay_iou`. `overlay_fit: auto` searches rotation and a mirror, then chooses front, side, or top. The JSON reports `overlay_rotation_deg`, `overlay_mirror`, and `overlay_view`. It can still lock onto the largest object, such as a coin. Pass `--roi x,y,w,h` or `--seed x,y`, and the measure JSON or `--exclude-roi`. The JSON names that blob. If `overlay_iou` is below 0.5, or the photo is angled, the JSON warns. Do not write an overlay script. Skip the overlay on an angled photo unless `photo_part_measure` rectified it, and say why: perspective puts the outline off the part.
+`--photo-scale` is pixels per millimetre. It writes `overlay.png` (the silhouette contour, not facet edges), `overlay_diff.png`, and `overlay_iou`. `overlay_fit: auto` tries front, side, and top. Rotation is searched at 15°, then at 1°, and a mirror is tried too. The JSON reports `overlay_rotation_deg`, `overlay_mirror`, `overlay_view`, and `overlay_poses` (each view's best pose, winner first). It can still lock onto the largest object, such as a coin. Pass `--roi x,y,w,h` or `--seed x,y`, and the measure JSON or `--exclude-roi`. The JSON names that blob. If the ROI meets the silhouette edge, it is expanded and the JSON warns. If `overlay_iou` is below 0.5, the JSON warns. An angled photo is not skipped: the fit still runs and `overlay_iou_label` is `guide_only`, because perspective can move the outline. Say that the number is a guide, not a measurement, unless `photo_part_measure` rectified the photo. Do not write an overlay script.
 
 `photo_part_validate --spec spec.json` fails when the mesh drifts from that file, and fails when a check the template wrote is missing from the spec. `--dim name=value±tol` is the same check for `x`, `y`, `z`, `shells`, `knuckles`, or `hole_count`. Knuckles use `knuckle_axis` (default `x`). The probe samples between the pin and the knuckle wall, so do not delete a knuckle check. Hole count is the genus, not the knuckle count. The only validation file is `<file>.validate.json`. Each run keeps the previous record in `history`. Do not pass a second path such as `model.validate.json`.
 

@@ -3,8 +3,10 @@
 plate_clip stays the Shapely sample. The other shapes are manifold3d solids:
 a plate with holes, a countersink, a revolved profile, radial ribs, an
 L-bracket, a print-in-place hinge (two shells that do not touch), and the
-feature helpers (thread, knurl, sweep, hex screw, hex standoff, bottle cap).
-Those helpers each return one watertight body.
+feature helpers (thread, knurl, sweep, hex screw, hex standoff, bottle cap,
+spur gear, spiral scroll, strap hinge). Those helpers each return one
+watertight body. The strap hinge is one shell; the print-in-place hinge
+is still two.
 """
 
 from __future__ import annotations
@@ -29,6 +31,9 @@ SHAPES = (
     "hex_screw",
     "hex_standoff",
     "bottle_cap",
+    "spur_gear",
+    "scroll",
+    "strap_hinge",
 )
 
 
@@ -65,6 +70,9 @@ def build_shape(shape: str, params: dict | None = None) -> tuple[trimesh.Trimesh
         "hex_screw": _hex_screw,
         "hex_standoff": _hex_standoff,
         "bottle_cap": _bottle_cap,
+        "spur_gear": _spur_gear,
+        "scroll": _scroll,
+        "strap_hinge": _strap_hinge,
     }
     mesh, resolved, shells = builders[name](raw)
     mesh.metadata["units"] = "millimeters"
@@ -474,6 +482,125 @@ def _bottle_cap(params: dict):
         "knurl_count": count,
     }
     return mesh, resolved, 1
+
+
+def _spur_gear(params: dict):
+    from photopart.features import spur_gear
+
+    module = _require_positive("module_mm", _number(params, "module_mm", 1.0))
+    teeth = int(_number(params, "teeth", 20))
+    pressure = _number(params, "pressure_angle_deg", 20.0)
+    face = _require_positive("face_width_mm", _number(params, "face_width_mm", 6.0))
+    bore = _optional_number(params, "bore_diameter_mm")
+    key_w = _optional_number(params, "keyway_width_mm")
+    key_d = _optional_number(params, "keyway_depth_mm")
+    flat = _optional_number(params, "d_flat_mm")
+    hub_d = _optional_number(params, "hub_diameter_mm")
+    hub_l = _optional_number(params, "hub_length_mm")
+    mesh = spur_gear(
+        module=module,
+        teeth=teeth,
+        pressure_angle=pressure,
+        face_width=face,
+        bore=bore,
+        keyway_width=key_w,
+        keyway_depth=key_d,
+        d_flat=flat,
+        hub_diameter=hub_d,
+        hub_length=hub_l,
+    )
+    resolved = {
+        "module_mm": module,
+        "teeth": teeth,
+        "pressure_angle_deg": pressure,
+        "face_width_mm": face,
+        "outer_diameter_mm": module * (teeth + 2),
+        "root_diameter_mm": module * (teeth - 2.5),
+        "pitch_diameter_mm": module * teeth,
+    }
+    if bore is not None:
+        resolved["bore_diameter_mm"] = bore
+    if key_w is not None:
+        resolved["keyway_width_mm"] = key_w
+    if key_d is not None:
+        resolved["keyway_depth_mm"] = key_d
+    if flat is not None:
+        resolved["d_flat_mm"] = flat
+    if hub_d is not None:
+        resolved["hub_diameter_mm"] = hub_d
+    if hub_l is not None:
+        resolved["hub_length_mm"] = hub_l
+    return mesh, resolved, 1
+
+
+def _scroll(params: dict):
+    from photopart.features import spiral_scroll
+
+    width = _require_positive("width_mm", _number(params, "width_mm", 6.0))
+    thickness = _require_positive("thickness_mm", _number(params, "thickness_mm", 3.0))
+    turns = _number(params, "turns", 1.25)
+    end_radius = _require_positive("end_radius_mm", _number(params, "end_radius_mm", 18.0))
+    kind = str(params.get("spiral") or params.get("kind") or "archimedean")
+    tongue = _optional_number(params, "tongue_mm") or 0.0
+    strap = _optional_number(params, "strap_length_mm") or 0.0
+    mesh = spiral_scroll(
+        width=width,
+        thickness=thickness,
+        turns=turns,
+        end_radius=end_radius,
+        kind=kind,
+        tongue=tongue,
+        strap_length=strap,
+    )
+    resolved = {
+        "width_mm": width,
+        "thickness_mm": thickness,
+        "turns": turns,
+        "end_radius_mm": end_radius,
+        "spiral": kind,
+    }
+    if tongue:
+        resolved["tongue_mm"] = tongue
+    if strap:
+        resolved["strap_length_mm"] = strap
+    return mesh, resolved, 1
+
+
+def _strap_hinge(params: dict):
+    from photopart.features import strap_hinge
+
+    length = _require_positive("length_mm", _number(params, "length_mm", 80.0))
+    width = _require_positive("width_mm", _number(params, "width_mm", 8.0))
+    thickness = _require_positive("thickness_mm", _number(params, "thickness_mm", 3.0))
+    turns = _number(params, "turns", 1.25)
+    end_radius = _require_positive("end_radius_mm", _number(params, "end_radius_mm", 16.0))
+    kind = str(params.get("spiral") or params.get("kind") or "archimedean")
+    ends = int(_number(params, "ends", 2))
+    mesh = strap_hinge(
+        length=length,
+        width=width,
+        thickness=thickness,
+        turns=turns,
+        end_radius=end_radius,
+        kind=kind,
+        ends=ends,
+    )
+    resolved = {
+        "length_mm": length,
+        "width_mm": width,
+        "thickness_mm": thickness,
+        "turns": turns,
+        "end_radius_mm": end_radius,
+        "spiral": kind,
+        "ends": ends,
+    }
+    return mesh, resolved, 1
+
+
+def _optional_number(params: dict, key: str) -> float | None:
+    if key not in params or params[key] is None or params[key] == "":
+        return None
+    return _number(params, key, 0.0)
 
 
 def _hole_list(raw, width, height, dx, dy, diameter) -> list[dict]:

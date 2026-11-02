@@ -562,6 +562,7 @@ def render_views(
     overlay_report: dict = {
         "overlay_fit": None,
         "overlay_iou": None,
+        "overlay_iou_label": None,
         "overlay_diff": None,
         "overlay_fit_note": None,
         "overlay_blob": None,
@@ -569,6 +570,8 @@ def render_views(
         "overlay_rotation_deg": 0.0,
         "overlay_mirror": False,
         "overlay_view": "front",
+        "overlay_poses": [],
+        "overlay_roi_expanded": False,
     }
     if photo is not None and photo_scale is not None:
         overlay_path = out_dir / "overlay.png"
@@ -620,6 +623,7 @@ def render_views(
         "overlay": overlay,
         "overlay_fit": overlay_report.get("overlay_fit"),
         "overlay_iou": overlay_report.get("overlay_iou"),
+        "overlay_iou_label": overlay_report.get("overlay_iou_label"),
         "overlay_diff": overlay_report.get("overlay_diff"),
         "overlay_fit_note": overlay_report.get("overlay_fit_note"),
         "overlay_blob": overlay_report.get("overlay_blob"),
@@ -627,6 +631,8 @@ def render_views(
         "overlay_rotation_deg": overlay_report.get("overlay_rotation_deg", 0.0),
         "overlay_mirror": bool(overlay_report.get("overlay_mirror", False)),
         "overlay_view": overlay_report.get("overlay_view") or "front",
+        "overlay_poses": overlay_report.get("overlay_poses") or [],
+        "overlay_roi_expanded": bool(overlay_report.get("overlay_roi_expanded", False)),
         "photo_scale_px_per_mm": photo_scale,
         "view_axes": axes,
         "units": length_unit,
@@ -688,7 +694,7 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         "--overlay-fit",
         choices=("center", "auto"),
         default="center",
-        help="center keeps the outline on the image center. auto aligns it to the part in the photo and reports IoU.",
+        help="center keeps the outline on the image center. auto tries front, side, and top at 15° then 1°, plus a mirror, and reports IoU.",
     )
     parser.add_argument("--roi", help="Part region x,y,w,h in image pixels. Limits auto-fit.")
     parser.add_argument("--seed", help="One pixel x,y on the part. auto-fit uses that object.")
@@ -705,7 +711,7 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     parser.add_argument(
         "--angled",
         action="store_true",
-        help="The photo is not straight-on. The JSON warns that the overlay can miss.",
+        help="The photo is not straight-on. The fit still runs and labels IoU guide_only.",
     )
     parser.add_argument("--grid-mm", type=float, help="Draw a square grid of this size, in mm.")
     parser.add_argument("--up", choices=("x", "y", "z"), help="Axis that points up. Default: the longest side.")

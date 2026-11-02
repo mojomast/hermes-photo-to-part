@@ -32,7 +32,7 @@ def failed(message: str, step: str | None = None) -> dict:
 def step_measure() -> str:
     return (
         "Next: write spec.json from the user's dimensions, then photo_part_template "
-        "(try thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, l_bracket, "
+        "(try spur_gear, scroll, strap_hinge, thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, l_bracket, "
         "hinge, plate, countersink, revolve, or ribs before custom code) or "
         "photo_part_build. A build script imports photopart.features. "
         "Write name_v1.stl in an absolute project directory. Then photo_part_validate "
