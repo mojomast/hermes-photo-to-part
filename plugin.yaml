@@ -26,7 +26,8 @@ provides_tools:
   - photo_part_template
   - photo_part_measure
   - photo_part_build
-provides_hooks: []
+provides_hooks:
+  - pre_tool_call
 provides_middleware: []
 requires_env: []
 # Kept in step with pyproject.toml. pyproject.toml is what Hermes installs.

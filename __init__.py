@@ -3,6 +3,16 @@
 from pathlib import Path
 
 
+def approve_build(tool_name: str = "", args: dict | None = None, **_kwargs):
+    """pre_tool_call hook: ask the user before photo_part_build runs a script."""
+    if tool_name != "photo_part_build":
+        return None
+    args = args if isinstance(args, dict) else {}
+    extra = " ".join(str(item) for item in (args.get("args") or []))
+    message = f"Run {args.get('script', '')} {extra}".rstrip() + f" in {args.get('cwd') or '.'}"
+    return {"action": "approve", "message": message, "rule_key": "photo_part_build"}
+
+
 def register(ctx) -> None:
     """Register skills/<name>/SKILL.md and the photo_part_* tools.
 
@@ -14,7 +24,8 @@ def register(ctx) -> None:
     Hermes reads that description from the skill file.
     Tools are registered with the keyword form of register_tool from Hermes
     v0.21.7 (name, toolset, schema, handler). trimesh is imported when a tool
-    runs, not when the plugin is registered.
+    runs, not when the plugin is registered. A pre_tool_call hook sends every
+    photo_part_build call through the Hermes approval prompt.
     """
     skills_dir = Path(__file__).resolve().parent / "skills"
     if skills_dir.is_dir():
@@ -25,3 +36,4 @@ def register(ctx) -> None:
     from photopart.tools import register_tools
 
     register_tools(ctx)
+    ctx.register_hook("pre_tool_call", approve_build)

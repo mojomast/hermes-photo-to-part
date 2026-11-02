@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from photopart.paths import refuse_protected
+
 
 def mesh_hash(path: Path) -> str:
     digest = hashlib.sha256()
@@ -60,7 +62,7 @@ def write_sidecar(mesh: Path, report: dict) -> dict:
     write replaces it, so the report just produced matches the file.
     """
     status = stamp_status(mesh)
-    destination = sidecar_path(mesh)
+    destination = refuse_protected(sidecar_path(mesh).resolve())
     status["validation_sidecar"] = str(destination.resolve())
     payload = dict(report)
     payload["file"] = str(mesh.resolve())

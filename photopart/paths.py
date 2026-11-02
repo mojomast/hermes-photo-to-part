@@ -1,4 +1,5 @@
-"""Absolute output paths. Refuse the Hermes cache scratch directory."""
+"""Absolute output paths. Refuse the Hermes cache scratch directory and
+paths that Hermes protects from writes."""
 
 from __future__ import annotations
 
@@ -26,8 +27,35 @@ def under_cache(path: Path) -> bool:
     return True
 
 
+def write_denied(path: Path) -> str | None:
+    """Hermes's write denylist verdict, or None outside Hermes."""
+    try:
+        from agent.file_safety import get_write_denied_error
+    except ImportError:
+        return None
+    return get_write_denied_error(str(path))
+
+
+def refuse_protected(path: Path) -> Path:
+    """Raise ValueError when Hermes refuses writes to path."""
+    denied = write_denied(path)
+    if denied:
+        raise ValueError(f"{denied} Skill id: {SKILL_ID}.")
+    return path
+
+
+def new_output(path: str | Path, suffix: str, *, overwrite: bool = False) -> Path:
+    """An absolute output file with the expected suffix. Refuse an existing file unless overwrite."""
+    resolved = absolute_path(path)
+    if resolved.suffix.lower() != suffix:
+        raise ValueError(f"output must end in {suffix}: {resolved}")
+    if resolved.exists() and not overwrite:
+        raise ValueError(f"refusing to overwrite {resolved}. Pass overwrite.")
+    return resolved
+
+
 def absolute_path(path: str | Path) -> Path:
-    """Resolve a user path against the working directory. Never a cache path."""
+    """Resolve a user path against the working directory. Never a cache or protected path."""
     raw = Path(path).expanduser()
     if not raw.is_absolute():
         raw = Path.cwd() / raw
@@ -38,7 +66,7 @@ def absolute_path(path: str | Path) -> Path:
             "Pass an absolute path in the user project, such as name_v1.stl. "
             f"Skill id: {SKILL_ID}."
         )
-    return resolved
+    return refuse_protected(resolved)
 
 
 def default_output(preferred: Path, fallback_name: str) -> Path:
