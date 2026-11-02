@@ -460,39 +460,31 @@ def overlay_outline(
     axes: dict[str, str],
     photo_scale: float,
     origin: tuple[float, float] | None = None,
-) -> None:
-    """Draw the view outline onto a copy of the photo.
+    fit: str = "center",
+) -> dict:
+    """Draw the silhouette contour onto a copy of the photo.
 
-    ``photo_scale`` is pixels per millimetre. With no origin, the model center
-    sits on the image center. ``origin`` is the image pixel of the model's
-    minimum corner (image y grows downward).
+    ``photo_scale`` is pixels per millimetre. ``center`` puts the model center
+    on the image center. ``auto`` scales and translates that silhouette onto
+    the part segmented from the photo. ``origin`` is the image pixel of the
+    model's minimum corner (image y grows downward) and overrides fit.
+    The line is the contour of the z-buffer mask, not the facet edges.
     """
     if photo_scale <= 0 or not np.isfinite(photo_scale):
         raise ValueError("photo scale must be a positive number of pixels per millimetre")
-    image = Image.open(photo).convert("RGB")
-    segments = outline_segments(mesh, view, axes)
-    if len(segments):
-        flat = segments.reshape(-1, 2)
-        minimum = flat.min(axis=0)
-        maximum = flat.max(axis=0)
-        center = (minimum + maximum) / 2.0
-    else:
-        minimum = np.zeros(2)
-        center = np.zeros(2)
-    draw = ImageDraw.Draw(image)
-    width = int(np.clip(round(photo_scale * 0.35), 2, 8))
-    for segment in segments:
-        horizontal = segment[:, 0]
-        vertical = segment[:, 1]
-        if origin is None:
-            x = image.width / 2.0 + (horizontal - center[0]) * photo_scale
-            y = image.height / 2.0 - (vertical - center[1]) * photo_scale
-        else:
-            x = origin[0] + (horizontal - minimum[0]) * photo_scale
-            y = origin[1] - (vertical - minimum[1]) * photo_scale
-        draw.line((float(x[0]), float(y[0]), float(x[1]), float(y[1])), fill=(20, 24, 32), width=width)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    image.save(destination, format="PNG")
+    from photopart.overlay import paint_overlay
+
+    points, _depth = _project(np.asarray(mesh.vertices, dtype=float), view, axes)
+    return paint_overlay(
+        points,
+        np.asarray(mesh.faces),
+        photo,
+        destination,
+        destination.with_name("overlay_diff.png"),
+        photo_scale=photo_scale,
+        origin=origin,
+        fit=fit,
+    )
 
 
 def render_views(
@@ -503,6 +495,7 @@ def render_views(
     photo: Path | None = None,
     photo_scale: float | None = None,
     overlay_origin: tuple[float, float] | None = None,
+    overlay_fit: str = "center",
     up: str | None = None,
     front_axis: str | None = None,
     pixels: int = 720,
@@ -514,6 +507,10 @@ def render_views(
         raise ValueError("--photo-scale needs --photo")
     if overlay_origin is not None and photo_scale is None:
         raise ValueError("--overlay-origin needs --photo-scale")
+    if overlay_fit not in ("center", "auto"):
+        raise ValueError("overlay fit must be center or auto")
+    if overlay_fit == "auto" and (photo is None or photo_scale is None):
+        raise ValueError("--overlay-fit auto needs --photo and --photo-scale")
     axes = choose_axes(mesh.extents, up=up, front_axis=front_axis)
     preview, info = _preview_mesh(mesh)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -544,9 +541,15 @@ def render_views(
         compare = str(compare_path)
         written.append(compare)
     overlay = None
+    overlay_report: dict = {
+        "overlay_fit": None,
+        "overlay_iou": None,
+        "overlay_diff": None,
+        "overlay_fit_note": None,
+    }
     if photo is not None and photo_scale is not None:
         overlay_path = out_dir / "overlay.png"
-        overlay_outline(
+        overlay_report = overlay_outline(
             mesh,
             photo,
             overlay_path,
@@ -554,9 +557,12 @@ def render_views(
             axes=axes,
             photo_scale=photo_scale,
             origin=overlay_origin,
+            fit=overlay_fit,
         )
         overlay = str(overlay_path)
         written.append(overlay)
+        if overlay_report.get("overlay_diff"):
+            written.append(overlay_report["overlay_diff"])
     manifest = {
         **info,
         "grid_mm": grid_mm,
@@ -564,6 +570,10 @@ def render_views(
         "views": written,
         "compare_front": compare,
         "overlay": overlay,
+        "overlay_fit": overlay_report.get("overlay_fit"),
+        "overlay_iou": overlay_report.get("overlay_iou"),
+        "overlay_diff": overlay_report.get("overlay_diff"),
+        "overlay_fit_note": overlay_report.get("overlay_fit_note"),
         "photo_scale_px_per_mm": photo_scale,
         "view_axes": axes,
         "units": length_unit,
@@ -604,6 +614,12 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         "--overlay-origin",
         help="Image pixel x,y of the model's minimum corner. Default: center the model.",
     )
+    parser.add_argument(
+        "--overlay-fit",
+        choices=("center", "auto"),
+        default="center",
+        help="center keeps the outline on the image center. auto aligns it to the part in the photo and reports IoU.",
+    )
     parser.add_argument("--grid-mm", type=float, help="Draw a square grid of this size, in mm.")
     parser.add_argument("--up", choices=("x", "y", "z"), help="Axis that points up. Default: the longest side.")
     parser.add_argument(
@@ -632,6 +648,7 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
             photo=photo,
             photo_scale=args.photo_scale,
             overlay_origin=origin,
+            overlay_fit=args.overlay_fit,
             up=args.up,
             front_axis=args.front_axis,
             length_unit=meta["length_unit"],

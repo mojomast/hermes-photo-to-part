@@ -22,9 +22,30 @@ Use the grid to estimate a curve: how many squares a radius spans, and where a s
 
 `photo_part_render` with `grid_mm: 2` draws a 2 mm grid on the orthographic previews so you can compare counts. The grid is in model millimetres. It does not prove the photo's printer was calibrated. The iso view has no metric grid, because its axes are not millimetres.
 
+## Coin or ruler
+
+Call `photo_part_measure`. Do not write perspective code. Nominal diameters, millimetres:
+
+| Coin | mm |
+| --- | --- |
+| euro_1 | 23.25 |
+| euro_2 | 25.75 |
+| euro_50c | 24.25 |
+| us_quarter | 24.26 |
+| us_penny | 19.05 |
+| us_nickel | 21.21 |
+| us_dime | 17.91 |
+| us_half | 30.61 |
+| gbp_1 | 23.43 |
+| cad_quarter | 23.88 |
+
+Pass `coin` plus `diameter_px` or two `points` across the coin. A ruler is `ruler_mm` plus two points. The scale is for features in that same plane. A straight-on photo is required unless you pass `quad` (TL, TR, BR, BL) with `width_mm`, `height_mm`, and `image`. That writes a rectified PNG. Then measure on the rectified image.
+
 ## Outline overlay
 
-Pass `photo_scale` (pixels per millimetre) to `photo_part_render` along with `photo`. The tool writes `overlay.png`: the front-view outline drawn on the photo. It also writes the side-by-side `compare_front.png`. Default placement puts the model center on the image center. `overlay_origin` is `[x, y]`, the image pixel of the model's minimum corner, with y growing downward.
+Pass `photo_scale` (pixels per millimetre) to `photo_part_render` along with `photo`. The tool writes `overlay.png`: the silhouette contour of the front view, not the facet edges. It also writes `overlay_diff.png` and `overlay_iou`, and the side-by-side `compare_front.png`. Default placement (`overlay_fit: center`) puts the model center on the image center. `overlay_fit: auto` scales and translates that contour onto the part segmented from a straight-on photo. `overlay_origin` is `[x, y]`, the image pixel of the model's minimum corner, with y growing downward.
+
+`--photo-scale` and `overlay_fit` assume a straight-on photo. Skip the overlay when the photo is angled, unless `photo_part_measure` already rectified it, and say why: perspective moves the far edge, so the outline will not sit on the part.
 
 On 2 mm grid paper, `photo_scale` is the pixel width of one square divided by 2. Do not write an overlay script. The tool is the overlay.
 
