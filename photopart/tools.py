@@ -310,8 +310,12 @@ def template_tool(params, **_kwargs) -> str:
         },
         "triangles": int(len(written["mesh"].faces)),
         "watertight": bool(written["mesh"].is_watertight),
+        "spec_checks": written.get("spec_checks"),
     }
+    from photopart.spec import note_missing_spec
+
     attach_flow(summary, step_model(stl or "name_v1.stl"))
+    note_missing_spec(summary, Path.cwd(), out_dir)
     return _emit(summary, step_model(stl or "name_v1.stl"))
 
 

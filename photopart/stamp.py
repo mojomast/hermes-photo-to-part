@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+
+_HISTORY_CAP = 20
 
 
 def mesh_hash(path: Path) -> str:
@@ -56,16 +59,44 @@ def stamp_status(mesh: Path) -> dict:
 def write_sidecar(mesh: Path, report: dict) -> dict:
     """Write the sidecar for the current bytes and return the stamp fields.
 
-    `stale_validation` is about the sidecar that was already on disk. This
-    write replaces it, so the report just produced matches the file.
+    `stale_validation` is about the sidecar that was already on disk. The
+    previous record is appended to `history` (newest last, capped) instead of
+    being dropped. The top-level `sha256` and `ok` stay the latest check.
     """
     status = stamp_status(mesh)
     destination = sidecar_path(mesh)
     status["validation_sidecar"] = str(destination.resolve())
+    prior = read_sidecar(mesh)
+    history = _history_of(prior)
+    validated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     payload = dict(report)
     payload["file"] = str(mesh.resolve())
     payload["sha256"] = status["sha256"]
     payload["stale_validation"] = status["stale_validation"]
     payload["validation_sidecar"] = status["validation_sidecar"]
+    payload["validated_at"] = validated_at
+    payload["history"] = history
     destination.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    status["history"] = history
+    status["validated_at"] = validated_at
     return status
+
+
+def _history_of(prior: dict | None) -> list[dict]:
+    if not prior:
+        return []
+    history = []
+    previous = prior.get("history")
+    if isinstance(previous, list):
+        history.extend(item for item in previous if isinstance(item, dict) and "history" not in item)
+    if prior.get("sha256"):
+        history.append(
+            {
+                "sha256": prior.get("sha256"),
+                "ok": prior.get("ok"),
+                "failures": list(prior.get("failures") or []),
+                "validated_at": prior.get("validated_at"),
+                "file": prior.get("file"),
+            }
+        )
+    return history[-_HISTORY_CAP:]
