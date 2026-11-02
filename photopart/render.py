@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -565,23 +566,47 @@ def render_views(
         "overlay_fit_note": None,
         "overlay_blob": None,
         "overlay_warnings": [],
+        "overlay_rotation_deg": 0.0,
+        "overlay_mirror": False,
+        "overlay_view": "front",
     }
     if photo is not None and photo_scale is not None:
         overlay_path = out_dir / "overlay.png"
-        overlay_report = overlay_outline(
-            mesh,
-            photo,
-            overlay_path,
-            view="front",
-            axes=axes,
-            photo_scale=photo_scale,
-            origin=overlay_origin,
-            fit=overlay_fit,
-            roi=overlay_roi,
-            seed=overlay_seed,
-            exclude=overlay_exclude,
-            angled=overlay_angled,
-        )
+        if overlay_fit == "auto" and overlay_origin is None:
+            from photopart.overlay import paint_auto_views
+
+            vertices = np.asarray(mesh.vertices, dtype=float)
+            faces = np.asarray(mesh.faces)
+            view_sets = []
+            for view_name in ("front", "side", "top"):
+                projected, _depth = _project(vertices, view_name, axes)
+                view_sets.append((view_name, projected, faces))
+            overlay_report = paint_auto_views(
+                view_sets,
+                photo,
+                overlay_path,
+                overlay_path.with_name("overlay_diff.png"),
+                photo_scale=photo_scale,
+                roi=overlay_roi,
+                seed=overlay_seed,
+                exclude=overlay_exclude,
+                angled=overlay_angled,
+            )
+        else:
+            overlay_report = overlay_outline(
+                mesh,
+                photo,
+                overlay_path,
+                view="front",
+                axes=axes,
+                photo_scale=photo_scale,
+                origin=overlay_origin,
+                fit=overlay_fit,
+                roi=overlay_roi,
+                seed=overlay_seed,
+                exclude=overlay_exclude,
+                angled=overlay_angled,
+            )
         overlay = str(overlay_path)
         written.append(overlay)
         if overlay_report.get("overlay_diff"):
@@ -599,6 +624,9 @@ def render_views(
         "overlay_fit_note": overlay_report.get("overlay_fit_note"),
         "overlay_blob": overlay_report.get("overlay_blob"),
         "overlay_warnings": overlay_report.get("overlay_warnings") or [],
+        "overlay_rotation_deg": overlay_report.get("overlay_rotation_deg", 0.0),
+        "overlay_mirror": bool(overlay_report.get("overlay_mirror", False)),
+        "overlay_view": overlay_report.get("overlay_view") or "front",
         "photo_scale_px_per_mm": photo_scale,
         "view_axes": axes,
         "units": length_unit,
@@ -688,6 +716,11 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     )
     parser.add_argument("--force", action="store_true", help="Replace files in a directory that is not empty.")
     parser.add_argument("--overwrite", action="store_true", help="Same as --force.")
+    parser.add_argument(
+        "--final",
+        action="store_true",
+        help="Deliver render. Refuses when the latest name_vN has no fresh validate sidecar.",
+    )
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     add_unit_arguments(parser)
     args = parser.parse_args(argv)
@@ -697,6 +730,31 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         return 1, failed(str(exc))
     if out_dir.exists() and any(out_dir.iterdir()) and not (args.force or args.overwrite):
         return 1, failed(f"{out_dir} is not empty. Pass --overwrite.")
+    mesh_path = Path(args.mesh).expanduser()
+    if not mesh_path.is_file():
+        return 1, failed(f"mesh not found: {mesh_path}")
+    mesh_path = mesh_path.resolve()
+    gate = _validation_gate(mesh_path)
+    if args.final and not gate["fresh"]:
+        target = gate["target"]
+        report = {
+            "ok": False,
+            "needs_validation": True,
+            "file": str(mesh_path),
+            "validation_target": str(target),
+            "sha256": gate["stamp"]["sha256"],
+            "stale_validation": gate["stamp"]["stale_validation"],
+            "validation_ok": gate["stamp"]["validation_ok"],
+            "validation_sidecar": gate["stamp"]["validation_sidecar"],
+            "error": (
+                f"{target.name} has no fresh photo_part_validate sidecar. "
+                "Validate that file before a final render."
+            ),
+        }
+        return 2, attach_flow(
+            report,
+            step_render(str(target), stale=gate["stamp"]["stale_validation"], validation_ok=gate["stamp"]["validation_ok"]),
+        )
     try:
         loaded = load_mesh(args.mesh, max_bytes=args.max_bytes)
         mesh, meta = prepare_mesh(loaded, args.units, args.scale)
@@ -736,7 +794,6 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return 1, failed(str(exc))
-    mesh_path = Path(args.mesh).expanduser().resolve()
     stamp = stamp_status(mesh_path)
     manifest["ok"] = True
     manifest["file"] = str(mesh_path)
@@ -744,6 +801,9 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     manifest["stale_validation"] = stamp["stale_validation"]
     manifest["validation_sidecar"] = stamp["validation_sidecar"]
     manifest["validation_ok"] = stamp["validation_ok"]
+    manifest["needs_validation"] = not gate["fresh"]
+    manifest["validation_target"] = str(gate["target"])
+    manifest["final"] = bool(args.final)
     attach_flow(
         manifest,
         step_render(
@@ -753,6 +813,39 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         ),
     )
     return 0, manifest
+
+
+_VERSIONED = re.compile(r"^(?P<prefix>.+)_v(?P<n>\d+)$")
+
+
+def _latest_version(path: Path) -> Path:
+    """The highest ``name_vN`` sibling, or ``path`` when it is not versioned."""
+    match = _VERSIONED.match(path.stem)
+    if not match:
+        return path
+    prefix = match.group("prefix")
+    suffix = path.suffix
+    best = path
+    best_n = int(match.group("n"))
+    pattern = re.compile(rf"^{re.escape(prefix)}_v(\d+){re.escape(suffix)}$")
+    try:
+        names = list(path.parent.iterdir())
+    except OSError:
+        return path
+    for candidate in names:
+        found = pattern.match(candidate.name)
+        if found and candidate.is_file() and int(found.group(1)) > best_n:
+            best_n = int(found.group(1))
+            best = candidate
+    return best
+
+
+def _validation_gate(path: Path) -> dict:
+    """Fresh means the latest version has a matching sidecar with ok true."""
+    target = _latest_version(path)
+    stamp = stamp_status(target)
+    fresh = stamp["stale_validation"] is False and stamp["validation_ok"] is True
+    return {"target": target, "fresh": fresh, "stamp": stamp}
 
 
 def main(argv: list[str] | None = None) -> int:

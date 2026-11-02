@@ -12,7 +12,7 @@ from photopart.flow import attach_flow, failed, step_validate
 from photopart.io import DEFAULT_MAX_BYTES, load_mesh
 from photopart.paths import absolute_path
 from photopart.report import measure
-from photopart.stamp import stamp_status, write_sidecar
+from photopart.stamp import sidecar_path, stamp_status, write_sidecar
 from photopart.status import status
 from photopart.units import add_unit_arguments, attach_units, prepare_mesh
 
@@ -162,7 +162,20 @@ def main(argv: list[str] | None = None) -> int:
         "--holes",
         help="JSON list of {x, y, diameter, axis?} holes to check, in millimetres.",
     )
-    parser.add_argument("--json-out", help="Also write the report to this path.")
+    parser.add_argument(
+        "--spec",
+        help="JSON file of x,y,z, shells, knuckles, hole_count, and holes. Fails when the mesh drifts.",
+    )
+    parser.add_argument(
+        "--dim",
+        action="append",
+        default=[],
+        help="One check, name=value±tol. Repeatable. x, y, z, shells, knuckles, hole_count.",
+    )
+    parser.add_argument(
+        "--json-out",
+        help="Ignored unless it is the canonical <file>.validate.json. That sidecar is the only validation file.",
+    )
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     add_unit_arguments(parser)
     args = parser.parse_args(argv)
@@ -179,6 +192,8 @@ def main(argv: list[str] | None = None) -> int:
         units=args.units,
         scale=args.scale,
         json_out=args.json_out,
+        spec=args.spec,
+        dims=args.dim,
         max_bytes=args.max_bytes,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
@@ -207,6 +222,8 @@ def run_validate(
     units: str | None = None,
     scale: float | None = None,
     json_out: str | None = None,
+    spec=None,
+    dims=None,
     max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> tuple[int, dict]:
     """Load, scale, and check a mesh. The report is the stdout document."""
@@ -228,6 +245,13 @@ def run_validate(
             expected_shells=expected_shells,
             holes=hole_specs,
         )
+        if spec or dims:
+            from photopart.spec import apply_spec
+
+            spec_failures, spec_rows = apply_spec(mesh, spec=spec, dims=dims, tolerance=tolerance)
+            report["spec"] = spec_rows
+            report["failures"].extend(spec_failures)
+            report["ok"] = not report["failures"]
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return 1, failed(str(exc))
     resolved = Path(mesh_path).expanduser().resolve()
@@ -249,15 +273,18 @@ def run_validate(
     report["sha256"] = stamp["sha256"]
     report["stale_validation"] = stamp["stale_validation"]
     report["validation_sidecar"] = stamp["validation_sidecar"]
+    canonical = sidecar_path(resolved)
+    report["sidecar_note"] = f"The only validation file is {canonical.name}."
     if json_out:
         try:
             destination = absolute_path(json_out)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(
-                json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
-        except (OSError, ValueError) as exc:
+        except ValueError as exc:
             return 1, failed(str(exc))
+        if destination.resolve() != canonical.resolve():
+            report["sidecar_note"] = (
+                f"The only validation file is {canonical.name}. "
+                "--json-out was not written."
+            )
     return (0 if report["ok"] else 2), report
 
 

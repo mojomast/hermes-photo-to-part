@@ -2,7 +2,9 @@
 
 plate_clip stays the Shapely sample. The other shapes are manifold3d solids:
 a plate with holes, a countersink, a revolved profile, radial ribs, an
-L-bracket, and a print-in-place hinge (two shells that do not touch).
+L-bracket, a print-in-place hinge (two shells that do not touch), and the
+feature helpers (thread, knurl, sweep, hex screw, hex standoff, bottle cap).
+Those helpers each return one watertight body.
 """
 
 from __future__ import annotations
@@ -21,6 +23,12 @@ SHAPES = (
     "ribs",
     "l_bracket",
     "hinge",
+    "thread",
+    "knurl",
+    "sweep",
+    "hex_screw",
+    "hex_standoff",
+    "bottle_cap",
 )
 
 
@@ -51,6 +59,12 @@ def build_shape(shape: str, params: dict | None = None) -> tuple[trimesh.Trimesh
         "ribs": _ribs,
         "l_bracket": _l_bracket,
         "hinge": _hinge,
+        "thread": _thread,
+        "knurl": _knurl,
+        "sweep": _sweep,
+        "hex_screw": _hex_screw,
+        "hex_standoff": _hex_standoff,
+        "bottle_cap": _bottle_cap,
     }
     mesh, resolved, shells = builders[name](raw)
     mesh.metadata["units"] = "millimeters"
@@ -321,6 +335,91 @@ def _hinge(params: dict):
         "clearance_mm": clearance,
     }
     return mesh, resolved, 2
+
+
+def _thread(params: dict):
+    from photopart.features import external_thread, internal_thread
+
+    length = _require_positive("length_mm", _number(params, "length_mm", 6.0))
+    designation = str(params.get("designation") or "M3")
+    diameter = params.get("diameter_mm")
+    pitch = params.get("pitch_mm")
+    kwargs = {
+        "designation": designation,
+        "diameter": None if diameter in (None, "") else _number(params, "diameter_mm", 3.0),
+        "pitch": None if pitch in (None, "") else _number(params, "pitch_mm", 0.5),
+        "length": length,
+    }
+    internal = bool(params.get("internal"))
+    if internal:
+        wall = _require_positive("wall_mm", _number(params, "wall_mm", 2.0))
+        mesh = internal_thread(**kwargs, wall=wall)
+    else:
+        wall = None
+        mesh = external_thread(**kwargs)
+    resolved = {"designation": designation, "length_mm": length, "internal": internal}
+    if wall is not None:
+        resolved["wall_mm"] = wall
+    return mesh, resolved, 1
+
+
+def _knurl(params: dict):
+    from photopart.features import knurl
+
+    style = str(params.get("style") or "straight")
+    diameter = _require_positive("diameter_mm", _number(params, "diameter_mm", 8.0))
+    length = _require_positive("length_mm", _number(params, "length_mm", 6.0))
+    count = int(_number(params, "count", 12))
+    mesh = knurl(style, diameter=diameter, length=length, count=count)
+    return mesh, {"style": style, "diameter_mm": diameter, "length_mm": length, "count": count}, 1
+
+
+def _sweep(params: dict):
+    from photopart.features import hook_path, sweep_path
+
+    radius = _require_positive("radius_mm", _number(params, "radius_mm", 1.0))
+    segments = int(_number(params, "segments", 8))
+    path = params.get("path") or hook_path()
+    mesh = sweep_path(path, radius=radius, segments=segments)
+    return mesh, {"radius_mm": radius, "segments": segments}, 1
+
+
+def _hex_screw(params: dict):
+    from photopart.features import hex_screw
+
+    designation = str(params.get("designation") or "M3")
+    length = _require_positive("length_mm", _number(params, "length_mm", 8.0))
+    mesh = hex_screw(designation=designation, length=length)
+    return mesh, {"designation": designation, "length_mm": length}, 1
+
+
+def _hex_standoff(params: dict):
+    from photopart.features import hex_standoff
+
+    designation = str(params.get("designation") or "M3")
+    body = _require_positive("body_length_mm", _number(params, "body_length_mm", 6.0))
+    thread = _require_positive("thread_length_mm", _number(params, "thread_length_mm", 3.0))
+    mesh = hex_standoff(designation=designation, body_length=body, thread_length=thread)
+    return mesh, {"designation": designation, "body_length_mm": body, "thread_length_mm": thread}, 1
+
+
+def _bottle_cap(params: dict):
+    from photopart.features import bottle_cap
+
+    diameter = _require_positive("diameter_mm", _number(params, "diameter_mm", 20.0))
+    pitch = _require_positive("pitch_mm", _number(params, "pitch_mm", 3.0))
+    length = _require_positive("length_mm", _number(params, "length_mm", 8.0))
+    outer = _require_positive("outer_diameter_mm", _number(params, "outer_diameter_mm", 26.0))
+    count = int(_number(params, "knurl_count", 16))
+    mesh = bottle_cap(diameter=diameter, pitch=pitch, length=length, outer_diameter=outer, knurl_count=count)
+    resolved = {
+        "diameter_mm": diameter,
+        "pitch_mm": pitch,
+        "length_mm": length,
+        "outer_diameter_mm": outer,
+        "knurl_count": count,
+    }
+    return mesh, resolved, 1
 
 
 def _hole_list(raw, width, height, dx, dy, diameter) -> list[dict]:

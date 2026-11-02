@@ -45,8 +45,8 @@ def _lead(text: str) -> str:
     return f"{SKILL_ID}. {text}"
 
 
-def _emit(payload: dict, fallback: str) -> str:
-    if payload.get("error") and SKILL_ID not in str(payload["error"]):
+def _emit(payload: dict, fallback: str, *, plain_error: bool = False) -> str:
+    if payload.get("error") and not plain_error and SKILL_ID not in str(payload["error"]):
         payload["error"] = f"{payload['error']} Skill id: {SKILL_ID}."
     if not payload.get("next_step"):
         attach_flow(payload, fallback)
@@ -141,6 +141,8 @@ def validate_tool(params, **_kwargs) -> str:
             units=_optional_str(args, "units"),
             scale=_optional_float(args, "scale"),
             json_out=_optional_str(args, "json_out"),
+            spec=args.get("spec"),
+            dims=args.get("dims") or args.get("dim"),
             max_bytes=int(args.get("max_bytes", 256 * 1024 * 1024)),
         )
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -208,6 +210,8 @@ def render_tool(params, **_kwargs) -> str:
             argv.extend(["--scale", str(scale)])
         if _flag(args, "force") or _flag(args, "overwrite"):
             argv.append("--overwrite")
+        if _flag(args, "final"):
+            argv.append("--final")
         if "max_bytes" in args and args["max_bytes"] is not None:
             argv.extend(["--max-bytes", str(int(args["max_bytes"]))])
         from photopart.render import run_render
@@ -284,9 +288,11 @@ def template_tool(params, **_kwargs) -> str:
             "Try a photo_part_template shape before a custom script. Pass an absolute project out_dir.",
         )
     from photopart.flow import step_model
+    from photopart.history import missing_versions
     from photopart.launcher import plugin_python
 
     stl = _abs(written["stl"])
+    missing = missing_versions(written["stl"]) if written.get("stl") else []
     summary = {
         "ok": bool(written["mesh"].is_watertight),
         "shape": written.get("shape", "plate_clip"),
@@ -296,6 +302,7 @@ def template_tool(params, **_kwargs) -> str:
         "threemf": _abs(written["threemf"]),
         "threemf_error": written["threemf_error"],
         "interpreter": plugin_python(),
+        "missing_earlier": missing,
         "expected_extents_mm": {
             "x": written["expected_extents_mm"][0],
             "y": written["expected_extents_mm"][1],
@@ -342,7 +349,11 @@ def build_tool(params, **_kwargs) -> str:
             {"ok": False, "error": str(exc)},
             "Try photo_part_template shapes such as l_bracket before a custom script.",
         )
-    return _emit(report, "Next: photo_part_validate the STL the script wrote. Do not overwrite it.")
+    return _emit(
+        report,
+        "Next: photo_part_validate the STL the script wrote, with spec.json. Do not overwrite it.",
+        plain_error=bool(report.get("error")),
+    )
 
 
 def _schema(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -370,7 +381,9 @@ def tool_specs() -> list[dict]:
                 "Check watertightness, one shell, and the bounding box. "
                 "size is X Y Z millimetres after units/scale. "
                 "Does not upload the file. Returns JSON. Do not write a replacement checker. "
-                "Writes <file>.validate.json with the mesh hash."
+                "Writes <file>.validate.json with the mesh hash. That is the only sidecar name. "
+                "Pass spec or dims (name=value±tol) for bbox, shells, knuckles, and hole_count. "
+                "A deviation fails the check."
             ),
             {
                 "mesh": {"type": "string", "description": "Path to an STL, 3MF, OBJ, or PLY file."},
@@ -401,7 +414,19 @@ def tool_specs() -> list[dict]:
                 },
                 "units": {"type": "string", "description": _UNIT_HELP},
                 "scale": {"type": "number", "description": "Extra multiplier after units."},
-                "json_out": {"type": "string", "description": "Also write the report to this path."},
+                "json_out": {
+                    "type": "string",
+                    "description": "Not a second sidecar. The only validation file is <file>.validate.json.",
+                },
+                "spec": {
+                    "type": "string",
+                    "description": "Path to spec.json, or a JSON object of x, y, z, shells, knuckles, hole_count, holes.",
+                },
+                "dims": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Checks such as x=100±0.5 or knuckles=5. Counts are exact unless a tolerance is given.",
+                },
                 "max_bytes": {"type": "integer"},
             },
             ["mesh"],
@@ -440,7 +465,11 @@ def tool_specs() -> list[dict]:
                 },
                 "overlay_fit": {
                     "type": "string",
-                    "description": "center (default) or auto. auto aligns the silhouette. Pass roi or seed so the largest object, such as a coin, is not chosen. Returns overlay_iou. Warns below 0.5.",
+                    "description": "center (default) or auto. auto searches rotation and mirror, then front, side, and top. Returns overlay_rotation_deg, overlay_mirror, overlay_view, and overlay_iou.",
+                },
+                "final": {
+                    "type": "boolean",
+                    "description": "Deliver render. Refuses when the latest name_vN has no fresh <file>.validate.json. Otherwise sets needs_validation.",
                 },
                 "roi": {
                     "type": "array",
@@ -525,7 +554,8 @@ def tool_specs() -> list[dict]:
             "photo_part_template",
             _lead(
                 "Write a watertight building block. shape defaults to plate_clip, the sample plate. "
-                "Other shapes: plate, countersink, revolve, ribs, l_bracket, hinge. "
+                "Other shapes: plate, countersink, revolve, ribs, l_bracket, hinge, "
+                "thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap. "
                 "Try these before photo_part_build. "
                 "hinge is a print-in-place part with two shells. "
                 "Reject a countersink deeper than the sheet before calling this. "
@@ -538,7 +568,7 @@ def tool_specs() -> list[dict]:
                 },
                 "shape": {
                     "type": "string",
-                    "description": "plate_clip, plate, countersink, revolve, ribs, l_bracket, or hinge.",
+                    "description": "plate_clip, plate, countersink, revolve, ribs, l_bracket, hinge, thread, knurl, sweep, hex_screw, hex_standoff, or bottle_cap.",
                 },
                 "params": {"type": "object", "description": "Millimetre overrides. plate holes is a list of {x, y, diameter}."},
                 "ascii": {"type": "boolean", "description": "Write an ASCII STL."},
@@ -600,15 +630,19 @@ def tool_specs() -> list[dict]:
         "name": "photo_part_build",
         "description": _lead(
             "Run one local .py build script with the plugin interpreter. "
-            "cwd is the project directory. Captures stdout and stderr. Timeout max 300s. "
-            "No shell. Try photo_part_template shapes such as l_bracket first."
+            "Import photopart.features for a thread, knurl, revolve, sweep, hex screw, or standoff. "
+            "Overlapping shells are unioned. The error field is the exception, not a status line. "
+            "No shell. Try photo_part_template first."
         ),
         "schema": _schema(
             "photo_part_build",
             _lead(
                 "Run a Python file with the plugin environment interpreter and return the new files. "
+                "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff. "
+                "Each returns one watertight trimesh in millimetres. Overlapping shells are unioned; shells_before and shells_after are in the JSON. "
+                "On failure the error field starts with the exception. "
                 "Pass cwd as an absolute project path. Do not write into HERMES_HOME/cache. "
-                "The interpreter path is in the JSON. Try photo_part_template before this."
+                "Do not delete an STL or 3MF. The interpreter path is in the JSON."
             ),
             {
                 "script": {"type": "string", "description": "Path to a .py file in the project."},

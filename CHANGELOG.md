@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.4 — 2026-11-02
+
+- Feature helpers in `photopart.features` always return one watertight body: external and internal ISO metric thread, straight or diamond knurl, revolve, sweep, hex-head screw, and hex standoff. `photo_part_template` adds `thread`, `knurl`, `sweep`, `hex_screw`, `hex_standoff`, and `bottle_cap`. A build script imports the same functions. `photo_part_build` unions overlapping shells and reports `shells_before` and `shells_after`.
+- `--overlay-fit auto` searches rotation (coarse, then fine) and a mirror, then chooses front, side, or top. The JSON reports `overlay_rotation_deg`, `overlay_mirror`, and `overlay_view`.
+- The skill forbids deleting or overwriting an STL or 3MF. A tool that replaces one keeps the previous bytes in `.p2p_history/`, and a missing `name_v(N-1)` is reported as `missing_earlier`.
+- `photo_part_validate --spec spec.json` and `--dim name=value±tol` fail when the bbox, shell count, knuckle count, or hole count drifts. The skill writes `spec.json` first and lists deviations in the final answer.
+- The deliver step validates the file it ships, then renders with `final`. A final render is refused when the latest `name_vN` has no fresh sidecar. Other renders set `needs_validation`.
+- The only validation sidecar is `<file>.validate.json`. A build failure's `error` field is the exception, not a skill-id sentence. The skill id stays the first line of every description. A colon still cannot be a skill name, so the `plugin:` form is not registered.
+
 ## 0.1.3 — 2026-11-02
 
 - `--roi`, `--seed`, and `--exclude-roi` choose the part for `--overlay-fit auto`. A `photo_part_measure` JSON supplies the coin or ruler box. The JSON names the blob that was used and warns when IoU is below 0.5 or the photo is angled.
