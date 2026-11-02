@@ -45,6 +45,7 @@ def heal_mesh(
     use_fan: bool = False,
     keep_largest: bool = True,
     union: bool = False,
+    engine: str = "default",
 ) -> tuple[trimesh.Trimesh, dict]:
     """Return a repaired copy and a before/after report. The input is unchanged."""
     before = measure(mesh)
@@ -80,6 +81,13 @@ def heal_mesh(
         if len(parts) > 1:
             repaired = max(parts, key=lambda item: len(item.faces)).copy()
     after = measure(repaired)
+    meshfix = {"meshfix_applied": False, "meshfix_available": None, "meshfix_note": None}
+    needs_fix = engine == "meshfix" or (after.get("nonmanifold_edges") or 0) > 0 or not after.get("watertight")
+    if needs_fix and (engine == "meshfix" or (after.get("nonmanifold_edges") or 0) > 0):
+        from photopart.repair_fallback import try_meshfix
+
+        repaired, meshfix = try_meshfix(repaired)
+        after = measure(repaired)
     note = (
         "Hole caps are flat fans. Rebuild curved regions as a CAD solid; "
         "do not treat a healed scan as the finished part."
@@ -107,6 +115,9 @@ def heal_mesh(
         "repair_fragments_removed": repair_fragments_removed,
         "keep_largest": keep_largest,
         "union_applied": union_applied,
+        "meshfix_applied": meshfix["meshfix_applied"],
+        "meshfix_available": meshfix["meshfix_available"],
+        "meshfix_note": meshfix["meshfix_note"],
         "note": note,
     }
     return repaired, report
@@ -135,6 +146,12 @@ def run_heal(argv: list[str] | None = None) -> tuple[int, dict]:
         help="Boolean-union shells with manifold3d. Overlapping shells merge. Disjoint shells stay separate.",
     )
     parser.add_argument(
+        "--engine",
+        choices=("default", "meshfix"),
+        default="default",
+        help="meshfix runs PyMeshFix when it is installed. Absent package leaves the manifold result.",
+    )
+    parser.add_argument(
         "--allow-size",
         action="store_true",
         help="Accept a longest side under 1 mm or over 2 m. Without this, that size fails.",
@@ -159,6 +176,7 @@ def run_heal(argv: list[str] | None = None) -> tuple[int, dict]:
             use_fan=args.fan,
             keep_largest=not args.keep_all,
             union=args.union,
+            engine=args.engine,
         )
         export_stl(repaired, out_path, ascii_stl=args.ascii)
     except (OSError, ValueError) as exc:

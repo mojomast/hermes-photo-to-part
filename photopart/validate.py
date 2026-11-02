@@ -176,6 +176,17 @@ def main(argv: list[str] | None = None) -> int:
         "--json-out",
         help="Ignored unless it is the canonical <file>.validate.json. That sidecar is the only validation file.",
     )
+    parser.add_argument("--reason", help="Why a frozen spec.json changed. Required after the first validate.")
+    parser.add_argument("--min-wall-mm", type=float, default=0.8)
+    parser.add_argument("--overhang-deg", type=float, default=45.0)
+    parser.add_argument("--max-overhang-fraction", type=float, default=0.35)
+    parser.add_argument("--min-bed-mm2", type=float, default=1.0)
+    parser.add_argument("--min-gap-mm", type=float, default=0.3)
+    parser.add_argument(
+        "--print-strict",
+        action="store_true",
+        help="Turn printability warnings into failures.",
+    )
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     add_unit_arguments(parser)
     args = parser.parse_args(argv)
@@ -195,6 +206,13 @@ def main(argv: list[str] | None = None) -> int:
         spec=args.spec,
         dims=args.dim,
         max_bytes=args.max_bytes,
+        spec_reason=args.reason,
+        min_wall_mm=args.min_wall_mm,
+        overhang_deg=args.overhang_deg,
+        max_overhang_fraction=args.max_overhang_fraction,
+        min_bed_mm2=args.min_bed_mm2,
+        min_gap_mm=args.min_gap_mm,
+        print_strict=args.print_strict,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
     if report.get("unit_warning"):
@@ -225,6 +243,13 @@ def run_validate(
     spec=None,
     dims=None,
     max_bytes: int = DEFAULT_MAX_BYTES,
+    spec_reason: str | None = None,
+    min_wall_mm: float = 0.8,
+    overhang_deg: float = 45.0,
+    max_overhang_fraction: float = 0.35,
+    min_bed_mm2: float = 1.0,
+    min_gap_mm: float = 0.3,
+    print_strict: bool = False,
 ) -> tuple[int, dict]:
     """Load, scale, and check a mesh. The report is the stdout document."""
     if tolerance < 0:
@@ -259,6 +284,31 @@ def run_validate(
             report["failures"].extend(dropped)
             report["template_checks_missing"] = True
             report["ok"] = False
+        from photopart.freeze import apply_freeze
+        from photopart.spec import load_spec
+
+        raw_spec = load_spec(spec) if spec else {}
+        freeze_failures, freeze_info = apply_freeze(spec, raw_spec, spec_reason)
+        report["checklist"] = freeze_info["checklist"]
+        report["frozen_sha256"] = freeze_info["frozen_sha256"]
+        report["spec_edits"] = freeze_info["spec_edits"]
+        if freeze_failures:
+            report["failures"].extend(freeze_failures)
+            report["ok"] = False
+        from photopart.printability import check_printability
+
+        printable = check_printability(
+            mesh,
+            min_wall_mm=min_wall_mm,
+            overhang_deg=overhang_deg,
+            max_overhang_fraction=max_overhang_fraction,
+            min_bed_mm2=min_bed_mm2,
+            min_gap_mm=min_gap_mm,
+        )
+        report["printability"] = printable
+        if print_strict and printable["warnings"]:
+            report["failures"].extend(printable["warnings"])
+            report["ok"] = False
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return 1, failed(str(exc))
     resolved = Path(mesh_path).expanduser().resolve()
@@ -270,9 +320,23 @@ def run_validate(
     report["allow_size"] = bool(allow_size)
     try:
         prior = stamp_status(resolved)
+        from photopart.score import best_sibling, compute_score
+
+        report.update(compute_score(report))
+        best = best_sibling(resolved)
+        report["best_version"] = None if best is None else best["name"]
+        report["revert_to"] = (
+            best["name"] if best is not None and best["score"] > float(report["score"]) + 1e-9 else None
+        )
         attach_flow(
             report,
-            step_validate(str(resolved), ok=bool(report["ok"]), was_stale=prior["stale_validation"]),
+            step_validate(
+                str(resolved),
+                ok=bool(report["ok"]),
+                was_stale=prior["stale_validation"],
+                score=float(report["score"]),
+                best=best,
+            ),
         )
         stamp = write_sidecar(resolved, report)
     except OSError as exc:

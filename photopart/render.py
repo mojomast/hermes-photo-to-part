@@ -80,6 +80,12 @@ def _ortho_map(view: str, axes: dict[str, str]) -> tuple[tuple[int, float], tupl
         return (front, 1.0), (up, 1.0), (side, 1.0)
     if view == "top":
         return (side, 1.0), (front, 1.0), (up, -1.0)
+    if view == "back":
+        return (side, -1.0), (up, 1.0), (front, -1.0)
+    if view == "right":
+        return (front, -1.0), (up, 1.0), (side, -1.0)
+    if view == "bottom":
+        return (side, 1.0), (front, -1.0), (up, 1.0)
     raise ValueError(f"unknown view {view}")
 
 
@@ -92,6 +98,15 @@ def _project(vertices: np.ndarray, view: str, axes: dict[str, str]) -> tuple[np.
             )
         )
         depth = vertices[:, 0] * 0.2 + vertices[:, 1] * 0.3 + vertices[:, 2] * 0.1
+        return xy, depth
+    if view == "iso2":
+        xy = np.column_stack(
+            (
+                -vertices[:, 0] * 0.86 + vertices[:, 1] * 0.50,
+                vertices[:, 2] - vertices[:, 0] * 0.35 + vertices[:, 1] * 0.40,
+            )
+        )
+        depth = -vertices[:, 0] * 0.2 - vertices[:, 1] * 0.3 + vertices[:, 2] * 0.1
         return xy, depth
     horizontal, vertical, depth_axis = _ortho_map(view, axes)
     xy = np.column_stack(
@@ -571,6 +586,7 @@ def render_views(
         "overlay_mirror": False,
         "overlay_view": "front",
         "overlay_poses": [],
+        "overlay_top_poses": [],
         "overlay_roi_expanded": False,
     }
     if photo is not None and photo_scale is not None:
@@ -632,6 +648,7 @@ def render_views(
         "overlay_mirror": bool(overlay_report.get("overlay_mirror", False)),
         "overlay_view": overlay_report.get("overlay_view") or "front",
         "overlay_poses": overlay_report.get("overlay_poses") or [],
+        "overlay_top_poses": (overlay_report.get("overlay_top_poses") or overlay_report.get("overlay_poses") or [])[:3],
         "overlay_roi_expanded": bool(overlay_report.get("overlay_roi_expanded", False)),
         "photo_scale_px_per_mm": photo_scale,
         "view_axes": axes,
@@ -725,7 +742,7 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     parser.add_argument(
         "--final",
         action="store_true",
-        help="Deliver render. Any name_vN without a fresh validate sidecar is refused.",
+        help="Deliver render. Uses the best validated name_vN. Refuses when none is fresh.",
     )
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     add_unit_arguments(parser)
@@ -740,8 +757,20 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     if not mesh_path.is_file():
         return 1, failed(f"mesh not found: {mesh_path}")
     mesh_path = mesh_path.resolve()
-    gate = _validation_gate(mesh_path)
-    versioned = _VERSIONED.match(mesh_path.stem) is not None or _VERSIONED.match(gate["target"].stem) is not None
+    requested = mesh_path
+    best = None
+    if args.final:
+        from photopart.score import best_validated
+
+        best = best_validated(mesh_path)
+        if best is not None:
+            mesh_path = Path(best["path"])
+            gate = _own_gate(mesh_path)
+        else:
+            gate = _validation_gate(requested)
+    else:
+        gate = _validation_gate(mesh_path)
+    versioned = _VERSIONED.match(requested.stem) is not None or _VERSIONED.match(gate["target"].stem) is not None
     if not gate["fresh"] and (args.final or versioned):
         target = gate["target"]
         if args.final:
@@ -771,7 +800,7 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
             step_render(str(target), stale=gate["stamp"]["stale_validation"], validation_ok=gate["stamp"]["validation_ok"]),
         )
     try:
-        loaded = load_mesh(args.mesh, max_bytes=args.max_bytes)
+        loaded = load_mesh(mesh_path, max_bytes=args.max_bytes)
         mesh, meta = prepare_mesh(loaded, args.units, args.scale)
         photo = None
         if args.photo:
@@ -820,6 +849,11 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     manifest["unvalidated"] = not gate["fresh"]
     manifest["validation_target"] = str(gate["target"])
     manifest["final"] = bool(args.final)
+    manifest["requested_file"] = str(requested)
+    manifest["best_version"] = None if best is None else best["name"]
+    if best is not None and Path(best["path"]) != requested:
+        manifest["deliverable"] = str(mesh_path)
+    _attach_sheet(manifest, mesh, mesh_path, out_dir)
     attach_flow(
         manifest,
         step_render(
@@ -859,9 +893,46 @@ def _latest_version(path: Path) -> Path:
 def _validation_gate(path: Path) -> dict:
     """Fresh means the latest version has a matching sidecar with ok true."""
     target = _latest_version(path)
-    stamp = stamp_status(target)
+    return _own_gate(target)
+
+
+def _own_gate(path: Path) -> dict:
+    stamp = stamp_status(path)
     fresh = stamp["stale_validation"] is False and stamp["validation_ok"] is True
-    return {"target": target, "fresh": fresh, "stamp": stamp}
+    return {"target": path, "fresh": fresh, "stamp": stamp}
+
+
+def _previous_mesh(path: Path):
+    match = _VERSIONED.match(path.stem)
+    if not match:
+        return None
+    number = int(match.group(2))
+    if number <= 1:
+        return None
+    previous = path.parent / f"{match.group(1)}_v{number - 1}{path.suffix}"
+    if not previous.is_file():
+        return None
+    try:
+        loaded = load_mesh(previous)
+        mesh, _meta = prepare_mesh(loaded, None, None)
+    except (OSError, ValueError):
+        return None
+    return mesh
+
+
+def _attach_sheet(manifest: dict, mesh, path: Path, out_dir: Path) -> None:
+    from photopart.sheet import render_sheet
+    from photopart.stamp import read_sidecar
+
+    rows = None
+    side = read_sidecar(path)
+    if isinstance(side, dict) and isinstance(side.get("spec"), list):
+        rows = side["spec"]
+    try:
+        sheet = render_sheet(mesh, out_dir / "sheet.png", previous=_previous_mesh(path), rows=rows, pixels=120)
+    except (OSError, ValueError):
+        return
+    manifest.update(sheet)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -67,7 +67,7 @@ class OverlayRegionTests(unittest.TestCase):
                 pixels=48,
                 samples=1,
             )
-            self.assertEqual(seeded["overlay_blob"]["source"], "seed")
+            self.assertEqual(seeded["overlay_blob"]["source"], "grabcut")
             self.assertGreater(seeded["overlay_blob"]["x"], 200)
             self.assertGreater(seeded["overlay_iou"], 0.5)
             excluded = render_views(

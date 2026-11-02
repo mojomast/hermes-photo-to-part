@@ -225,12 +225,29 @@ def _union_outputs(paths: list[str]) -> list[dict]:
                         applied = False
                 else:
                     after = before
+        note = None
+        try:
+            from photopart.repair_fallback import try_meshfix
+            from photopart.report import measure as measure_mesh
+
+            current = trimesh.load(path, force="mesh", process=True)
+            if isinstance(current, trimesh.Trimesh) and (measure_mesh(current).get("nonmanifold_edges") or 0) > 0:
+                fixed, info = try_meshfix(current)
+                note = info.get("meshfix_note")
+                if info.get("meshfix_applied"):
+                    payload = fixed.export(file_type="stl" if path.suffix.lower() == ".stl" else "3mf")
+                    if isinstance(payload, str):
+                        payload = payload.encode("utf-8")
+                    path.write_bytes(payload)
+        except Exception:
+            note = None
         rows.append(
             {
                 "file": str(path),
                 "shells_before": before,
                 "shells_after": after if applied or before == 1 else before,
                 "union_applied": applied,
+                "meshfix_note": note,
             }
         )
     return rows

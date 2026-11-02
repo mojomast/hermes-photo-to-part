@@ -14,10 +14,10 @@ One skill and six tools. The skill id is `photo-to-part:photo-to-printable-part`
 | --- | --- |
 | `photo_part_template` | A watertight block: sample plate, plate with holes, countersink, revolved profile, radial ribs, L-bracket, print-in-place hinge, thread, knurl, sweep, hex screw, hex standoff, bottle cap, spur gear, spiral scroll, or strap hinge. Try one of these before a custom script. |
 | `photo_part_build` | Runs one local `.py` file with the plugin interpreter (`interpreter` in the JSON). The script can `import` `photopart.features` (`spur_gear`, `spiral_scroll`, `strap_hinge`, and the thread helpers). Overlapping shells are unioned. Working directory, timeout, captured output. No shell. On failure, `error` is the exception. |
-| `photo_part_validate` | Watertightness, shell count (`expected_shells` for a print-in-place part), bounding box, holes, and a `spec.json` or `--dim name=value±tol` check (bbox, shells, knuckles, hole count). A check the template emitted must stay in the spec. A longest side under 1 mm or over 2 m fails unless `allow_size` is set. The only sidecar is `<file>.validate.json`, with the mesh hash. Each run appends the previous record to `history`. |
-| `photo_part_render` | Front, side, top, and iso previews fitted to the part, a side-by-side, and a silhouette overlay. `overlay_fit: auto` tries all three orthographic views, searches rotation at 15° then 1° plus a mirror, and reports the IoU and `overlay_poses`. An angled photo is still scored with `overlay_iou_label` `guide_only`. An `--roi` that crops the silhouette is expanded. `--seed` and a measure JSON keep a coin from winning. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`). `stale_validation` is true when the file changed after validate. |
-| `photo_part_heal` | Weld, fill holes, and keep the largest shell of a scan. `--union` merges overlapping shells. Flat caps are not a finished surface. Refuses to replace an existing file unless `--overwrite`. |
-| `photo_part_measure` | Pixels per millimetre from a coin or a ruler, a `reference_bbox` for that object, and an optional four-point rectified image. |
+| `photo_part_validate` | Watertightness, shell count, bounding box, holes, printability (wall, overhang, bed contact, body gap), and a `spec.json` or `--dim` check. A frozen checklist needs `--reason` to change. The sidecar keeps `history` and a `score`. |
+| `photo_part_render` | Front, side, top, and iso previews fitted to the part, an eight-view comparison sheet, a side-by-side, and a silhouette overlay. `overlay_fit: auto` tries all three orthographic views, searches rotation at 15° then 1° plus a mirror, and reports the IoU, `overlay_poses`, and the top 3 poses. `--roi` or `--seed` seeds GrabCut. An angled photo is still scored with `overlay_iou_label` `guide_only`. An `--roi` that crops the silhouette is expanded. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`). `final` delivers the best validated version. `stale_validation` is true when the file changed after validate. |
+| `photo_part_heal` | Weld, fill holes, and keep the largest shell of a scan. `--union` merges overlapping shells. `--engine meshfix` uses PyMeshFix when that package is installed. Flat caps are not a finished surface. Refuses to replace an existing file unless `--overwrite`. |
+| `photo_part_measure` | Pixels per millimetre from a coin, a ruler, or an ArUco/AprilTag marker. Each value is tagged `in_plane` or `out_of_plane` with `uncertainty_mm`. Returns `reference_bbox` and an optional four-point rectified image. |
 
 The same jobs are available as scripts under `skills/photo-to-printable-part/scripts/` for a person at a shell. Hermes should call the tools. The tools already run where trimesh and manifold3d are installed. A system `python script.py` re-execs into that environment without resolving the venv interpreter symlink. `photo_part_build` uses that same unresolved interpreter and returns it as `interpreter`. Do not pip install into the system Python.
 
@@ -83,7 +83,10 @@ Python 3.11 or 3.12.
 uv venv .venv
 uv pip install --python .venv/bin/python --exclude-newer 2026-10-30 -e ".[dev]"
 .venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m evals.runner
 ```
+
+`evals/README.md` says how to score a Hermes transcript with the same tasks. The runner itself stays on this machine and does not download the photos named in `evals/photos.json`.
 
 CI runs that on Ubuntu for 3.11 and 3.12. The date cut is a three-day quarantine, the same idea as the Hermes dependency guidance. [RESEARCH.md](RESEARCH.md) records the catalog rules, the skill format, and the CAD sources behind the defaults.
 

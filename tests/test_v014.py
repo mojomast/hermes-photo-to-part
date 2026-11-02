@@ -274,10 +274,11 @@ class FinalAndSidecarTests(unittest.TestCase):
             self.assertTrue((root / "shipped" / "front.png").is_file())
             later = root / "part_v3.stl"
             _stl(later, (16, 8, 5))
-            code, blocked = run_render([str(mesh), "--out-dir", str(root / "again"), "--final", "--overwrite"])
-            self.assertNotEqual(code, 0)
-            self.assertTrue(blocked["needs_validation"])
-            self.assertTrue(blocked["validation_target"].endswith("part_v3.stl"))
+            code, delivered = run_render([str(mesh), "--out-dir", str(root / "again"), "--final", "--overwrite"])
+            self.assertEqual(code, 0, delivered)
+            self.assertTrue(str(delivered.get("best_version")).endswith("part_v2.stl"))
+            self.assertTrue((root / "again" / "front.png").is_file())
+            self.assertTrue((root / "again" / "sheet.png").is_file())
 
 
 class SkillTextTests(unittest.TestCase):
