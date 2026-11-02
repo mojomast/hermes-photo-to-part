@@ -386,6 +386,7 @@ def _write_overlay(
         "overlay_mirror": bool(mirror),
         "overlay_view": view,
         "overlay_poses": list(poses or []),
+        "overlay_top_poses": list(poses or [])[:3],
         "overlay_roi_expanded": bool(roi_expanded),
     }
 
@@ -520,8 +521,70 @@ def _overlay_warnings(iou, blob, *, angled: bool, missed: bool, extra: list | No
     return warnings
 
 
+def grabcut_mask(image: np.ndarray, roi=None, seed=None) -> np.ndarray | None:
+    """OpenCV GrabCut seeded by a rectangle or a point. None if OpenCV is absent."""
+    try:
+        import cv2
+    except ImportError:
+        return None
+    height, width = image.shape[:2]
+    if roi is not None:
+        x, y, w, h = (int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3]))
+    elif seed is not None:
+        # A tight window can sit entirely inside a flat silhouette, and GrabCut
+        # then has no background sample. Use a wide window around the seed.
+        span = max(48, int(min(width, height) * 0.7))
+        x = int(seed[0]) - span // 2
+        y = int(seed[1]) - span // 2
+        w, h = span, span
+    else:
+        return None
+    x = max(0, min(width - 2, x))
+    y = max(0, min(height - 2, y))
+    w = max(2, min(width - x, w))
+    h = max(2, min(height - y, h))
+    mask = np.full((height, width), cv2.GC_BGD, dtype=np.uint8)
+    mask[y : y + h, x : x + w] = cv2.GC_PR_FGD
+    mode = cv2.GC_INIT_WITH_RECT
+    if seed is not None:
+        sx = max(0, min(width - 1, int(seed[0])))
+        sy = max(0, min(height - 1, int(seed[1])))
+        mask[max(0, sy - 2) : sy + 3, max(0, sx - 2) : sx + 3] = cv2.GC_FGD
+        mode = cv2.GC_INIT_WITH_MASK
+    bgd = np.zeros((1, 65), np.float64)
+    fgd = np.zeros((1, 65), np.float64)
+    try:
+        cv2.grabCut(image, mask, (x, y, w, h), bgd, fgd, 3, mode)
+    except cv2.error:
+        return None
+    foreground = (mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD)
+    if int(foreground.sum()) < 16:
+        return None
+    return foreground
+
+
 def _foreground_for_overlay(image, *, roi, seed, exclude, hints: bool):
-    """Segment the part. Expand an ROI that cuts the silhouette."""
+    """Segment the part. A roi or seed tries GrabCut before the colour mask."""
+    if hints and (roi is not None or seed is not None):
+        cut = grabcut_mask(image, roi=roi, seed=seed)
+        if cut is not None:
+            for rect in exclude or []:
+                _zero_rect(cut, rect)
+            if seed is not None:
+                component = _component_at(cut, seed)
+            elif roi is not None:
+                gated = np.zeros_like(cut)
+                _copy_rect(cut, gated, roi)
+                component = _largest_component(gated)
+            else:
+                component = cut
+            if component is not None and int(component.sum()) >= 16:
+                box = _bbox(component)
+                blob = None
+                if box is not None:
+                    x0, y0, x1, y1 = box
+                    blob = {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "source": "grabcut"}
+                return component, blob, [], False
     if not hints:
         mask, blob = _foreground_for_score(image, roi=None, seed=None, exclude=None, hints=False)
         return mask, blob, [], False

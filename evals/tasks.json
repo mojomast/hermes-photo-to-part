@@ -1,0 +1,68 @@
+{
+  "tasks": [
+    {
+      "id": "box_matches_spec",
+      "prompt": "Model a 10 x 20 x 30 mm box as part_v1.stl. Write those sizes to spec.json first. Validate, then stop if next_step says stop."
+    },
+    {
+      "id": "box_dimension_error",
+      "prompt": "The spec says x=12 mm. The mesh is 10 mm. Validate and report the dimension error. Do not change the spec to make it pass."
+    },
+    {
+      "id": "hinge_four_knuckles",
+      "prompt": "Use the hinge template with 4 knuckles. Validate expected shells 2 and the template checks, including knuckles."
+    },
+    {
+      "id": "hinge_five_knuckles",
+      "prompt": "Use the hinge template with 5 knuckles. The spec must keep the knuckle count the template wrote."
+    },
+    {
+      "id": "countersink_deeper_than_sheet",
+      "prompt": "A countersink deeper than the sheet is impossible. Reject it before writing an STL."
+    },
+    {
+      "id": "dropped_template_knuckles",
+      "prompt": "Validate a hinge while omitting the knuckles check the template emitted. The check must fail."
+    },
+    {
+      "id": "frozen_edit_needs_reason",
+      "prompt": "spec.json lists features 5 knuckles, teardrop, and scroll ends. After the first validate, do not drop a feature unless you pass a reason."
+    },
+    {
+      "id": "thin_wall_warning",
+      "prompt": "Validate a 0.4 mm plate. Printability should warn that the wall is under 0.8 mm and still return the measurements."
+    },
+    {
+      "id": "print_in_place_gap",
+      "prompt": "Two bodies 0.15 mm apart should warn that the gap is under 0.3 mm per side."
+    },
+    {
+      "id": "eight_view_sheet",
+      "prompt": "Render the comparison sheet: front, back, side, right, top, bottom, iso, and iso2. Previous version in red, new in green, plus the dimension table."
+    },
+    {
+      "id": "out_of_plane_uncertainty",
+      "prompt": "A thickness read from a single front photo is out of plane. Tag it and warn. Do not treat it as a caliper measurement."
+    },
+    {
+      "id": "aruco_scale",
+      "prompt": "Scale the photo from an ArUco marker of known side length instead of guessing pixels per millimetre."
+    },
+    {
+      "id": "unvalidated_version_refused",
+      "prompt": "Do not render part_v1.stl until photo_part_validate has written a fresh sidecar."
+    },
+    {
+      "id": "worse_version_reverts",
+      "prompt": "part_v2 is larger than the spec and scores below part_v1. Revert to part_v1. Do not deliver part_v2."
+    },
+    {
+      "id": "meshfix_absent_degrades",
+      "prompt": "Heal with engine meshfix. If PyMeshFix is not installed, keep the manifold result and say so."
+    },
+    {
+      "id": "grabcut_seed",
+      "prompt": "Segment the part with GrabCut from a seed on the dark silhouette, not the largest bright object."
+    }
+  ]
+}

@@ -6,7 +6,7 @@ description: >-
   measurements, or turn a messy scan into a clean solid. Use for a replacement
   part, a fit-test print, an STL, a 2 mm grid-paper photo, or a scan cleaned
   into CAD. Call the photo_part_* tools. Read next_step. Stay under 25 calls.
-version: "0.1.5"
+version: "0.1.6"
 author: mojomast
 license: MIT
 compatibility: >-
@@ -68,7 +68,7 @@ Stay under 25 tool calls. The whole job is one measure only if the photo has a c
 3. `photo_part_template` first. If you must script, one `photo_part_build` with an absolute project `cwd`. Write `name_v1.stl`. If the script fails, fix it once and build again, then stop editing.
 4. One `photo_part_validate` of that file, passing `spec.json`. Keep every check the template emitted. Use one photo_part_validate and one photo_part_render per version.
 5. One `photo_part_render` of that same file, and only after that validate. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`). Look at `contact.png` once. The deliver render sets `final` true.
-6. Deliver that file only when validate `ok` is true and `stale_validation` is not true. Stop.
+6. Deliver the best validated `name_vN` only when validate `ok` is true and `stale_validation` is not true. `next_step` says stop when every check passed. If a later version scores worse, it says revert to the better `name_vK`. Stop.
 
 Write `name_vN.stl`. Never overwrite a file. Never `rm`, unlink, or otherwise delete an STL or 3MF, including one you just wrote. The next edit is a new version. Template and heal refuse to replace an existing file unless `--overwrite`. When a tool does replace a file, it keeps the previous bytes in `.p2p_history/` next to it. If `name_vN` is written and `name_v(N-1)` is missing, the JSON lists it under `missing_earlier`. Do not delete that older file to hide the gap.
 
@@ -78,10 +78,10 @@ Write `name_vN.stl`. Never overwrite a file. Never `rm`, unlink, or otherwise de
 | --- | --- |
 | `photo_part_template` | Shapes above, including thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, spur_gear, scroll, and strap_hinge. Absolute `out_dir`. Returns `interpreter`. |
 | `photo_part_build` | One local `.py` with the plugin interpreter. Unions overlapping shells. Timeout, no shell. |
-| `photo_part_validate` | Watertight, shells, box, holes, and `spec.json` or `--dim`. The only sidecar is `<file>.validate.json`. A new run appends the previous record to `history`. |
-| `photo_part_render` | Fitted views and silhouette overlay. `overlay_fit auto` tries front, side, and top at 15° then 1°, plus a mirror, and reports rotation, mirror, view, and `overlay_poses`. An angled photo is still scored with `overlay_iou_label` `guide_only`. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`), including when `final` is set. `stale_validation` when the hash differs. |
-| `photo_part_heal` | Weld and fill. `--union` merges overlapping shells. |
-| `photo_part_measure` | px/mm, `reference_bbox` for the coin or ruler, absolute paths. |
+| `photo_part_validate` | Watertight, shells, box, holes, printability, and `spec.json` or `--dim`. Writes a `score`. The only sidecar is `<file>.validate.json`. A new run appends the previous record to `history`. |
+| `photo_part_render` | Fitted views, an eight-view `sheet.png` (previous in red, new in green), and a silhouette overlay. `overlay_fit auto` tries front, side, and top at 15° then 1°, plus a mirror, and reports rotation, mirror, view, `overlay_poses`, and the top 3 poses. GrabCut uses `--roi` or `--seed`. An angled photo is still scored with `overlay_iou_label` `guide_only`. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`). `final` delivers the best validated version. `stale_validation` when the hash differs. |
+| `photo_part_heal` | Weld and fill. `--union` merges overlapping shells. `--engine meshfix` tries PyMeshFix when it is installed. |
+| `photo_part_measure` | px/mm, `reference_bbox` for the coin, ruler, or ArUco/AprilTag marker, `plane` and `uncertainty_mm`, absolute paths. |
 
 `--size` is millimetres after `--units` or `--scale`. The default treats file numbers as millimetres and does not guess. A longest side under 1 mm or over 2 m fails (`ok: false`) unless `allow_size` is set. If you already passed `--units m` and the part is still implausible, drop `--units`. Do not pass it again.
 
@@ -91,7 +91,11 @@ A print-in-place part (the hinge template has 2 shells) needs `expected_shells`.
 
 `--photo-scale` is pixels per millimetre. It writes `overlay.png` (the silhouette contour, not facet edges), `overlay_diff.png`, and `overlay_iou`. `overlay_fit: auto` tries front, side, and top. Rotation is searched at 15°, then at 1°, and a mirror is tried too. The JSON reports `overlay_rotation_deg`, `overlay_mirror`, `overlay_view`, and `overlay_poses` (each view's best pose, winner first). It can still lock onto the largest object, such as a coin. Pass `--roi x,y,w,h` or `--seed x,y`, and the measure JSON or `--exclude-roi`. The JSON names that blob. If the ROI meets the silhouette edge, it is expanded and the JSON warns. If `overlay_iou` is below 0.5, the JSON warns. An angled photo is not skipped: the fit still runs and `overlay_iou_label` is `guide_only`, because perspective can move the outline. Say that the number is a guide, not a measurement, unless `photo_part_measure` rectified the photo. Do not write an overlay script.
 
-`photo_part_validate --spec spec.json` fails when the mesh drifts from that file, and fails when a check the template wrote is missing from the spec. `--dim name=value±tol` is the same check for `x`, `y`, `z`, `shells`, `knuckles`, or `hole_count`. Knuckles use `knuckle_axis` (default `x`). The probe samples between the pin and the knuckle wall, so do not delete a knuckle check. Hole count is the genus, not the knuckle count. The only validation file is `<file>.validate.json`. Each run keeps the previous record in `history`. Do not pass a second path such as `model.validate.json`.
+`response_format` is `concise` or `detailed` on every tool. The default is concise. Errors lead with `cause` and one `fix`.
+
+`spec.json` can list yes/no `features` such as `5 knuckles`, `teardrop`, and `scroll ends`. The first validate freezes that checklist. A later edit needs `--reason`, and the reason is in the report. Do not drop a feature to make the mesh pass.
+
+`photo_part_validate --spec spec.json` fails when the mesh drifts from that file, and fails when a check the template wrote is missing from the spec. It also reports min wall, overhang past 45 degrees, bed contact, and the gap between bodies (warn under 0.3 mm per side). `--dim name=value±tol` is the same check for `x`, `y`, `z`, `shells`, `knuckles`, or `hole_count`. Knuckles use `knuckle_axis` (default `x`). The probe samples between the pin and the knuckle wall, so do not delete a knuckle check. Hole count is the genus, not the knuckle count. The only validation file is `<file>.validate.json`. Each run keeps the previous record in `history`. Do not pass a second path such as `model.validate.json`.
 
 `photo_part_heal` reports `fan_requested`, `fan_used`, and `fan_fallback`. `shells_dropped` counts input shells only. `union_applied` is true when `--union` merged shells. Caps are flat. Read `references/scan-cleanup.md` in scan mode.
 

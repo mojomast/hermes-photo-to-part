@@ -45,14 +45,35 @@ def _lead(text: str) -> str:
     return f"{SKILL_ID}. {text}"
 
 
-def _emit(payload: dict, fallback: str, *, plain_error: bool = False) -> str:
+_CONCISE_DROP = {"history", "overlay_poses", "stdout", "stderr"}
+
+
+def _emit(payload: dict, fallback: str, *, plain_error: bool = False, response_format: str = "concise") -> str:
     if payload.get("error") and not plain_error and SKILL_ID not in str(payload["error"]):
         payload["error"] = f"{payload['error']} Skill id: {SKILL_ID}."
+    if payload.get("error"):
+        text = str(payload["error"]).strip()
+        payload.setdefault("cause", text.split("\n", 1)[0])
+        payload.setdefault("fix", "Change that one input and run the same tool again.")
     if not payload.get("next_step"):
         attach_flow(payload, fallback)
     elif "skill_id" not in payload:
         payload["skill_id"] = SKILL_ID
+    mode = response_format if response_format in {"concise", "detailed"} else "concise"
+    payload["response_format"] = mode
+    if mode == "concise":
+        for key in _CONCISE_DROP:
+            payload.pop(key, None)
+        if isinstance(payload.get("failures"), list) and len(payload["failures"]) > 8:
+            payload["failures"] = payload["failures"][:8]
     return _dump(payload)
+
+
+def _format(args: dict) -> str:
+    value = str(args.get("response_format") or "concise")
+    if value not in {"concise", "detailed"}:
+        raise ValueError("response_format must be concise or detailed")
+    return value
 
 
 def _abs(path) -> str | None:
@@ -124,8 +145,10 @@ def _size(params: dict) -> tuple[float, float, float] | None:
 
 def validate_tool(params, **_kwargs) -> str:
     """Check watertightness and the bounding box. Size targets are millimetres."""
+    mode = "concise"
     try:
         args = _params(params)
+        mode = _format(args)
         from photopart.validate import run_validate
 
         _code, report = run_validate(
@@ -144,16 +167,29 @@ def validate_tool(params, **_kwargs) -> str:
             spec=args.get("spec"),
             dims=args.get("dims") or args.get("dim"),
             max_bytes=int(args.get("max_bytes", 256 * 1024 * 1024)),
+            spec_reason=_optional_str(args, "reason"),
+            min_wall_mm=float(args.get("min_wall_mm", 0.8)),
+            overhang_deg=float(args.get("overhang_deg", 45)),
+            max_overhang_fraction=float(args.get("max_overhang_fraction", 0.35)),
+            min_bed_mm2=float(args.get("min_bed_mm2", 1)),
+            min_gap_mm=float(args.get("min_gap_mm", 0.3)),
+            print_strict=_flag(args, "print_strict"),
         )
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return _emit({"ok": False, "error": str(exc)}, "Fix the arguments, then photo_part_validate the mesh.")
-    return _emit(report, "Next: photo_part_render the same file, then deliver it.")
+        return _emit(
+            {"ok": False, "error": str(exc)},
+            "Fix the arguments, then photo_part_validate the mesh.",
+            response_format=mode,
+        )
+    return _emit(report, "Next: photo_part_render the same file, then deliver it.", response_format=mode)
 
 
 def render_tool(params, **_kwargs) -> str:
     """Render fitted views and, with photo_scale, an outline overlay on the photo."""
+    mode = "concise"
     try:
         args = _params(params)
+        mode = _format(args)
         argv = [str(args["mesh"]), "--out-dir", str(args["out_dir"])]
         photo = _optional_str(args, "photo")
         if photo:
@@ -218,14 +254,24 @@ def render_tool(params, **_kwargs) -> str:
 
         _code, report = run_render(argv)
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return _emit({"ok": False, "error": str(exc)}, "Fix the render arguments, then photo_part_render the validated file.")
-    return _emit(report, "Read stale_validation. Deliver the file only when it is false and validation_ok is true.")
+        return _emit(
+            {"ok": False, "error": str(exc)},
+            "Fix the render arguments, then photo_part_render the validated file.",
+            response_format=mode,
+        )
+    return _emit(
+        report,
+        "Read stale_validation. Deliver the file only when it is false and validation_ok is true.",
+        response_format=mode,
+    )
 
 
 def heal_tool(params, **_kwargs) -> str:
     """Heal a scan into a new STL. Report fan fallback and shell counts separately."""
+    mode = "concise"
     try:
         args = _params(params)
+        mode = _format(args)
         argv = [str(args["mesh"]), "--out", str(args["out"])]
         if _flag(args, "fan"):
             argv.append("--fan")
@@ -233,6 +279,9 @@ def heal_tool(params, **_kwargs) -> str:
             argv.append("--keep-all")
         if _flag(args, "union"):
             argv.append("--union")
+        engine = _optional_str(args, "engine")
+        if engine:
+            argv.extend(["--engine", engine])
         if _flag(args, "allow_size"):
             argv.append("--allow-size")
         if _flag(args, "ascii"):
@@ -251,14 +300,20 @@ def heal_tool(params, **_kwargs) -> str:
 
         _code, report = run_heal(argv)
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return _emit({"ok": False, "error": str(exc)}, "Fix the heal arguments. Write a new name_vN.stl. Do not overwrite a validated mesh.")
-    return _emit(report, "Next: photo_part_validate the healed STL, then render it.")
+        return _emit(
+            {"ok": False, "error": str(exc)},
+            "Fix the heal arguments. Write a new name_vN.stl. Do not overwrite a validated mesh.",
+            response_format=mode,
+        )
+    return _emit(report, "Next: photo_part_validate the healed STL, then render it.", response_format=mode)
 
 
 def template_tool(params, **_kwargs) -> str:
     """Write a building block. The default shape is still the sample plate."""
+    mode = "concise"
     try:
         args = _params(params)
+        mode = _format(args)
         from photopart.parts import output_names, write_shape
 
         overrides = args.get("params") or None
@@ -286,6 +341,7 @@ def template_tool(params, **_kwargs) -> str:
         return _emit(
             {"ok": False, "error": str(exc)},
             "Try a photo_part_template shape before a custom script. Pass an absolute project out_dir.",
+            response_format=mode,
         )
     from photopart.flow import step_model
     from photopart.history import missing_versions
@@ -316,25 +372,37 @@ def template_tool(params, **_kwargs) -> str:
 
     attach_flow(summary, step_model(stl or "name_v1.stl"))
     note_missing_spec(summary, Path.cwd(), out_dir)
-    return _emit(summary, step_model(stl or "name_v1.stl"))
+    return _emit(summary, step_model(stl or "name_v1.stl"), response_format=mode)
 
 
 def measure_tool(params, **_kwargs) -> str:
     """Pixel scale from a coin or a ruler, plus an optional rectified image."""
+    mode = "concise"
     try:
         args = _params(params)
+        mode = _format(args)
         from photopart.measure import measure
 
         report = measure(args)
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return _emit({"ok": False, "error": str(exc)}, "Fix the measure arguments. Pass an absolute project path for out.")
-    return _emit(report, "Next: photo_part_template or photo_part_build, then validate name_v1.stl.")
+        return _emit(
+            {"ok": False, "error": str(exc)},
+            "Fix the measure arguments. Pass an absolute project path for out.",
+            response_format=mode,
+        )
+    return _emit(
+        report,
+        "Next: photo_part_template or photo_part_build, then validate name_v1.stl.",
+        response_format=mode,
+    )
 
 
 def build_tool(params, **_kwargs) -> str:
     """Run a local Python build script with the plugin interpreter."""
+    mode = "concise"
     try:
         args = _params(params)
+        mode = _format(args)
         from photopart.build_run import run_build
 
         extra = args.get("args") or []
@@ -352,23 +420,49 @@ def build_tool(params, **_kwargs) -> str:
         return _emit(
             {"ok": False, "error": str(exc)},
             "Try photo_part_template shapes such as l_bracket before a custom script.",
+            response_format=mode,
         )
     return _emit(
         report,
         "Next: photo_part_validate the STL the script wrote, with spec.json. Do not overwrite it.",
         plain_error=bool(report.get("error")),
+        response_format=mode,
     )
 
 
 def _schema(name: str, description: str, properties: dict, required: list[str]) -> dict:
+    fields = dict(properties)
+    fields["response_format"] = {
+        "type": "string",
+        "enum": ["concise", "detailed"],
+        "description": "concise drops history, full pose lists, and build logs. Default concise.",
+    }
     return {
         "name": name,
         "description": description,
         "parameters": {
             "type": "object",
-            "properties": properties,
+            "properties": fields,
             "required": required,
         },
+    }
+
+
+def _output_schema(name: str) -> dict:
+    """Declared result. Hermes uses it when register_tool accepts output_schema."""
+    return {
+        "type": "object",
+        "properties": {
+            "ok": {"type": "boolean"},
+            "error": {"type": "string"},
+            "cause": {"type": "string"},
+            "fix": {"type": "string"},
+            "next_step": {"type": "string"},
+            "skill_id": {"type": "string"},
+            "response_format": {"type": "string"},
+        },
+        "required": ["ok", "next_step", "skill_id"],
+        "description": name,
     }
 
 
@@ -387,7 +481,8 @@ def tool_specs() -> list[dict]:
                 "Does not upload the file. Returns JSON. Do not write a replacement checker. "
                 "Writes <file>.validate.json with the mesh hash. That is the only sidecar name. "
                 "Pass spec or dims (name=value±tol) for bbox, shells, knuckles, and hole_count. "
-                "A deviation fails the check."
+                "A deviation fails the check. The report includes a score, printability, and the frozen checklist. "
+                "Pass reason when a frozen spec.json changed."
             ),
             {
                 "mesh": {"type": "string", "description": "Path to an STL, 3MF, OBJ, or PLY file."},
@@ -431,6 +526,16 @@ def tool_specs() -> list[dict]:
                     "items": {"type": "string"},
                     "description": "Checks such as x=100±0.5 or knuckles=5. Counts are exact unless a tolerance is given.",
                 },
+                "reason": {
+                    "type": "string",
+                    "description": "Why a frozen spec.json checklist or number changed. Required after the first validate of that file.",
+                },
+                "min_wall_mm": {"type": "number", "description": "Warn when the thinnest inward ray is under this. Default 0.8."},
+                "overhang_deg": {"type": "number", "description": "Overhang starts past this angle from vertical. Default 45."},
+                "max_overhang_fraction": {"type": "number", "description": "Warn when overhang area exceeds this fraction. Default 0.35."},
+                "min_bed_mm2": {"type": "number", "description": "Warn when bed contact is under this area. Default 1."},
+                "min_gap_mm": {"type": "number", "description": "Warn when bodies are closer than this. Default 0.3 mm per side."},
+                "print_strict": {"type": "boolean", "description": "Turn printability warnings into failures."},
                 "max_bytes": {"type": "integer"},
             },
             ["mesh"],
@@ -535,6 +640,11 @@ def tool_specs() -> list[dict]:
                     "type": "boolean",
                     "description": "Boolean-union shells. Overlapping shells merge. Disjoint shells stay separate.",
                 },
+                "engine": {
+                    "type": "string",
+                    "enum": ["default", "meshfix"],
+                    "description": "meshfix runs PyMeshFix when it is installed. If it is absent the manifold result is kept.",
+                },
                 "allow_size": {
                     "type": "boolean",
                     "description": "Accept a longest side under 1 mm or over 2 m. Without this, that size fails.",
@@ -614,10 +724,11 @@ def tool_specs() -> list[dict]:
                 "ruler_mm": {"type": "number", "description": "Real millimetres between points."},
                 "measurements": {
                     "type": "array",
-                    "description": "Spans to convert: {name, points} or {name, length_px}.",
+                    "description": "Spans to convert: {name, points or length_px, optional plane in_plane or out_of_plane}.",
                     "items": {"type": "object"},
                 },
-                "image": {"type": "string", "description": "Photo to rectify when quad is set."},
+                "image": {"type": "string", "description": "Photo to rectify when quad is set, or the image that contains an ArUco or AprilTag."},
+                "marker_mm": {"type": "number", "description": "Side length in millimetres of an ArUco or AprilTag in image."},
                 "quad": {
                     "type": "array",
                     "description": "Four [x, y] pixels: top-left, top-right, bottom-right, bottom-left of a known rectangle.",
@@ -681,4 +792,5 @@ def register_tools(ctx) -> None:
             schema=spec["schema"],
             handler=spec["handler"],
             description=spec["description"],
+            output_schema=spec.get("output_schema") or _output_schema(spec["name"]),
         )

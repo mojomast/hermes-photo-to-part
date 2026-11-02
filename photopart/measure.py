@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 
 from photopart.flow import attach_flow, failed, step_measure
 from photopart.paths import absolute_path, default_output
@@ -190,11 +191,19 @@ def _measurements(items, px_per_mm: float) -> list[dict]:
             raise ValueError(f"measurement {name!r} needs points or length_px")
         if pixels <= 0 or not np.isfinite(pixels):
             raise ValueError(f"measurement {name!r} has an empty span")
+        plane = str(item.get("plane") or "in_plane")
+        if plane not in {"in_plane", "out_of_plane"}:
+            raise ValueError(f"measurement {name!r} plane must be in_plane or out_of_plane")
+        uncertainty = max(1.0, 0.02 * pixels) / px_per_mm
+        if plane == "out_of_plane":
+            uncertainty *= 3.0
         found.append(
             {
                 "name": name,
                 "px": pixels,
                 "mm": pixels / px_per_mm,
+                "plane": plane,
+                "uncertainty_mm": uncertainty,
             }
         )
     return found
@@ -229,7 +238,14 @@ def measure(payload: dict) -> dict:
     kind = None
     px_per_mm = None
     reference_px = None
-    if ruler_mm is not None:
+    marker = None
+    image_path = payload.get("image")
+    if image_path and payload.get("marker_mm") is not None:
+        marker = _marker_scale(str(image_path), float(payload["marker_mm"]))
+        px_per_mm = marker["px_per_mm"]
+        reference_px = marker["side_px"]
+        kind = marker["kind"]
+    elif ruler_mm is not None:
         if points is None:
             raise ValueError("ruler_mm needs points: two pixels the ruler_mm span covers")
         pair = _pair(points, "ruler")
@@ -252,7 +268,8 @@ def measure(payload: dict) -> dict:
     else:
         raise ValueError(
             "Pass a coin (or diameter_mm) with diameter_px or two points, "
-            "or ruler_mm with two points, or quad with width_mm and height_mm."
+            "or ruler_mm with two points, or quad with width_mm and height_mm, "
+            "or image plus marker_mm for an ArUco or AprilTag."
         )
 
     rectified = None
@@ -271,6 +288,16 @@ def measure(payload: dict) -> dict:
         bbox_pair = _pair(points, "ruler")
     elif kind in ("coin", "diameter") and points is not None:
         bbox_pair = _pair(points, "reference")
+    measurements = _measurements(payload.get("measurements"), float(px_per_mm))
+    out_of_plane = [item["name"] for item in measurements if item.get("plane") == "out_of_plane"]
+    warning = None
+    if out_of_plane:
+        warning = (
+            "out_of_plane measurement is not valid from this single photo: "
+            + ", ".join(out_of_plane)
+            + ". Use a caliper or a second view. One pixel of scale error is "
+            f"{1.0 / float(px_per_mm):.4f} mm."
+        )
     report = {
         "ok": True,
         "kind": kind,
@@ -281,13 +308,63 @@ def measure(payload: dict) -> dict:
         "reference_bbox": _reference_bbox(kind, bbox_pair, reference_px),
         "px_per_mm": float(px_per_mm),
         "mm_per_px": float(1.0 / px_per_mm),
-        "measurements": _measurements(payload.get("measurements"), float(px_per_mm)),
+        "scale_plane": "in_plane",
+        "uncertainty_mm_per_px": float(1.0 / px_per_mm),
+        "measurements": measurements,
+        "out_of_plane_warning": warning,
+        "marker": marker,
         "rectified": rectified,
         "rectified_px_per_mm": rectified_px,
         "angled": bool(payload.get("angled", False)),
         "note": _PLANE_NOTE,
     }
     return attach_flow(report, step_measure())
+
+
+def _marker_scale(image_path: str, marker_mm: float) -> dict:
+    """Pixels per millimetre from an ArUco or AprilTag of known side length."""
+    if marker_mm <= 0 or not np.isfinite(marker_mm):
+        raise ValueError("marker_mm must be positive")
+    try:
+        import cv2
+    except ImportError as exc:
+        raise ValueError("opencv is not installed, so ArUco and AprilTag detection is unavailable") from exc
+    image = np.array(Image.open(image_path).convert("RGB"))
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    found = _detect_marker(gray)
+    if found is None:
+        raise ValueError("no ArUco or AprilTag marker was found in the image")
+    return {
+        "kind": found["kind"],
+        "side_px": found["side_px"],
+        "px_per_mm": found["side_px"] / marker_mm,
+        "id": found["id"],
+        "plane": "in_plane",
+        "uncertainty_mm": max(1.0, 0.02 * found["side_px"]) / (found["side_px"] / marker_mm),
+    }
+
+
+def _detect_marker(gray: np.ndarray) -> dict | None:
+    import cv2
+
+    dictionaries = []
+    if hasattr(cv2.aruco, "DICT_4X4_50"):
+        dictionaries.append(("aruco", cv2.aruco.DICT_4X4_50))
+    if hasattr(cv2.aruco, "DICT_APRILTAG_36h11"):
+        dictionaries.append(("apriltag", cv2.aruco.DICT_APRILTAG_36h11))
+    for kind, code in dictionaries:
+        dictionary = cv2.aruco.getPredefinedDictionary(code)
+        if hasattr(cv2.aruco, "ArucoDetector"):
+            detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
+            corners, ids, _rejected = detector.detectMarkers(gray)
+        else:
+            corners, ids, _rejected = cv2.aruco.detectMarkers(gray, dictionary)
+        if ids is None or len(ids) == 0:
+            continue
+        quad = np.asarray(corners[0], dtype=float).reshape(4, 2)
+        edges = [float(np.linalg.norm(quad[i] - quad[(i + 1) % 4])) for i in range(4)]
+        return {"kind": kind, "side_px": float(sum(edges) / 4.0), "id": int(ids[0][0])}
+    return None
 
 
 def load_measure_hints(payload: dict) -> tuple[list[tuple[float, float, float, float]], bool]:

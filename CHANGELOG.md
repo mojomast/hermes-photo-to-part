@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.6 — 2026-11-02
+
+- Validate writes a `score` from spec checks, watertightness, and printability. `next_step` says stop when every check passes, or revert to the better `name_vK` when a version regresses. A final render delivers the best validated version.
+- `spec.json` features are a frozen checklist. Changing the frozen requirement requires `--reason`, which is copied into the report.
+- Render writes an eight-view `sheet.png` (six orthographic views and two isometric views). The previous version is red and the new one is green, with a dimension-error table.
+- Printability checks report minimum wall thickness, overhang area past 45°, bed contact, and the gap between bodies. The gap warns under 0.3 mm per side. Thresholds are arguments. Ray queries use `rtree`.
+- Overlay segmentation tries OpenCV GrabCut from `--roi` or `--seed` and reports the top 3 poses.
+- `photo_part_measure` tags each value `in_plane` or `out_of_plane` with `uncertainty_mm`, warns on out-of-plane use, and can scale from an ArUco or AprilTag marker.
+- Every tool takes `response_format` `concise` or `detailed` (default concise). Errors include `cause` and `fix`. Each tool declares an output schema.
+- `evals/` runs about 15 scripted tasks and records pass, dimension error, tool calls, minutes, wrong skill ids, and deleted files. Photos are not committed; the manifest names openly licensed URLs.
+- `photo_part_heal --engine meshfix` and a non-manifold build union try PyMeshFix when that optional package is installed, and leave the mesh unchanged when it is not.
+
 ## 0.1.5 — 2026-11-02
 
 - Knuckle checks sample between the pin radius and the knuckle wall, so a solid pin is not reported as zero knuckles. The hinge template takes `knuckles` (default 4).

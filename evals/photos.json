@@ -1,0 +1,28 @@
+{
+  "note": "Reference only. The runner does not download these files and the bytes are not in the repo. Use them in a Hermes session when a task needs a real photo. Synthetic stand-ins cover the in-process suite.",
+  "photos": [
+    {
+      "id": "us-quarter-2021-obverse",
+      "use": "Coin scale reference, about 24.26 mm. Public-domain US government work.",
+      "page": "https://commons.wikimedia.org/wiki/File:2021-P_US_Quarter_Obverse.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/7/70/2021-P_US_Quarter_Obverse.jpg",
+      "licence": "Public domain"
+    },
+    {
+      "id": "school-rulers",
+      "use": "Straight ruler in frame for an in-plane millimetre span.",
+      "page": "https://commons.wikimedia.org/wiki/File:School_Rulers.jpg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/b/b7/School_Rulers.jpg",
+      "licence": "CC0",
+      "licence_url": "https://creativecommons.org/publicdomain/zero/1.0/"
+    },
+    {
+      "id": "metric-ruler-drawing",
+      "use": "To-scale centimetre drawing. Attribute the author if you redistribute the file.",
+      "page": "https://commons.wikimedia.org/wiki/File:Metric_centimeter_ruler_drawings_18_cm_x_6.svg",
+      "url": "https://upload.wikimedia.org/wikipedia/commons/e/e9/Metric_centimeter_ruler_drawings_18_cm_x_6.svg",
+      "licence": "CC BY-SA 4.0",
+      "licence_url": "https://creativecommons.org/licenses/by-sa/4.0"
+    }
+  ]
+}

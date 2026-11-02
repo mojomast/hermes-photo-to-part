@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 SKILL_ID = "photo-to-part:photo-to-printable-part"
 
 _ERROR_STEP = (
@@ -47,7 +49,20 @@ def step_model(path: str) -> str:
     )
 
 
-def step_validate(path: str, *, ok: bool, was_stale: bool | None) -> str:
+def step_validate(
+    path: str,
+    *,
+    ok: bool,
+    was_stale: bool | None,
+    score: float | None = None,
+    best: dict | None = None,
+) -> str:
+    name = Path(path).name
+    if best and score is not None and float(best["score"]) > float(score) + 1e-9:
+        return (
+            f"Revert to {best['name']}. {name} scored {score:g} and {best['name']} scored {best['score']:g}. "
+            "Do not deliver this file. photo_part_render the better version."
+        )
     if ok:
         extra = ""
         if was_stale:
@@ -56,7 +71,7 @@ def step_validate(path: str, *, ok: bool, was_stale: bool | None) -> str:
                 "this report is the new check."
             )
         return (
-            f"Next: photo_part_render this same file ({path}), then deliver it.{extra} "
+            f"stop. Every check passed. Next: photo_part_render this same file ({path}), then deliver it.{extra} "
             "Do not overwrite it."
         )
     return (
