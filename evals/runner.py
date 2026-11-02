@@ -13,8 +13,10 @@ Usage (from the repo root):
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
+import sys
 import tempfile
 import time
 from datetime import datetime
@@ -25,6 +27,7 @@ import trimesh
 from PIL import Image
 
 from photopart.flow import SKILL_ID
+from photopart.tools import TOOL_NAMES
 from photopart.heal import run_heal
 from photopart.measure import measure
 from photopart.overlay import _foreground_for_overlay, grabcut_mask
@@ -35,7 +38,9 @@ from photopart.sheet import SHEET_VIEWS, render_sheet
 from photopart.validate import run_validate
 
 ROOT = Path(__file__).resolve().parent
+REPO = ROOT.parent
 TASKS_PATH = ROOT / "tasks.json"
+_EXPECTED_TOOLS = 6
 _WRONG_SKILL = "plugin:photo-to-part:photo-to-printable-part"
 _TOOL_CALL = re.compile(r"photo_part_(?:validate|render|heal|template|measure|build)")
 _DELETE = re.compile(
@@ -43,6 +48,90 @@ _DELETE = re.compile(
     re.IGNORECASE,
 )
 _STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+
+
+class HermesV0217Context:
+    """PluginContext stand-in for Hermes v0.21.7.
+
+    ``register_tool`` matches NousResearch/hermes-agent ``hermes_cli/plugins.py``
+    at tag v0.21.7 (commit 71d34bad): no ``output_schema`` parameter and no
+    ``**kwargs``.
+    """
+
+    def __init__(self) -> None:
+        self.tools: list[dict] = []
+        self.skills: list[tuple] = []
+
+    def register_skill(self, name, path) -> None:
+        self.skills.append((name, path))
+
+    def register_tool(
+        self,
+        name,
+        toolset,
+        schema,
+        handler,
+        check_fn=None,
+        requires_env=None,
+        is_async=False,
+        description="",
+        emoji="",
+        override=False,
+    ) -> None:
+        self.tools.append(
+            {
+                "name": name,
+                "toolset": toolset,
+                "schema": schema,
+                "handler": handler,
+                "check_fn": check_fn,
+                "requires_env": requires_env,
+                "is_async": is_async,
+                "description": description,
+                "emoji": emoji,
+                "override": override,
+            }
+        )
+
+
+def load_plugin_register():
+    """Load the plugin entrypoint (``__init__.py`` ``register``)."""
+    spec = importlib.util.spec_from_file_location("photo_to_part_plugin", REPO / "__init__.py")
+    if spec is None or spec.loader is None:
+        raise ImportError("could not load the plugin register entrypoint")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    register = getattr(module, "register", None)
+    if register is None:
+        raise ImportError("plugin entrypoint has no register(ctx)")
+    return register
+
+
+def registration_report() -> dict:
+    """Register through the plugin entrypoint. Fewer than six tools is a failure."""
+    ctx = HermesV0217Context()
+    error = None
+    try:
+        load_plugin_register()(ctx)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    names = [item["name"] for item in ctx.tools]
+    missing = [name for name in TOOL_NAMES if name not in names]
+    message = None
+    if error is not None or len(names) < _EXPECTED_TOOLS or missing:
+        registered = ", ".join(names) if names else "none"
+        message = (
+            f"plugin registration failed: register(ctx) yielded {len(names)} tools, "
+            f"expected {_EXPECTED_TOOLS} ({', '.join(TOOL_NAMES)}). Registered: {registered}."
+        )
+        if error:
+            message += f" {error}"
+    return {
+        "count": len(names),
+        "names": names,
+        "error": message,
+        "tools": ctx.tools,
+    }
 
 
 def load_tasks() -> list[dict]:
@@ -54,7 +143,27 @@ def load_tasks() -> list[dict]:
 
 
 def run_suite() -> dict:
-    """Execute every task. ``passed`` is how many met their expectation."""
+    """Execute every task. ``passed`` is how many met their expectation.
+
+    The suite first calls the plugin ``register(ctx)`` entrypoint. Fewer than
+    six tools is a failed run; the task functions are not a substitute for that.
+    """
+    registration = registration_report()
+    if registration["error"]:
+        return {
+            "ok": False,
+            "passed": 0,
+            "tasks": 0,
+            "minutes": 0.0,
+            "dim_error_mm": None,
+            "tool_calls": 0,
+            "wrong_skill_ids": 0,
+            "deleted_files": [],
+            "tools_registered": registration["count"],
+            "registered_tools": registration["names"],
+            "registration_error": registration["error"],
+            "results": [],
+        }
     prompts = {row["id"]: row.get("prompt") or "" for row in load_tasks()}
     started = time.perf_counter()
     results = []
@@ -85,6 +194,8 @@ def run_suite() -> dict:
         "tool_calls": sum(int(row.get("tool_calls") or 0) for row in results),
         "wrong_skill_ids": sum(int(row.get("wrong_skill_ids") or 0) for row in results),
         "deleted_files": [item for row in results for item in row.get("deleted_files") or []],
+        "tools_registered": registration["count"],
+        "registered_tools": registration["names"],
         "results": results,
     }
 
@@ -116,6 +227,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json-out", help="Write the suite report to this path.")
     args = parser.parse_args(argv)
     report = run_suite()
+    if report.get("registration_error"):
+        print(report["registration_error"], file=sys.stderr)
     if args.transcript:
         report["transcript"] = score_transcript(Path(args.transcript).read_text(encoding="utf-8"))
     text = json.dumps(report, indent=2, sort_keys=True)
