@@ -1,0 +1,16 @@
+{
+  "compare_front": "/workspace/examples/plate-clip/renders/compare_front.png",
+  "decimated_for_preview": false,
+  "grid_mm": 2,
+  "preview_faces": 64,
+  "source_faces": 64,
+  "units": "millimeters",
+  "views": [
+    "/workspace/examples/plate-clip/renders/front.png",
+    "/workspace/examples/plate-clip/renders/side.png",
+    "/workspace/examples/plate-clip/renders/top.png",
+    "/workspace/examples/plate-clip/renders/iso.png",
+    "/workspace/examples/plate-clip/renders/contact.png",
+    "/workspace/examples/plate-clip/renders/compare_front.png"
+  ]
+}

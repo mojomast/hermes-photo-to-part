@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-photo-to-part"
+version = "0.1.0"
+description = "Hermes plugin: photos, measurements, or a scan to a checked printable part."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Kyle Durepos" }]
+keywords = ["hermes", "cad", "stl", "3d-printing"]
+dependencies = [
+  "trimesh>=4.6.0,<5.3",
+  "shapely>=2.0.1,<2.3",
+  "mapbox-earcut>=1.0.3,<2.2",
+  "numpy>=1.26,<2.6",
+  "networkx>=3.2,<4",
+  "matplotlib>=3.8,<3.12",
+  "pillow>=10.4,<14",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pyyaml>=6,<7",
+  "lxml>=5,<6.2",
+]
+threemf = [
+  "lxml>=5,<6.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/mojomast/hermes-photo-to-part"
+
+[project.scripts]
+photo-part-template = "photopart.geometry:main"
+photo-part-validate = "photopart.validate:main"
+photo-part-render = "photopart.render:main"
+photo-part-heal = "photopart.heal:main"
+
+[tool.setuptools.packages.find]
+include = ["photopart*"]

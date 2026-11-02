@@ -1,0 +1,42 @@
+{
+  "axis_swap": false,
+  "boundary_edges": 0,
+  "bounds_mm": {
+    "max": [
+      51.0,
+      72.6,
+      6.0
+    ],
+    "min": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "components": 1,
+  "degenerate_faces": 0,
+  "extent_delta_mm": {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0
+  },
+  "extents_mm": {
+    "x": 51.0,
+    "y": 72.6,
+    "z": 6.0
+  },
+  "failures": [],
+  "nonmanifold_edges": 0,
+  "ok": true,
+  "target_mm": {
+    "x": 51.0,
+    "y": 72.6,
+    "z": 6.0
+  },
+  "tolerance_mm": 0.05,
+  "triangles": 64,
+  "vertices": 32,
+  "volume_mm3": 15931.992079207921,
+  "watertight": true,
+  "winding_consistent": true
+}

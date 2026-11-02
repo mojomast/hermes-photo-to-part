@@ -1,0 +1,37 @@
+{
+  "description": "Generic tapered plate with a top hook and one slot. A sample for the photo-to-part workflow, not a commercial part.",
+  "expected_extents_mm": {
+    "x": 51.0,
+    "y": 72.6,
+    "z": 6.0
+  },
+  "parameter_help": {
+    "height_mm": "Plate height, not counting the hook.",
+    "hook_lip_mm": "Thickness of the hook's left bar and top lip.",
+    "hook_overlap_mm": "How far the hook digs into the plate so the union is not a kiss.",
+    "hook_rise_mm": "How far the hook rises above the plate.",
+    "hook_width_mm": "How far the hook extends in from the left edge.",
+    "lower_taper_mm": "Inset of each bottom corner. Zero is a straight plate.",
+    "slot_center_x_mm": "Slot center, from the left edge.",
+    "slot_center_y_mm": "Slot center, from the bottom edge.",
+    "slot_height_mm": "Slot height.",
+    "slot_width_mm": "Slot width.",
+    "thickness_mm": "Extrusion thickness.",
+    "width_mm": "Overall width across the top of the plate."
+  },
+  "parameters": {
+    "height_mm": 60.6,
+    "hook_lip_mm": 5.0,
+    "hook_overlap_mm": 2.0,
+    "hook_rise_mm": 12.0,
+    "hook_width_mm": 16.0,
+    "lower_taper_mm": 4.0,
+    "slot_center_x_mm": 32.0,
+    "slot_center_y_mm": 28.0,
+    "slot_height_mm": 14.0,
+    "slot_width_mm": 22.0,
+    "thickness_mm": 6.0,
+    "width_mm": 51.0
+  },
+  "units": "millimeters"
+}

@@ -1,0 +1,29 @@
+name: photo-to-part
+version: "0.1.0"
+description: >-
+  Turn photos, a few measurements, or a messy scan into a parametric printable
+  part and check the mesh locally. No network, no credentials, and no printer
+  connection.
+author: mojomast
+license: MIT
+homepage: https://github.com/mojomast/hermes-photo-to-part
+tags:
+  - cad
+  - 3d-printing
+  - stl
+  - skills
+manifest_version: 2
+api_version: 1
+provides_tools: []
+provides_hooks: []
+provides_middleware: []
+requires_env: []
+# Kept in step with pyproject.toml. pyproject.toml is what Hermes installs.
+python_dependencies:
+  - "trimesh>=4.6.0,<5.3"
+  - "shapely>=2.0.1,<2.3"
+  - "mapbox-earcut>=1.0.3,<2.2"
+  - "numpy>=1.26,<2.6"
+  - "networkx>=3.2,<4"
+  - "matplotlib>=3.8,<3.12"
+  - "pillow>=10.4,<14"
