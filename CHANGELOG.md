@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.5 — unreleased
+## 0.1.5 — 2026-11-02
 
 - Knuckle checks sample between the pin radius and the knuckle wall, so a solid pin is not reported as zero knuckles. The hinge template takes `knuckles` (default 4).
 - Templates write `<file>.template.json` with the spec checks they emitted. Validate fails when the user spec drops one of those checks.
