@@ -60,7 +60,9 @@ def run_build(
             "stderr": _clip(exc.stderr),
             "outputs": [],
         }
-        return attach_flow(report, step_build([], ok=False))
+        from photopart.spec import note_missing_spec
+
+        return note_missing_spec(attach_flow(report, step_build([], ok=False)), work)
     outputs = _changed(work, before)
     ok = completed.returncode == 0
     shells = []
@@ -91,7 +93,9 @@ def run_build(
     }
     if not ok:
         report["error"] = _failure_text(completed.stderr, completed.returncode)
-    return attach_flow(report, step_build(outputs, ok=ok))
+    from photopart.spec import note_missing_spec
+
+    return note_missing_spec(attach_flow(report, step_build(outputs, ok=ok)), work)
 
 
 def _workdir(cwd: str | Path | None) -> Path:

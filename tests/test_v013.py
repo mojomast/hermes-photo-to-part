@@ -115,6 +115,8 @@ class OverlayRegionTests(unittest.TestCase):
             self.assertLess(centered["overlay_iou"], 0.5)
             self.assertTrue(any("0.5" in item for item in centered["overlay_warnings"]))
             _box_stl(root / "part_v1.stl")
+            code, checked = run_validate(str(root / "part_v1.stl"))
+            self.assertEqual(code, 0, checked)
             hints = {
                 "reference_bbox": {"x": 30, "y": 30, "w": 160, "h": 160},
                 "angled": True,
@@ -163,9 +165,11 @@ class SidecarTests(unittest.TestCase):
             original = report["sha256"]
             _box_stl(mesh, (30, 12, 18))
             code, rendered = run_render([str(mesh), "--out-dir", str(root / "renders")])
-            self.assertEqual(code, 0, rendered)
+            self.assertEqual(code, 2, rendered)
+            self.assertTrue(rendered["unvalidated"])
             self.assertTrue(rendered["stale_validation"])
             self.assertIn("stale_validation", rendered["next_step"])
+            self.assertFalse((root / "renders" / "front.png").exists())
             self.assertEqual(json.loads(side.read_text(encoding="utf-8"))["sha256"], original)
             code, again = run_validate(str(mesh))
             self.assertEqual(code, 0, again)

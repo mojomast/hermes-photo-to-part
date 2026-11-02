@@ -96,11 +96,14 @@ def apply_spec(mesh, *, spec=None, dims=None, tolerance: float = 0.3) -> tuple[l
 
 
 def count_knuckles(mesh, axis: str = "x") -> int:
-    """Count pin knuckles along ``axis`` by sampling a ring of points.
+    """Count knuckles along ``axis`` between the pin and the knuckle wall.
 
-    Cylinder meshes only have vertices on the end caps, so a vertex gap is
-    not a knuckle. A run of stations where the ring is inside the solid is
-    one knuckle. Call this only when the spec asks for knuckles.
+    A ring at the bbox centre sits inside a continuous pin and reports one
+    solid run. Several radii are sampled, from just off the axis out to just
+    under half the short cross-section (inside the knuckle, short of the
+    leaves). A radius that is solid for the whole span is the pin core and is
+    skipped. The count is the largest remaining run. Call this only when the
+    spec asks for knuckles.
     """
     from photopart.holes import _inside
 
@@ -114,33 +117,51 @@ def count_knuckles(mesh, axis: str = "x") -> int:
         return 0
     others = [slot for slot in range(3) if slot != along]
     cross = min(float(bounds[1, slot] - bounds[0, slot]) for slot in others)
-    radius = max(0.4, 0.15 * cross)
+    if cross <= 0:
+        return 0
+    outer = 0.48 * cross
+    if outer <= 0.55:
+        radii = np.array([max(0.2, outer * 0.6)], dtype=float)
+    else:
+        radii = np.linspace(0.5, outer, 6)
     center = bounds.mean(axis=0)
-    stations = 100
+    stations = int(np.clip(round(span / 0.15), 80, 360))
     angles = 8
-    coords = np.linspace(bounds[0, along] + 0.02 * span, bounds[1, along] - 0.02 * span, stations)
-    points = np.zeros((stations * angles, 3), dtype=float)
-    for index, position in enumerate(coords):
-        for turn in range(angles):
-            angle = turn * 2.0 * np.pi / angles
-            point = center.copy()
-            point[along] = position
-            point[others[0]] = center[others[0]] + radius * np.cos(angle)
-            point[others[1]] = center[others[1]] + radius * np.sin(angle)
-            points[index * angles + turn] = point
-    inside = _inside(mesh, points).reshape(stations, angles).any(axis=1)
-    runs = 0
-    current = 0
-    for flag in inside:
-        if flag:
-            current += 1
+    pad = min(0.15, 0.005 * span)
+    coords = np.linspace(bounds[0, along] + pad, bounds[1, along] - pad, stations)
+    turns = np.arange(angles, dtype=float) * (2.0 * np.pi / angles)
+    n_radii = len(radii)
+    points = np.empty((n_radii, stations, angles, 3), dtype=float)
+    points[...] = center
+    points[..., along] = coords[None, :, None]
+    points[..., others[0]] = center[others[0]] + radii[:, None, None] * np.cos(turns)[None, None, :]
+    points[..., others[1]] = center[others[1]] + radii[:, None, None] * np.sin(turns)[None, None, :]
+    inside = _inside(mesh, points.reshape(-1, 3)).reshape(n_radii, stations, angles)
+    occupied = inside.any(axis=2)
+    best = 0
+    for row in occupied:
+        runs, fraction = _occupied_runs(row)
+        if runs == 1 and fraction >= 0.97:
             continue
-        if current >= 3:
-            runs += 1
-        current = 0
-    if current >= 3:
-        runs += 1
-    return runs
+        if runs == 0:
+            continue
+        if runs > best:
+            best = runs
+    return best
+
+
+def _occupied_runs(flags) -> tuple[int, float]:
+    """Runs of at least three inside samples, and the occupied fraction."""
+    row = np.asarray(flags, dtype=bool)
+    if len(row) == 0:
+        return 0, 0.0
+    padded = np.concatenate(([False], row, [False]))
+    changes = np.diff(padded.astype(np.int8))
+    starts = np.flatnonzero(changes == 1)
+    ends = np.flatnonzero(changes == -1)
+    runs = int(np.count_nonzero((ends - starts) >= 3))
+    fraction = float(np.count_nonzero(row)) / float(len(row))
+    return runs, fraction
 
 
 def count_holes(mesh) -> int:
@@ -213,3 +234,97 @@ def _holes_of(spec) -> list | None:
     if not isinstance(holes, list):
         raise ValueError("spec holes must be a list of {x, y, diameter}")
     return holes
+
+
+_TEMPLATE_CHECKS = ("x", "y", "z", "shells", "knuckles", "hole_count")
+_VERSION_STEM = re.compile(r"^(?P<prefix>.+)_v\d+$")
+SPEC_NUDGE = (
+    "No spec.json in the working directory. Write the user's bbox and key features "
+    "to spec.json before photo_part_validate."
+)
+
+
+def find_template_spec(mesh_path) -> dict | None:
+    """Spec checks a template wrote beside this mesh, or beside its unversioned name."""
+    path = Path(mesh_path).expanduser()
+    if path.exists():
+        path = path.resolve()
+    stems = [path.stem]
+    match = _VERSION_STEM.match(path.stem)
+    if match:
+        stems.append(match.group("prefix"))
+    seen: set[str] = set()
+    for stem in stems:
+        for candidate in (
+            path.parent / f"{stem}.template.json",
+            path.parent / f"{stem}.stl.template.json",
+        ):
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            loaded = _read_object(candidate)
+            if loaded is None:
+                continue
+            checks = loaded.get("spec_checks")
+            if isinstance(checks, dict):
+                return checks
+    return None
+
+
+def template_omissions(mesh_path, spec, dims) -> list[str]:
+    """Failures for checks the template emitted that the user spec dropped."""
+    checks = find_template_spec(mesh_path)
+    if not checks:
+        return []
+    present = _present_names(spec, dims)
+    missing = []
+    for name in _TEMPLATE_CHECKS:
+        if name not in checks or name in present:
+            continue
+        missing.append(
+            f"spec dropped template check {name} (template expected {checks[name]}). "
+            "Do not remove a check the template emitted."
+        )
+    return missing
+
+
+def note_missing_spec(report: dict, *dirs) -> dict:
+    """Warn when none of ``dirs`` contains ``spec.json``. Does not fail the tool."""
+    for raw in dirs:
+        if raw is None or raw == "":
+            continue
+        if (Path(raw).expanduser() / "spec.json").is_file():
+            return report
+    report["spec_warning"] = SPEC_NUDGE
+    step = str(report.get("next_step") or "")
+    if SPEC_NUDGE not in step:
+        report["next_step"] = f"{SPEC_NUDGE} {step}".strip()
+    return report
+
+
+def _present_names(spec, dims) -> set[str]:
+    names: set[str] = set()
+    raw = load_spec(spec) if spec else {}
+    nested = raw.get("dims") if isinstance(raw.get("dims"), dict) else {}
+    for name in _NAMES:
+        if raw.get(name) is not None or (isinstance(nested, dict) and nested.get(name) is not None):
+            names.add(name)
+    if isinstance(dims, str):
+        dims = [dims]
+    for item in dims or []:
+        name, _value, _tol = parse_dim(item)
+        names.add(name)
+    return names
+
+
+def _read_object(path: Path) -> dict | None:
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    return loaded

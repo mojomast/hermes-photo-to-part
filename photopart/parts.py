@@ -95,6 +95,7 @@ def write_shape(
         written = write_template(out_dir, params, ascii_stl=ascii_stl, write_3mf=write_3mf)
         written["shape"] = "plate_clip"
         written["shells"] = 1
+        _record_template_spec(written)
         return written
     mesh, doc = build_shape(name, params)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -114,7 +115,7 @@ def write_shape(
             threemf_error = str(exc)
             if threemf.exists():
                 threemf.unlink()
-    return {
+    result = {
         "mesh": mesh,
         "shape": name,
         "shells": doc["shells"],
@@ -129,6 +130,8 @@ def write_shape(
             doc["expected_extents_mm"]["z"],
         ),
     }
+    _record_template_spec(result)
+    return result
 
 
 def output_names(shape: str, *, write_3mf: bool) -> list[str]:
@@ -290,19 +293,30 @@ def _hinge(params: dict):
     clearance = _require_positive("clearance_mm", _number(params, "clearance_mm", 0.45))
     if clearance >= pin_r:
         raise ValueError("clearance_mm must be smaller than pin_radius_mm")
+    raw_count = _number(params, "knuckles", 4)
+    count = int(round(raw_count))
+    if abs(raw_count - count) > 1e-6 or count < 2 or count > 11:
+        raise ValueError("knuckles must be an integer from 2 to 11")
     tube_in = pin_r + clearance
     tube_out = tube_in + 1.15
     gap = max(0.4, clearance)
-    # Four alternating knuckles along X, with an axial gap so the leaves never touch.
+    # Alternating knuckles along X, with an axial gap so the leaves never touch.
+    # Even indexes are solid pins on leaf A. Odd indexes are bored tubes on leaf B.
     span = length
-    seg = (span - 3 * gap) / 4.0
+    seg = (span - (count - 1) * gap) / float(count)
     if seg <= 2:
-        raise ValueError("length_mm is too short for four hinge knuckles")
+        raise ValueError(f"length_mm is too short for {count} hinge knuckles")
     starts = [0.0]
-    for _ in range(3):
+    for _ in range(count - 1):
         starts.append(starts[-1] + seg + gap)
-    a_segs = [(starts[0], starts[0] + seg), (starts[2], starts[2] + seg)]
-    b_segs = [(starts[1], starts[1] + seg), (starts[3], starts[3] + seg)]
+    a_segs = []
+    b_segs = []
+    for index, start in enumerate(starts):
+        pair = (start, start + seg)
+        if index % 2 == 0:
+            a_segs.append(pair)
+        else:
+            b_segs.append(pair)
     plate_gap = 0.35
     parts_a = [_cube(span, leaf, 3.0).translate([0.0, -(leaf + tube_out + plate_gap), -1.5])]
     parts_b = [_cube(span, leaf, 3.0).translate([0.0, tube_out + plate_gap, -1.5])]
@@ -333,8 +347,48 @@ def _hinge(params: dict):
         "leaf_mm": leaf,
         "pin_radius_mm": pin_r,
         "clearance_mm": clearance,
+        "knuckles": count,
     }
     return mesh, resolved, 2
+
+
+def _record_template_spec(written: dict) -> None:
+    """Write the checks this template expects validate to keep."""
+    mesh = written["mesh"]
+    extents = np.asarray(mesh.extents, dtype=float)
+    checks = {
+        "x": round(float(extents[0]), 3),
+        "y": round(float(extents[1]), 3),
+        "z": round(float(extents[2]), 3),
+        "shells": int(written.get("shells") or 1),
+        "tolerance": 0.5,
+    }
+    if written.get("shape") == "hinge":
+        params = written.get("params") or {}
+        checks["knuckles"] = int(params.get("knuckles", 4))
+        checks["knuckle_axis"] = "x"
+    written["spec_checks"] = checks
+    stl = written.get("stl")
+    if not stl:
+        return
+    stl_path = Path(stl)
+    sidecar = Path(str(stl_path) + ".template.json")
+    payload = {
+        "file": str(stl_path.resolve()),
+        "shape": written.get("shape"),
+        "spec_checks": checks,
+    }
+    sidecar.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    params_path = stl_path.parent / "params.json"
+    if not params_path.is_file():
+        return
+    try:
+        doc = json.loads(params_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+    if isinstance(doc, dict):
+        doc["spec_checks"] = checks
+        params_path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _thread(params: dict):

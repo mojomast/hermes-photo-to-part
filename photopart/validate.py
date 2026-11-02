@@ -252,6 +252,13 @@ def run_validate(
             report["spec"] = spec_rows
             report["failures"].extend(spec_failures)
             report["ok"] = not report["failures"]
+        from photopart.spec import template_omissions
+
+        dropped = template_omissions(mesh_path, spec, dims)
+        if dropped:
+            report["failures"].extend(dropped)
+            report["template_checks_missing"] = True
+            report["ok"] = False
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return 1, failed(str(exc))
     resolved = Path(mesh_path).expanduser().resolve()
@@ -273,6 +280,8 @@ def run_validate(
     report["sha256"] = stamp["sha256"]
     report["stale_validation"] = stamp["stale_validation"]
     report["validation_sidecar"] = stamp["validation_sidecar"]
+    report["validated_at"] = stamp.get("validated_at")
+    report["history"] = stamp.get("history") or []
     canonical = sidecar_path(resolved)
     report["sidecar_note"] = f"The only validation file is {canonical.name}."
     if json_out:

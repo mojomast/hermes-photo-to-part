@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5 — unreleased
+
+- Knuckle checks sample between the pin radius and the knuckle wall, so a solid pin is not reported as zero knuckles. The hinge template takes `knuckles` (default 4).
+- Templates write `<file>.template.json` with the spec checks they emitted. Validate fails when the user spec drops one of those checks.
+- A render of `name_vN` without a fresh sidecar is refused and marked `unvalidated`. Build `next_step` always names `photo_part_validate`, including a failed script.
+- The skill writes `spec.json` first. Template and build warn when that file is missing. The deliver step lists every spec deviation, including a removed template check.
+- Each validate appends the previous record to `history` in `<file>.validate.json` instead of dropping it.
+
 ## 0.1.4 — 2026-11-02
 
 - Feature helpers in `photopart.features` always return one watertight body: external and internal ISO metric thread, straight or diamond knurl, revolve, sweep, hex-head screw, and hex standoff. `photo_part_template` adds `thread`, `knurl`, `sweep`, `hex_screw`, `hex_standoff`, and `bottle_cap`. A build script imports the same functions. `photo_part_build` unions overlapping shells and reports `shells_before` and `shells_after`.

@@ -719,7 +719,7 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     parser.add_argument(
         "--final",
         action="store_true",
-        help="Deliver render. Refuses when the latest name_vN has no fresh validate sidecar.",
+        help="Deliver render. Any name_vN without a fresh validate sidecar is refused.",
     )
     parser.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_BYTES)
     add_unit_arguments(parser)
@@ -735,21 +735,30 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         return 1, failed(f"mesh not found: {mesh_path}")
     mesh_path = mesh_path.resolve()
     gate = _validation_gate(mesh_path)
-    if args.final and not gate["fresh"]:
+    versioned = _VERSIONED.match(mesh_path.stem) is not None or _VERSIONED.match(gate["target"].stem) is not None
+    if not gate["fresh"] and (args.final or versioned):
         target = gate["target"]
+        if args.final:
+            error = (
+                f"{target.name} has no fresh photo_part_validate sidecar. "
+                "Validate that file before a final render."
+            )
+        else:
+            error = (
+                f"{target.name} has no fresh photo_part_validate sidecar. "
+                "Validate that file before rendering a version. unvalidated is true."
+            )
         report = {
             "ok": False,
             "needs_validation": True,
+            "unvalidated": True,
             "file": str(mesh_path),
             "validation_target": str(target),
             "sha256": gate["stamp"]["sha256"],
             "stale_validation": gate["stamp"]["stale_validation"],
             "validation_ok": gate["stamp"]["validation_ok"],
             "validation_sidecar": gate["stamp"]["validation_sidecar"],
-            "error": (
-                f"{target.name} has no fresh photo_part_validate sidecar. "
-                "Validate that file before a final render."
-            ),
+            "error": error,
         }
         return 2, attach_flow(
             report,
@@ -802,6 +811,7 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     manifest["validation_sidecar"] = stamp["validation_sidecar"]
     manifest["validation_ok"] = stamp["validation_ok"]
     manifest["needs_validation"] = not gate["fresh"]
+    manifest["unvalidated"] = not gate["fresh"]
     manifest["validation_target"] = str(gate["target"])
     manifest["final"] = bool(args.final)
     attach_flow(

@@ -105,6 +105,7 @@ def step_build(outputs: list[str], *, ok: bool) -> str:
             "Do not overwrite it. A later edit is a new name_vN.stl."
         )
     return (
-        "The build script failed. The error field is the exception. "
-        "Fix the script and run photo_part_build again. Do not delete or overwrite an STL or 3MF."
+        "Next: photo_part_validate the STL once the script succeeds. "
+        "The error field is the exception. Fix the script and run photo_part_build again. "
+        "Do not delete or overwrite an STL or 3MF."
     )
