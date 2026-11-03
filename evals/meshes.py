@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import manifold3d
 
-from photopart.parts import _as_mesh, _cube, _cylinder_x, _cylinder_z, _difference, _union_many
+from photopart.parts import _as_mesh, _cube, _cylinder_x, _cylinder_z, _difference, _tube_x, _union_many
 
 
 def thin_l_bracket():
@@ -75,6 +75,76 @@ def blind_tap():
     body = _cylinder_z(8.0, 12.0, 0.0, 0.0, 0.0, segments=48)
     cutter = _cylinder_z(2.5, 8.0, 0.0, 0.0, 4.0, segments=40)
     return _as_mesh(_difference(body, [cutter]))
+
+
+def pip_hinge_fine_tessellation():
+    """T9 print-in-place hinge: 160-segment barrels, Ø3.8 bores, pin inside.
+
+    Five knuckles on a 1.5 mm leaf. Even indexes are solid barrels. Odd
+    indexes are 160-sided tubes with a 1.9 mm bore. A 1.5 mm pin from the
+    other leaf sits in each bore (0.4 mm clearance) and is tied back through
+    the axial gap by a thin rod, so the sleeve and the pin stay two shells.
+    The tube bridge meets the wall outside the bore, leaving the slice round.
+    """
+    sections = 160
+    pin_r = 1.5
+    clearance = 0.4
+    bore_r = pin_r + clearance
+    tube_out = bore_r + 1.15
+    count = 5
+    length = 34.0
+    leaf = 14.0
+    plate_t = 1.5
+    gap = 0.5
+    seg = (length - (count - 1) * gap) / float(count)
+    starts = [0.0]
+    for _ in range(count - 1):
+        starts.append(starts[-1] + seg + gap)
+    plate_gap = 0.35
+    bridge_z = 1.2
+    pins = [_cube(length, leaf, plate_t).translate([0.0, -(leaf + tube_out + plate_gap), -plate_t / 2.0])]
+    sleeves = [_cube(length, leaf, plate_t).translate([0.0, tube_out + plate_gap, -plate_t / 2.0])]
+    for index, start in enumerate(starts):
+        if index % 2 == 0:
+            pins.append(_cylinder_x(pin_r, seg, start, 0.0, 0.0, segments=sections))
+            y0 = -(tube_out + plate_gap + 0.4)
+            pins.append(_cube(seg, -pin_r * 0.4 - y0, bridge_z).translate([start, y0, -bridge_z / 2.0]))
+        else:
+            sleeves.append(_tube_x(tube_out, bore_r, seg, start, 0.0, 0.0, segments=sections))
+            # Stay outside the bore so the bridge does not flatten the hole.
+            y0 = bore_r + 0.2
+            y1 = tube_out + plate_gap + leaf
+            sleeves.append(_cube(seg, y1 - y0, bridge_z).translate([start, y0, -bridge_z / 2.0]))
+            # Pin inside this bore, joined to the previous barrel only in the gap.
+            inset = 0.15
+            pins.append(_cylinder_x(pin_r, seg - 2 * inset, start + inset, 0.0, 0.0, segments=sections))
+            rod_r = 0.35
+            rod_x = start - gap + 0.05
+            rod_len = gap - 0.1 + inset
+            pins.append(_cylinder_x(rod_r, rod_len, rod_x, 0.0, 0.0, segments=24))
+    leaf_a = manifold3d.Manifold.batch_boolean(pins, manifold3d.OpType.Add)
+    leaf_b = manifold3d.Manifold.batch_boolean(sleeves, manifold3d.OpType.Add)
+    combined = manifold3d.Manifold.batch_boolean([leaf_a, leaf_b], manifold3d.OpType.Add)
+    return _as_mesh(combined)
+
+
+def staircase_square_hole():
+    """A plate whose only opening is a square hole stepped by 0.5 mm.
+
+    The steps inflate the perimeter the way a snapped circle does, but the
+    outline is not a circle. Roundness must reject it.
+    """
+    plate = _cube(20.0, 20.0, 4.0)
+    # 6 mm square with 0.5 mm corner steps, through the plate.
+    core = _cube(5.0, 5.0, 6.0).translate((7.5, 7.5, -1.0))
+    steps = [
+        _cube(6.0, 4.0, 6.0).translate((7.0, 8.0, -1.0)),
+        _cube(4.0, 6.0, 6.0).translate((8.0, 7.0, -1.0)),
+        _cube(5.5, 4.5, 6.0).translate((7.25, 7.75, -1.0)),
+        _cube(4.5, 5.5, 6.0).translate((7.75, 7.25, -1.0)),
+    ]
+    cutter = manifold3d.Manifold.batch_boolean([core, *steps], manifold3d.OpType.Add)
+    return _as_mesh(manifold3d.Manifold.batch_boolean([plate, cutter], manifold3d.OpType.Subtract))
 
 
 def washer_mesh():

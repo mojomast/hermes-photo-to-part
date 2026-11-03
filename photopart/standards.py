@@ -2,9 +2,9 @@
 
 ``check_standard`` never edits the spec. A row is included only when the
 number is the nominal value published in the cited standard or catalogue.
-ISO 273 clearance holes are omitted: the draft figures were not checked
-against the standard text. Catalogue M3 flange diameters are omitted for
-the same reason. ISO 4162 has no M3 row.
+Catalogue M3 flange diameters are omitted: they were not checked against
+a standard. ISO 4162 has no M3 row. Clearance holes use only the ISO 273
+rows cited above.
 
 Sources
 -------
@@ -21,6 +21,10 @@ Sources
   (the sizes cited from the standard sample). Across-flats is omitted
   because editions disagree (M5 is 7 mm or 8 mm).
   https://cdn.standards.iteh.ai/samples/56451/10d71b8d8c634e9790d4ddcf4c296cc2/ISO-4162-2012.pdf
+* ISO 273:1979 clearance holes, fine / medium / coarse, for the rows that
+  are readable in the official preview (M2.5, M3, M4, M5, M6, M8). Other
+  sizes are omitted rather than copied from a secondary chart.
+  https://cdn.standards.iteh.ai/samples/4183/1a8db2e6de054d2e9bed7d40be64d6e1/ISO-273-1979.pdf
 * ASME B1.1 UNC basic major diameter and pitch.
   https://en.wikipedia.org/wiki/Unified_Thread_Standard
 * 608 deep-groove ball bearing, 8 × 22 × 7 mm (ISO 15 dimensions; SKF 608).
@@ -117,6 +121,36 @@ _BEARING_608 = {
     "source": "ISO 15 / SKF 608",
 }
 
+# ISO 273:1979 fine / medium / coarse, millimetres. Only rows read from the
+# preview PDF are listed. See the module docstring for the citation.
+_CLEARANCE: dict[str, tuple[float, float, float]] = {
+    "M2.5": (2.7, 2.9, 3.1),
+    "M3": (3.2, 3.4, 3.6),
+    "M4": (4.3, 4.5, 4.8),
+    "M5": (5.3, 5.5, 5.8),
+    "M6": (6.4, 6.6, 7.0),
+    "M8": (8.4, 9.0, 10.0),
+}
+
+_FASTENER_NOUN = re.compile(r"\b(screws?|bolts?|nuts?|washers?|standoffs?)\b", re.IGNORECASE)
+_DECORATIVE = re.compile(r"\b(handles?|pulls?|knobs?|rosettes?)\b", re.IGNORECASE)
+_CLEARANCE_BEFORE = re.compile(
+    r"(?:mounts?\s+with|mounting|takes|accepts|fits|used\s+with|for)\s+(?:an?\s+|a\s+)?$",
+    re.IGNORECASE,
+)
+_ROLE_WORDS = {
+    "screw": "fastener",
+    "bolt": "fastener",
+    "nut": "fastener",
+    "washer": "fastener",
+    "standoff": "fastener",
+    "thread": "thread",
+    "clearance_hole": "clearance",
+    "clearance": "clearance",
+    "tapped_hole": "clearance",
+    "hole": "clearance",
+}
+
 _METRIC_RE = re.compile(r"\bM\s*(\d+(?:\.\d+)?)\b", re.IGNORECASE)
 _NUMBER_RE = re.compile(r"#\s*(\d+)\s*[-–]\s*(\d+)\b")
 _FRACTION_RE = re.compile(r"\b(1/4|5/16|3/8|1/2)\s*[-–]\s*(\d+)\b")
@@ -124,27 +158,49 @@ _BEARING_RE = re.compile(r"\b608\b")
 
 
 def check_standard(spec, report=None) -> dict:
-    """Warn when a named standard disagrees with measured sizes.
+    """Warn when a named standard disagrees with a measured feature.
 
-    ``spec`` is not modified. Suggestions name the standard value and its
-    source. Nothing is written back onto the spec.
+    A designation is checked only when it is tied to a fastener role: a
+    ``fasteners`` entry, a tagged thread, or a name that is itself a screw,
+    bolt, nut, washer, or standoff. "Mounts with an M5 screw" is a clearance
+    hole and is compared with ISO 273, never with the part envelope. A size
+    outside 0.5× nominal to 2× the largest cited dimension is skipped, not
+    warned. ``spec`` is not modified.
     """
     text = _spec_text(spec)
     report = report if isinstance(report, dict) else {}
     warnings: list[dict] = []
     suggestions: list[str] = []
-    checked: list[str] = []
-    flange_named = "flange" in text.lower()
-    for designation in _designations(text):
-        if designation in checked:
+    checked: list[dict] = []
+    seen: set[str] = set()
+    flange_named = "flange" in text.lower() or _number(report.get("flange_mm")) is not None
+    for designation, role in _bindings(spec, text, report):
+        if designation in seen:
             continue
-        checked.append(designation)
+        seen.add(designation)
         if designation in _METRIC:
-            _check_metric(designation, _METRIC[designation], report, flange_named, warnings, suggestions)
-        elif designation in _INCH:
-            _check_inch(designation, _INCH[designation], report, warnings, suggestions)
+            _check_metric(
+                designation,
+                _METRIC[designation],
+                report,
+                flange_named,
+                role,
+                warnings,
+                suggestions,
+                checked,
+            )
+        elif designation in _INCH and role == "fastener":
+            _check_inch(designation, _INCH[designation], report, warnings, suggestions, checked)
         elif designation == "608":
+            before = len(warnings)
             _check_bearing(report, warnings, suggestions)
+            checked.append(
+                {
+                    "designation": "608",
+                    "role": "bearing",
+                    "status": "warn" if len(warnings) > before else "ok",
+                }
+            )
     return {
         "warnings": warnings,
         "suggestions": suggestions,
@@ -153,21 +209,47 @@ def check_standard(spec, report=None) -> dict:
     }
 
 
-def _check_metric(name: str, row: dict, report: dict, flange_named: bool, warnings: list, suggestions: list) -> None:
-    pitch = _number(report.get("pitch_mm"))
-    if pitch is not None:
-        _compare(
-            warnings,
-            suggestions,
-            name=name,
-            label="coarse pitch",
-            standard=float(row["pitch_mm"]),
-            measured=pitch,
-            source="ISO 261",
-        )
+def _check_metric(
+    name: str,
+    row: dict,
+    report: dict,
+    flange_named: bool,
+    role: str,
+    warnings: list,
+    suggestions: list,
+    checked: list,
+) -> None:
+    if role == "clearance":
+        _check_clearance(name, row, report, warnings, suggestions, checked)
+        return
+    if role in {"fastener", "thread"}:
+        pitch = _number(report.get("pitch_mm"))
+        if pitch is not None:
+            _compare(
+                warnings,
+                suggestions,
+                name=name,
+                label="coarse pitch",
+                standard=float(row["pitch_mm"]),
+                measured=pitch,
+                source="ISO 261",
+            )
+    if role != "fastener":
+        checked.append({"designation": name, "role": role, "status": "ok" if not warnings else "warn"})
+        return
     span = _cross_section(report)
     if span is None:
         _suggest_row(suggestions, name, row)
+        checked.append({"designation": name, "role": role, "status": "ok"})
+        return
+    largest, largest_label = _largest_dim(name, row)
+    nominal = float(row["major_mm"])
+    if span < 0.5 * nominal - 1e-9 or span > 2.0 * largest + 1e-9:
+        message = f"size {span:.1f} mm is not plausible for {name} ({largest_label} max {largest:.1f})"
+        checked.append({"designation": name, "role": role, "status": "skipped", "message": message})
+        return
+    if flange_named and row.get("flange"):
+        _check_flange(name, row, span, warnings, suggestions, checked)
         return
     options = [("major diameter", float(row["major_mm"]), "ISO 261")]
     hex_head = row.get("hex") or {}
@@ -176,12 +258,8 @@ def _check_metric(name: str, row: dict, report: dict, flange_named: bool, warnin
     socket = row.get("socket") or {}
     if socket:
         options.append(("socket head diameter", float(socket["dk_mm"]), str(socket["source"])))
-    flange = row.get("flange") or {}
-    if flange and (flange_named or name != "M3"):
-        options.append(("flange diameter", float(flange["dc_max_mm"]), str(flange["source"])))
-    closest = min(options, key=lambda item: abs(span - item[1]))
-    label, standard, source = closest
-    if abs(span - standard) > _tolerance(standard):
+    label, standard, source = min(options, key=lambda item: abs(span - item[1]))
+    if not _within_band(label, standard, span):
         extra = ""
         if flange_named and name == "M3":
             extra = " ISO 4162 flange bolts start at M5; no M3 flange diameter is applied."
@@ -199,11 +277,110 @@ def _check_metric(name: str, row: dict, report: dict, flange_named: bool, warnin
             }
         )
         suggestions.append(warnings[-1]["suggest"] + " The spec was not changed.")
+        checked.append({"designation": name, "role": role, "status": "warn", "message": warnings[-1]["message"]})
     else:
         _suggest_row(suggestions, name, row)
+        checked.append({"designation": name, "role": role, "status": "ok"})
 
 
-def _check_inch(name: str, row: dict, report: dict, warnings: list, suggestions: list) -> None:
+def _check_flange(name: str, row: dict, span: float, warnings: list, suggestions: list, checked: list) -> None:
+    """A named flange is compared with dc max, not with the nearest hex size."""
+    flange = row["flange"]
+    dc = float(flange["dc_max_mm"])
+    source = str(flange["source"])
+    lower = dc - max(0.3, 0.08 * dc)
+    upper = dc + 0.3
+    if lower - 1e-9 <= span <= upper + 1e-9:
+        _suggest_row(suggestions, name, row)
+        checked.append({"designation": name, "role": "fastener", "status": "ok", "feature": "flange"})
+        return
+    message = (
+        f"{name}: measured flange {span:.1f} mm is outside {lower:.1f}–{upper:.1f} mm "
+        f"(dc max {dc:.1f} mm, {source})."
+    )
+    warnings.append(
+        {
+            "designation": name,
+            "message": message,
+            "suggest": f"flange diameter {dc:.4g} mm ({source})",
+            "source": source,
+            "standard_mm": dc,
+            "measured_mm": span,
+        }
+    )
+    suggestions.append(warnings[-1]["suggest"] + " The spec was not changed.")
+    checked.append({"designation": name, "role": "fastener", "status": "warn", "message": message})
+
+
+def _check_clearance(name: str, row: dict, report: dict, warnings: list, suggestions: list, checked: list) -> None:
+    """Compare bore diameters with ISO 273. The part envelope is not a fastener."""
+    classes = _CLEARANCE.get(name)
+    largest, largest_label = _largest_dim(name, row)
+    nominal = float(row["major_mm"])
+    bores = _bore_diameters(report)
+    plausible = [item for item in bores if 0.5 * nominal - 1e-9 <= item <= 2.0 * largest + 1e-9]
+    if classes is None:
+        checked.append(
+            {
+                "designation": name,
+                "role": "clearance",
+                "status": "skipped",
+                "message": f"no ISO 273 row verified for {name}",
+            }
+        )
+        return
+    if not plausible:
+        span = _cross_section(report)
+        shown = span if span is not None else nominal
+        message = (
+            f"size {shown:.1f} mm is not plausible for {name} ({largest_label} max {largest:.1f})"
+            if span is not None and (span < 0.5 * nominal or span > 2.0 * largest)
+            else f"no bore diameter to compare with ISO 273 for {name}"
+        )
+        checked.append({"designation": name, "role": "clearance", "status": "skipped", "message": message})
+        return
+    fine, medium, coarse = classes
+    matched = [
+        item
+        for item in plausible
+        if any(abs(item - standard) <= 0.15 for standard in classes)
+    ]
+    if matched:
+        suggestions.append(
+            f"{name}: clearance hole {medium:.4g} mm medium (ISO 273 fine {fine:.4g} / coarse {coarse:.4g}). "
+            "The spec was not changed."
+        )
+        checked.append(
+            {
+                "designation": name,
+                "role": "clearance",
+                "status": "ok",
+                "standard_mm": medium,
+                "measured_mm": matched[0],
+                "source": "ISO 273",
+            }
+        )
+        return
+    measured = plausible[0]
+    message = (
+        f"{name}: bore {measured:.2f} mm is outside ISO 273 "
+        f"fine {fine:.1f} / medium {medium:.1f} / coarse {coarse:.1f} mm."
+    )
+    warnings.append(
+        {
+            "designation": name,
+            "message": message,
+            "suggest": f"clearance hole {medium:.4g} mm medium (ISO 273)",
+            "source": "ISO 273",
+            "standard_mm": medium,
+            "measured_mm": measured,
+        }
+    )
+    suggestions.append(warnings[-1]["suggest"] + " The spec was not changed.")
+    checked.append({"designation": name, "role": "clearance", "status": "warn", "message": message})
+
+
+def _check_inch(name: str, row: dict, report: dict, warnings: list, suggestions: list, checked: list) -> None:
     pitch = _number(report.get("pitch_mm"))
     if pitch is not None:
         _compare(
@@ -217,15 +394,31 @@ def _check_inch(name: str, row: dict, report: dict, warnings: list, suggestions:
         )
     span = _cross_section(report)
     if span is None:
+        checked.append({"designation": name, "role": "fastener", "status": "ok"})
         return
+    nominal = float(row["major_mm"])
+    if span < 0.5 * nominal or span > 2.0 * nominal:
+        checked.append(
+            {
+                "designation": name,
+                "role": "fastener",
+                "status": "skipped",
+                "message": f"size {span:.1f} mm is not plausible for {name} (major max {nominal:.1f})",
+            }
+        )
+        return
+    before = len(warnings)
     _compare(
         warnings,
         suggestions,
         name=name,
         label="basic major diameter",
-        standard=float(row["major_mm"]),
+        standard=nominal,
         measured=span,
         source="ASME B1.1",
+    )
+    checked.append(
+        {"designation": name, "role": "fastener", "status": "warn" if len(warnings) > before else "ok"}
     )
 
 
@@ -293,6 +486,193 @@ def _suggest_row(suggestions: list, name: str, row: dict) -> None:
 
 def _tolerance(standard: float) -> float:
     return max(0.3, 0.08 * abs(float(standard)))
+
+
+def _within_band(label: str, standard: float, measured: float) -> bool:
+    """Major diameter uses an ISO 965 6g-style band. Other dims use the fallback."""
+    if label == "major diameter":
+        delta = measured - standard
+        return -0.25 - 1e-9 <= delta <= 0.05 + 1e-9
+    return abs(measured - standard) <= _tolerance(standard)
+
+
+def _largest_dim(name: str, row: dict) -> tuple[float, str]:
+    options = [("major", float(row["major_mm"]))]
+    for key, label, field in (
+        ("hex", "hex", "s_mm"),
+        ("socket", "socket", "dk_mm"),
+        ("nut", "nut", "s_mm"),
+        ("flange", "flange", "dc_max_mm"),
+    ):
+        block = row.get(key) or {}
+        if block.get(field) is not None:
+            options.append((label, float(block[field])))
+    classes = _CLEARANCE.get(name)
+    if classes:
+        options.append(("clearance", float(max(classes))))
+    label, value = max(options, key=lambda item: item[1])
+    return value, label
+
+
+def _bore_diameters(report: dict) -> list[float]:
+    found: list[float] = []
+    for key in ("holes", "bores"):
+        raw = report.get(key)
+        if isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, dict):
+                    number = _number(item.get("diameter") or item.get("diameter_mm"))
+                else:
+                    number = _number(item)
+                if number is not None and number > 0:
+                    found.append(number)
+    for row in report.get("spec") or []:
+        if not isinstance(row, dict):
+            continue
+        bores = row.get("bores")
+        if isinstance(bores, list):
+            for item in bores:
+                if isinstance(item, dict):
+                    number = _number(item.get("diameter"))
+                    if number is not None and number > 0:
+                        found.append(number)
+    return found
+
+
+def _bindings(spec, text: str, report: dict) -> list[tuple[str, str]]:
+    declared = _declared_fasteners(spec)
+    if declared:
+        found = list(declared)
+    else:
+        found = []
+        decorative = _is_decorative(spec, text)
+        for match in _METRIC_RE.finditer(text):
+            key = "M" + match.group(1)
+            if key not in _METRIC:
+                continue
+            role = _role_at(spec, text, match, key, decorative, report)
+            if role and (key, role) not in found:
+                found.append((key, role))
+        for match in _NUMBER_RE.finditer(text):
+            key = f"#{match.group(1)}-{match.group(2)}"
+            if key in _INCH and _part_is_fastener(spec):
+                found.append((key, "fastener"))
+        for match in _FRACTION_RE.finditer(text):
+            key = f"{match.group(1)}-{match.group(2)}"
+            if key in _INCH and _part_is_fastener(spec):
+                found.append((key, "fastener"))
+    if _BEARING_RE.search(text) and not any(item[0] == "608" for item in found):
+        found.append(("608", "bearing"))
+    return found
+
+
+def _declared_fasteners(spec) -> list[tuple[str, str]]:
+    if not isinstance(spec, dict):
+        return []
+    raw = spec.get("fasteners")
+    if not isinstance(raw, list):
+        return []
+    found = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        key = _canonical(str(item.get("designation") or ""))
+        if not key:
+            continue
+        role = _ROLE_WORDS.get(str(item.get("role") or "screw").lower().replace("-", "_"), "fastener")
+        found.append((key, role))
+    return found
+
+
+def _canonical(text: str) -> str | None:
+    match = _METRIC_RE.search(text)
+    if match:
+        key = "M" + match.group(1)
+        if key in _METRIC:
+            return key
+    match = _NUMBER_RE.search(text)
+    if match:
+        key = f"#{match.group(1)}-{match.group(2)}"
+        if key in _INCH:
+            return key
+    return None
+
+
+def _role_at(spec, text: str, match: re.Match, key: str, decorative: bool, report: dict) -> str | None:
+    before = text[max(0, match.start() - 48) : match.start()]
+    after = text[match.end() : match.end() + 24]
+    if _CLEARANCE_BEFORE.search(before) or re.match(r"\s+mounting\b", after, re.IGNORECASE):
+        return "clearance"
+    if decorative and re.search(r"\b(screw|bolt)\b", before + after, re.IGNORECASE):
+        return "clearance"
+    if decorative:
+        return None
+    if _part_is_fastener(spec) or _named_designation(spec, key):
+        return "fastener"
+    if _has_thread(spec, report):
+        return "thread"
+    return None
+
+
+def _named_designation(spec, key: str) -> bool:
+    if not isinstance(spec, dict):
+        return False
+    value = spec.get("designation")
+    if not isinstance(value, str):
+        return False
+    compact = re.sub(r"\s+", "", value)
+    if re.fullmatch(key, compact, re.IGNORECASE):
+        return True
+    return key.lower() in compact.lower() and bool(_FASTENER_NOUN.search(value)) and not _DECORATIVE.search(value)
+
+
+def _part_is_fastener(spec) -> bool:
+    if isinstance(spec, str):
+        return bool(_FASTENER_NOUN.search(spec)) and not _DECORATIVE.search(spec)
+    if not isinstance(spec, dict):
+        return False
+    for key in ("part", "name", "designation"):
+        value = spec.get(key)
+        if isinstance(value, str) and _FASTENER_NOUN.search(value) and not _DECORATIVE.search(value):
+            return True
+    return False
+
+
+def _is_decorative(spec, text: str) -> bool:
+    if isinstance(spec, dict) and spec.get("decorative") is True:
+        return True
+    blob = text
+    if isinstance(spec, dict):
+        parts = []
+        for key in ("part", "name", "role", "title"):
+            value = spec.get(key)
+            if isinstance(value, str):
+                parts.append(value)
+        if parts:
+            blob = " ".join(parts)
+    return bool(_DECORATIVE.search(blob))
+
+
+def _has_thread(spec, report: dict) -> bool:
+    if isinstance(spec, dict):
+        regions = spec.get("regions") or spec.get("features")
+        if isinstance(regions, list):
+            for item in regions:
+                if isinstance(item, dict) and str(item.get("kind") or "").lower() == "thread":
+                    return True
+                if isinstance(item, str) and "thread" in item.lower():
+                    return True
+    regions = report.get("regions")
+    if isinstance(regions, list) and any(isinstance(item, dict) and item.get("kind") == "thread" for item in regions):
+        return True
+    printable = report.get("printability")
+    if isinstance(printable, dict):
+        if printable.get("auto_feature"):
+            return True
+        regions = printable.get("regions")
+        if isinstance(regions, list) and regions:
+            return True
+    return False
 
 
 def _cross_section(report: dict) -> float | None:

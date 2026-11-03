@@ -614,6 +614,7 @@ def _strap_hinge(params: dict):
     end_radius = _require_positive("end_radius_mm", _number(params, "end_radius_mm", 16.0))
     kind = str(params.get("spiral") or params.get("kind") or "archimedean")
     ends = int(_number(params, "ends", 2))
+    pivot = bool(params.get("pivot"))
     mesh = strap_hinge(
         length=length,
         width=width,
@@ -631,7 +632,10 @@ def _strap_hinge(params: dict):
         "end_radius_mm": end_radius,
         "spiral": kind,
         "ends": ends,
+        "pivot": pivot,
     }
+    if pivot and params.get("knuckles") not in (None, ""):
+        resolved["knuckles"] = int(_number(params, "knuckles", 0))
     return mesh, resolved, 1
 
 

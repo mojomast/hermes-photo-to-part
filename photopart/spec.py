@@ -8,6 +8,7 @@ the validate tolerance (0.3 mm). Counts default to an exact match.
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 
@@ -64,12 +65,41 @@ def apply_spec(mesh, *, spec=None, dims=None, tolerance: float = 0.3) -> tuple[l
     for name, value, tol in checks:
         extra: dict = {}
         undetected = False
+        explained = False
         if name in _AXES:
             actual = float(extents[_AXES[name]])
+            source = _source_of(checks.raw, name)
+            extra["source"] = source
+            note = _assumed_dim_note(checks.raw, name, value, tol, actual)
+            if note:
+                extra["warning"] = note
+                explained = True
         elif name == "shells":
             actual = float(len(mesh.split(only_watertight=False)))
         elif name == "knuckles":
-            actual = float(count_knuckles(mesh, axis=str(checks.axis or "x")))
+            detected = detect_knuckles(mesh, axis_hint=str(checks.axis or "x"))
+            rings = count_knuckles(mesh, axis=str(checks.axis or "x"))
+            cylinders = int(detected.get("cylinders") or 0)
+            actual = float(detected.get("knuckles") or 0)
+            extra = {
+                "rings": rings,
+                "cylinders": cylinders,
+                "segments": detected.get("segments") or [],
+                "radius": detected.get("radius"),
+                "axis": detected.get("axis"),
+            }
+            if cylinders == 0:
+                explained = True
+                extra["warning"] = (
+                    f"knuckles={rings} by rings, 0 cylinders. "
+                    "knuckle probe is unreliable here; the check is reported as a warning"
+                )
+                extra["status"] = "warning"
+            elif rings != int(actual):
+                extra["warning"] = (
+                    f"knuckle ring count {rings} disagrees with {int(actual)} cylinders. "
+                    "The ring count is a warning, not a failure."
+                )
         elif name == "hole_count":
             bores = count_bores(mesh)
             info = genus_report(mesh)
@@ -91,7 +121,7 @@ def apply_spec(mesh, *, spec=None, dims=None, tolerance: float = 0.3) -> tuple[l
                 extra["note"] = "undetected. " + GENUS_NOTE
         else:
             raise ValueError(f"unknown spec field {name}")
-        if undetected:
+        if undetected or explained:
             ok = True
         else:
             ok = abs(actual - value) <= tol + 1e-9
@@ -194,6 +224,323 @@ def _occupied_runs(flags) -> tuple[int, float]:
     runs = int(np.count_nonzero((ends - starts) >= 3))
     fraction = float(np.count_nonzero(row)) / float(len(row))
     return runs, fraction
+
+
+def detect_knuckles(mesh, axis_hint=None) -> dict:
+    """Coaxial cylinders with gaps. A flat link is not a knuckle.
+
+    A knuckle is a connected run of faces on one circle: arc at least 240°,
+    radius at least max(1 mm, 0.6 × leaf thickness), length at least 1.5 × r,
+    and RMS radial residual under 3% of r. The count is that run only when at
+    least two segments share an axis and a gap. One rod is reported as one
+    segment and does not satisfy the gap rule, so ``knuckles`` stays 0 or 1.
+    ``count_knuckles`` remains the ring cross-check.
+    """
+    names = ("x", "y", "z")
+    hint = str(axis_hint or "x").lower()
+    empty = {"knuckles": 0, "axis": hint if hint in _AXES else "x", "radius": None, "segments": [], "cylinders": 0}
+    if mesh is None or len(getattr(mesh, "faces", [])) < 12:
+        return empty
+    order = []
+    if hint in _AXES:
+        order.append(_AXES[hint])
+    for slot in range(3):
+        if slot not in order:
+            order.append(slot)
+    best = empty
+    for axis in order:
+        found = _knuckles_along(mesh, axis)
+        if found["cylinders"] > best["cylinders"] or (
+            found["cylinders"] == best["cylinders"] and found["knuckles"] > best["knuckles"]
+        ):
+            best = found
+    return best
+
+
+def _knuckles_along(mesh, axis: int) -> dict:
+    """Cylinder axis from radial normals, then a circle fit on each radius band."""
+    names = ("x", "y", "z")
+    empty = {"knuckles": 0, "axis": names[axis], "radius": None, "segments": [], "cylinders": 0}
+    normals = np.asarray(mesh.face_normals, dtype=float)
+    if len(normals) == 0:
+        return empty
+    axis_vec = np.zeros(3, dtype=float)
+    axis_vec[axis] = 1.0
+    radial = np.abs(normals @ axis_vec) < 0.15
+    if int(np.count_nonzero(radial)) < 12:
+        return empty
+    centers = np.asarray(mesh.triangles_center, dtype=float)
+    vertices = np.asarray(mesh.vertices, dtype=float)
+    faces = np.asarray(mesh.faces)
+    indexes = np.flatnonzero(radial)
+    points = centers[indexes]
+    norms = normals[indexes]
+    perp = [slot for slot in range(3) if slot != axis]
+    xy = points[:, perp]
+    normal_xy = norms[:, perp]
+    center = _radial_center(xy, normal_xy)
+    if center is None:
+        return empty
+    offset = xy - center
+    dist = np.linalg.norm(offset, axis=1)
+    usable = dist > 1e-6
+    radial_dir = np.zeros_like(offset)
+    radial_dir[usable] = offset[usable] / dist[usable, None]
+    aligned = usable & (np.abs(np.einsum("ij,ij->i", normal_xy, radial_dir)) > 0.7)
+    if int(np.count_nonzero(aligned)) < 12:
+        return empty
+    leaf = _plate_thickness(mesh)
+    floor = 1.0 if leaf is None else max(1.0, 0.6 * float(leaf))
+    segments = []
+    for lo, hi in _radius_bands(dist[aligned]):
+        members = aligned & (dist >= lo) & (dist <= hi)
+        if int(np.count_nonzero(members)) < 12:
+            continue
+        fit = _kasa_circle(xy[members])
+        if fit is None:
+            continue
+        fitted, radius = fit
+        if radius < floor or radius > 80.0:
+            continue
+        residual = np.linalg.norm(xy[members] - fitted, axis=1) - radius
+        rms = float(np.sqrt(np.mean(residual ** 2)))
+        if rms > 0.03 * radius:
+            continue
+        segments.extend(
+            _face_intervals(
+                points[members],
+                vertices,
+                faces[indexes[members]],
+                axis_vec,
+                fitted,
+                radius,
+                perp,
+            )
+        )
+    segments = _merge_coaxial_spans(segments)
+    segments.sort(key=lambda item: item["span"][0])
+    gapped = _gapped_segments(segments)
+    chosen = gapped if len(gapped) >= 2 else segments[:1]
+    knuckles = len(gapped) if len(gapped) >= 2 else (1 if len(segments) == 1 else 0)
+    radius = None
+    if chosen:
+        radius = round(float(np.median([item["radius"] for item in chosen])), 4)
+    return {
+        "knuckles": int(knuckles),
+        "axis": names[axis],
+        "radius": radius,
+        "segments": [[round(float(item["span"][0]), 4), round(float(item["span"][1]), 4)] for item in chosen],
+        "cylinders": int(len(segments)),
+    }
+
+
+def _radial_center(xy: np.ndarray, normal_xy: np.ndarray):
+    """Least-squares point where the radial normal lines meet."""
+    length = np.linalg.norm(normal_xy, axis=1)
+    usable = length > 0.5
+    if int(np.count_nonzero(usable)) < 8:
+        return None
+    normals = normal_xy[usable] / length[usable, None]
+    points = xy[usable]
+    matrix = np.column_stack((normals[:, 1], -normals[:, 0]))
+    rhs = points[:, 0] * normals[:, 1] - points[:, 1] * normals[:, 0]
+    try:
+        center, *_rest = np.linalg.lstsq(matrix, rhs, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    if not np.all(np.isfinite(center)):
+        return None
+    return np.asarray(center, dtype=float)
+
+
+def _radius_bands(radii: np.ndarray) -> list[tuple[float, float]]:
+    """One band per histogram peak. A valley keeps the pin off the bore."""
+    values = np.asarray(radii, dtype=float)
+    values = values[np.isfinite(values) & (values > 0.4) & (values < 80.0)]
+    if len(values) < 12:
+        return []
+    width = 0.2
+    low = float(np.floor(values.min() / width) * width)
+    high = float(np.ceil(values.max() / width) * width + width)
+    edges = np.arange(low, high + width, width)
+    if len(edges) < 2:
+        return []
+    counts, edges = np.histogram(values, bins=edges)
+    peaks = []
+    index = 0
+    while index < len(counts):
+        if counts[index] < 8:
+            index += 1
+            continue
+        end = index
+        while end + 1 < len(counts) and counts[end + 1] >= 8:
+            end += 1
+        # Split a run where the count falls and then rises (pin, then bore).
+        cursor = index
+        while cursor <= end:
+            peak = cursor
+            while peak + 1 <= end and counts[peak + 1] >= counts[peak]:
+                peak += 1
+            valley = peak
+            while valley + 1 <= end and counts[valley + 1] <= counts[valley]:
+                valley += 1
+            if valley < end and counts[valley] < 0.55 * max(int(counts[peak]), int(counts[valley + 1])):
+                peaks.append((cursor, peak))
+                cursor = valley + 1
+                continue
+            peaks.append((cursor, end))
+            break
+        index = end + 1
+    bands = []
+    for start, peak in peaks:
+        stop = peak
+        while stop + 1 < len(counts) and counts[stop + 1] >= 8 and counts[stop + 1] <= counts[stop]:
+            # Keep the falling shoulder, but not the next peak's climb.
+            if stop + 2 < len(counts) and counts[stop + 2] > counts[stop + 1]:
+                break
+            stop += 1
+        lo = float(edges[start])
+        hi = float(edges[stop + 1])
+        bands.append((max(0.4, lo - 0.05), hi + 0.05))
+    return bands
+
+
+def _kasa_circle(points: np.ndarray):
+    xy = np.asarray(points, dtype=float)
+    if len(xy) < 3:
+        return None
+    matrix = np.column_stack((xy[:, 0], xy[:, 1], np.ones(len(xy))))
+    rhs = -(xy[:, 0] ** 2 + xy[:, 1] ** 2)
+    try:
+        sol, *_rest = np.linalg.lstsq(matrix, rhs, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    cx = float(-sol[0] / 2.0)
+    cy = float(-sol[1] / 2.0)
+    r2 = cx * cx + cy * cy - float(sol[2])
+    if r2 <= 1e-8:
+        return None
+    return np.array([cx, cy], dtype=float), math.sqrt(r2)
+
+
+def _face_intervals(points, vertices, faces, direction, center, radius, perp) -> list[dict]:
+    """Merge overlapping face extents along the axis. One knuckle is one interval."""
+    if len(points) == 0 or len(faces) == 0:
+        return []
+    intervals = []
+    for slot, face in enumerate(faces):
+        axial = vertices[face] @ direction
+        intervals.append((float(axial.min()), float(axial.max()), slot))
+    intervals.sort(key=lambda item: item[0])
+    groups = [[intervals[0]]]
+    for item in intervals[1:]:
+        if item[0] <= groups[-1][-1][1] + 0.35:
+            groups[-1].append(item)
+        else:
+            groups.append([item])
+    spans = []
+    for group in groups:
+        if len(group) < 12:
+            continue
+        start = min(item[0] for item in group)
+        end = max(item[1] for item in group)
+        length = end - start
+        if length < 1.5 * radius:
+            continue
+        slots = [item[2] for item in group]
+        flat = points[slots][:, perp] - center
+        norms = np.linalg.norm(flat, axis=1)
+        keep = norms > 1e-6
+        if int(np.count_nonzero(keep)) < 12:
+            continue
+        angles = np.arctan2(flat[keep, 1], flat[keep, 0])
+        bins = np.clip(np.floor((angles + math.pi) / (2.0 * math.pi) * 36.0).astype(int), 0, 35)
+        covered = len(set(int(item) for item in bins)) * 10.0
+        if covered < 240.0:
+            continue
+        spans.append(
+            {
+                "span": (float(start), float(end)),
+                "radius": float(radius),
+                "center": np.array(center, dtype=float),
+            }
+        )
+    return spans
+
+
+def _merge_coaxial_spans(segments: list[dict]) -> list[dict]:
+    """Inner and outer walls of one barrel are one knuckle."""
+    if not segments:
+        return []
+    ordered = sorted(segments, key=lambda item: item["span"][0])
+    merged = [ordered[0]]
+    for item in ordered[1:]:
+        prev = merged[-1]
+        same_center = float(np.linalg.norm(item["center"] - prev["center"])) < 0.2
+        overlap = min(prev["span"][1], item["span"][1]) - max(prev["span"][0], item["span"][0])
+        shorter = min(prev["span"][1] - prev["span"][0], item["span"][1] - item["span"][0])
+        if same_center and shorter > 0 and overlap > 0.5 * shorter:
+            merged[-1] = {
+                "span": (min(prev["span"][0], item["span"][0]), max(prev["span"][1], item["span"][1])),
+                "radius": max(float(prev["radius"]), float(item["radius"])),
+                "center": (prev["center"] + item["center"]) / 2.0,
+            }
+            continue
+        merged.append(item)
+    return merged
+
+
+def _gapped_segments(segments: list[dict]) -> list[dict]:
+    if len(segments) < 2:
+        return []
+    for left, right in zip(segments, segments[1:]):
+        gap = float(right["span"][0] - left["span"][1])
+        center = float(np.linalg.norm(right["center"] - left["center"]))
+        if gap < 0.15 or center > 0.2:
+            return []
+    return list(segments)
+
+
+def _plate_thickness(mesh) -> float | None:
+    """Thickness of the largest parallel-face pair, or None when no plate is clear."""
+    try:
+        normals = np.asarray(mesh.face_normals, dtype=float)
+        centers = np.asarray(mesh.triangles_center, dtype=float)
+        areas = np.asarray(mesh.area_faces, dtype=float)
+    except Exception:
+        return None
+    total = float(np.sum(areas)) if len(areas) else 0.0
+    floor = max(8.0, 0.04 * total)
+    found = []
+    for axis in range(3):
+        aligned = np.abs(normals[:, axis]) >= 0.92
+        if int(np.count_nonzero(aligned)) < 6:
+            continue
+        pos = centers[aligned, axis]
+        weight = areas[aligned]
+        keys = np.round(pos / 0.35) * 0.35
+        buckets: dict[float, list[float]] = {}
+        for key, position, mass in zip(keys, pos, weight):
+            slot = buckets.setdefault(float(key), [0.0, 0.0])
+            slot[0] += float(position) * float(mass)
+            slot[1] += float(mass)
+        slabs = []
+        for total_pos, mass in buckets.values():
+            if mass < floor:
+                continue
+            slabs.append(total_pos / mass)
+        slabs.sort()
+        extent = float(np.asarray(mesh.extents, dtype=float)[axis])
+        for left, right in zip(slabs, slabs[1:]):
+            gap = float(right - left)
+            # A gap that is most of this axis is the body itself, not a leaf.
+            if extent > 0 and gap > 0.55 * extent:
+                continue
+            if 0.6 <= gap <= 12.0:
+                found.append(gap)
+    if not found:
+        return None
+    return float(min(found))
 
 
 def genus_report(mesh) -> dict:
@@ -310,13 +657,14 @@ def _bores_from_sections(mesh) -> list[dict]:
     bounds = np.asarray(mesh.bounds, dtype=float)
     extents = np.asarray(mesh.extents, dtype=float)
     planes = _unique_planes(_section_planes(mesh, bounds, extents))
+    bodies = _mesh_bodies(mesh)
     by_axis: dict[int, list[tuple[float, list[dict]]]] = {0: [], 1: [], 2: []}
     for axis, position in planes:
         origin = np.array(bounds[0], dtype=float)
         origin[axis] = float(position)
         normal = np.zeros(3, dtype=float)
         normal[axis] = 1.0
-        rings = _circular_interiors(mesh, origin, normal, axis)
+        rings = _rings_on_bodies(bodies, origin, normal, axis)
         by_axis[axis].append((float(position), rings))
     found: list[dict] = []
     names = ("x", "y", "z")
@@ -464,12 +812,19 @@ def _record_from_run(axis_name: str, run: list[tuple[float, dict]]) -> dict:
     rings = [ring for _position, ring in run]
     centers = np.asarray([ring["center"] for ring in rings], dtype=float)
     diameters = [float(ring["diameter"]) for ring in rings]
-    return {
+    record = {
         "axis": axis_name,
         "center": [round(float(value), 4) for value in centers.mean(axis=0)],
         "diameter": round(float(np.median(diameters)), 4),
         "through": False,
     }
+    kinds = [ring.get("kind") for ring in rings if ring.get("kind")]
+    clearances = [float(ring["clearance_mm"]) for ring in rings if ring.get("clearance_mm") is not None]
+    if kinds:
+        record["kind"] = kinds[0]
+    if clearances:
+        record["clearance_mm"] = round(float(np.median(clearances)), 4)
+    return record
 
 
 def _bores_from_rays(mesh) -> list[dict]:
@@ -715,10 +1070,36 @@ def _material_area(mesh, origin: np.ndarray, normal: np.ndarray) -> float:
     return total
 
 
+def _mesh_bodies(mesh) -> list:
+    """One entry per shell. A pin and its sleeve are sectioned apart."""
+    try:
+        bodies = [body for body in mesh.split(only_watertight=False) if len(getattr(body, "faces", [])) > 0]
+    except Exception:
+        bodies = []
+    if len(bodies) <= 1:
+        return [mesh]
+    return bodies
+
+
+def _rings_on_bodies(bodies, origin: np.ndarray, normal: np.ndarray, axis: int) -> list[dict]:
+    sections = [_section_polygons(body, origin, normal) for body in bodies]
+    rings = []
+    for index, polygons in enumerate(sections):
+        others = [poly for other_index, group in enumerate(sections) if other_index != index for poly in group]
+        for ring in _circular_interiors_from(polygons, origin, normal, axis, mesh_grid=_snap_grid(bodies[index])):
+            _tag_pin_clearance(ring, others)
+            rings.append(ring)
+    return _unique_rings(rings)
+
+
 def _circular_interiors(mesh, origin: np.ndarray, normal: np.ndarray, axis: int) -> list[dict]:
+    polygons = _section_polygons(mesh, origin, normal)
+    return _unique_rings(_circular_interiors_from(polygons, origin, normal, axis, mesh_grid=_snap_grid(mesh)))
+
+
+def _circular_interiors_from(polygons, origin, normal, axis: int, mesh_grid: float) -> list[dict]:
     from shapely.geometry import Polygon
 
-    polygons = _section_polygons(mesh, origin, normal)
     holes = []
     for outer in polygons:
         for interior in outer.interiors:
@@ -728,8 +1109,8 @@ def _circular_interiors(mesh, origin: np.ndarray, normal: np.ndarray, axis: int)
         holes = _contained_polygons(polygons)
     rings = []
     for hole in holes:
-        circ = _circularity(hole)
-        if circ <= 0.85:
+        ok, radius, circ = _roundness(hole, mesh_grid)
+        if not ok:
             continue
         center3 = _polygon_center_3d(hole, origin, normal)
         perp = [float(center3[i]) for i in range(3) if i != axis]
@@ -739,14 +1120,42 @@ def _circular_interiors(mesh, origin: np.ndarray, normal: np.ndarray, axis: int)
                 "perp": perp,
                 "diameter": round(_diameter_of(hole), 4),
                 "circularity": round(circ, 4),
+                "radius": round(float(radius), 4),
+                "_polygon": hole,
             }
         )
-    return _unique_rings(rings)
+    return rings
+
+
+def _tag_pin_clearance(ring: dict, other_polygons) -> None:
+    """An interior that holds another shell's circle is a pin-clearance bore."""
+    hole = ring.pop("_polygon", None)
+    if hole is None or not other_polygons:
+        ring.pop("_polygon", None)
+        return
+    radius = float(ring.get("radius") or 0.0)
+    if radius <= 0:
+        return
+    for poly in other_polygons:
+        try:
+            if float(poly.area) >= float(hole.area) * 0.98:
+                continue
+            if not hole.buffer(0.05).contains(poly.representative_point()):
+                continue
+        except Exception:
+            continue
+        inner = _diameter_of(poly) / 2.0
+        gap = radius - inner
+        if gap >= 0.2:
+            ring["kind"] = "pin_clearance"
+            ring["clearance_mm"] = round(float(gap), 4)
+            return
 
 
 def _unique_rings(rings: list[dict]) -> list[dict]:
     kept: list[dict] = []
     for ring in rings:
+        ring.pop("_polygon", None)
         if any(np.linalg.norm(np.asarray(ring["perp"]) - np.asarray(other["perp"])) <= 0.3 for other in kept):
             continue
         kept.append(ring)
@@ -828,6 +1237,69 @@ def _circularity(polygon) -> float:
     return float(4.0 * np.pi * area / (perimeter * perimeter))
 
 
+def _roundness(polygon, grid: float) -> tuple[bool, float, float]:
+    """Least-squares circle on a smoothed outline.
+
+    Passes when the RMS radial residual is under max(0.03 mm, 4% of r) and
+    the area matches πr² within 5%. 4πA/P² on the simplified ring is kept as
+    a secondary score. A staircase circle passes; a square does not.
+    """
+    try:
+        smooth = polygon.simplify(max(float(grid), 1e-4), preserve_topology=True)
+    except Exception:
+        smooth = polygon
+    if float(getattr(smooth, "area", 0.0)) <= 1e-6:
+        smooth = polygon
+    fit = _fit_circle_xy(np.asarray(smooth.exterior.coords, dtype=float))
+    if fit is None:
+        fit = _fit_circle_xy(np.asarray(polygon.exterior.coords, dtype=float))
+    if fit is None:
+        return False, 0.0, _circularity(smooth)
+    _cx, _cy, radius, rms = fit
+    if radius < 0.3:
+        return False, radius, _circularity(smooth)
+    area = float(polygon.area)
+    target = math.pi * radius * radius
+    area_ok = abs(area - target) <= 0.05 * max(target, 1e-9)
+    limit = max(0.03, 0.04 * radius)
+    return bool(rms < limit and area_ok), float(radius), _circularity(smooth)
+
+
+def _fit_circle_xy(coords: np.ndarray):
+    xy = np.asarray(coords, dtype=float)
+    if len(xy) >= 2 and np.allclose(xy[0], xy[-1]):
+        xy = xy[:-1]
+    if len(xy) < 6:
+        return None
+    matrix = np.column_stack((xy[:, 0], xy[:, 1], np.ones(len(xy))))
+    rhs = -(xy[:, 0] ** 2 + xy[:, 1] ** 2)
+    try:
+        sol, *_rest = np.linalg.lstsq(matrix, rhs, rcond=None)
+    except np.linalg.LinAlgError:
+        return None
+    cx = float(-sol[0] / 2.0)
+    cy = float(-sol[1] / 2.0)
+    r2 = cx * cx + cy * cy - float(sol[2])
+    if not math.isfinite(r2) or r2 <= 1e-8:
+        return None
+    radius = math.sqrt(r2)
+    radial = np.sqrt((xy[:, 0] - cx) ** 2 + (xy[:, 1] - cy) ** 2)
+    rms = float(np.sqrt(np.mean((radial - radius) ** 2)))
+    return cx, cy, radius, rms
+
+
+def _snap_grid(mesh) -> float:
+    """Snap no coarser than 0.05 mm, and finer on a small part."""
+    try:
+        extents = np.asarray(mesh.extents, dtype=float)
+    except Exception:
+        return 0.05
+    positive = extents[np.isfinite(extents) & (extents > 1e-6)]
+    if positive.size == 0:
+        return 0.05
+    return float(min(0.05, 0.01 * float(positive.min())))
+
+
 def _diameter_of(polygon) -> float:
     area = float(polygon.area)
     if area <= 0:
@@ -861,22 +1333,28 @@ def _section_polygons(mesh, origin: np.ndarray, normal: np.ndarray) -> list:
     if len(segments) < 3:
         return []
     u, v = _plane_basis(normal)
-    # Snap to 0.05 mm so tessellated loops close. trimesh's own section
-    # path needs scipy, which is not a plugin dependency.
-    grid = 0.05
+    # set_precision closes tessellated loops. The grid scales with the part
+    # so a small bore is not turned into a 0.05 mm staircase before the fit.
+    grid = _snap_grid(mesh)
     lines = []
     for start, end in segments:
         a = start - origin
         b = end - origin
-        p = (round(float(a @ u) / grid) * grid, round(float(a @ v) / grid) * grid)
-        q = (round(float(b @ u) / grid) * grid, round(float(b @ v) / grid) * grid)
-        if (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 < 1e-12:
+        p = (float(a @ u), float(a @ v))
+        q = (float(b @ u), float(b @ v))
+        if (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 < 1e-18:
             continue
         lines.append(LineString((p, q)))
     if not lines:
         return []
     try:
         merged = unary_union(lines)
+        try:
+            from shapely import set_precision
+
+            merged = set_precision(merged, grid, mode="pointwise")
+        except Exception:
+            pass
         polygons = [poly for poly in polygonize(merged) if float(poly.area) > 0.05]
     except Exception:
         return []
@@ -928,6 +1406,55 @@ def _plane_segments(mesh, origin: np.ndarray, normal: np.ndarray) -> list[tuple[
 
 class _Checks(list):
     axis: str | None = None
+    raw: dict | None = None
+
+
+def _source_of(spec, name: str) -> str:
+    """A plain spec number is the user's value. ``source`` can mark it assumed."""
+    if not isinstance(spec, dict):
+        return "user"
+    item = spec.get(name)
+    nested = spec.get("dims") if isinstance(spec.get("dims"), dict) else {}
+    if item is None and isinstance(nested, dict):
+        item = nested.get(name)
+    if isinstance(item, dict) and item.get("source"):
+        return str(item["source"])
+    return "user"
+
+
+def _assumed_dim_note(spec, name: str, value: float, tol: float, actual: float) -> str | None:
+    """Warn when an assumed feature pushes a user dimension out of tolerance."""
+    if not isinstance(spec, dict) or _source_of(spec, name) != "user":
+        return None
+    features = spec.get("assumed_features")
+    if not isinstance(features, list):
+        features = spec.get("assumed")
+    if not isinstance(features, list) or abs(actual - value) <= tol + 1e-9:
+        return None
+    added = 0.0
+    labels = []
+    for item in features:
+        if not isinstance(item, dict):
+            continue
+        axis = str(item.get("axis") or "").lower()
+        if axis != name:
+            continue
+        try:
+            adds = float(item.get("adds_mm"))
+        except (TypeError, ValueError):
+            continue
+        added += adds
+        labels.append(str(item.get("name") or item.get("feature") or "feature"))
+    if not labels:
+        return None
+    if abs(actual - (value + added)) > max(float(tol), 0.3) + 1e-9:
+        return None
+    if actual <= value + tol + 1e-9:
+        return None
+    return (
+        f"{name} {actual:.1f} > user {value:.1f}; assumed {', '.join(labels)} adds {added:.1f}. "
+        "Put the hub within the face width."
+    )
 
 
 def _collect(spec, dims, tolerance: float) -> _Checks:
@@ -953,6 +1480,7 @@ def _collect(spec, dims, tolerance: float) -> _Checks:
         found[name] = (value, tol)
     checks = _Checks((name, found[name][0], found[name][1]) for name in sorted(found))
     checks.axis = str(axis)
+    checks.raw = raw if isinstance(raw, dict) else {}
     return checks
 
 

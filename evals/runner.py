@@ -319,15 +319,17 @@ def score_hermes_session(source: str, *, home: Path | None = None) -> dict:
             "tool_calls": 0,
             "plugin_calls": 0,
             "wrong_skill_ids": 0,
+            "skill_id_rewritten": 0,
             "deleted_files": [],
             "minutes": None,
             "leak": False,
             "calls_source": None,
         }
-    scored = score_transcript(text) if text else {
+    scored = score_transcript(text, _calls_log(source, home)) if text else {
         "tool_calls": 0,
         "plugin_calls": 0,
         "wrong_skill_ids": 0,
+        "skill_id_rewritten": 0,
         "deleted_files": [],
         "minutes": None,
         "leak": False,
@@ -346,20 +348,34 @@ def score_hermes_session(source: str, *, home: Path | None = None) -> dict:
     return scored
 
 
-def score_transcript(text: str) -> dict:
+def score_transcript(text: str, calls=None) -> dict:
     """Count tool-call records, mistaken skill_view ids, deletions, leaks, and minutes.
 
     ``tool_calls`` counts session records (JSON tool calls and timestamped
     calls), not mentions in prose. ``plugin_calls`` is the photo_part_* subset.
-    ``wrong_skill_ids`` counts only arguments of ``skill_view(...)``. A sentence
-    that mentions the plugin: form is not a call. ``leak`` is true when the
-    transcript reads this repo's ``evals/`` files or their absolute paths.
+    ``wrong_skill_ids`` counts arguments of ``skill_view(...)`` that were not
+    rewritten. ``calls`` is a ``calls.jsonl`` path or a list of rewrite rows.
+    A ``rewrite_from`` row is ``skill_id_rewritten`` and is left out of
+    ``wrong_skill_ids``. A sentence that mentions the plugin: form is not a
+    call. ``leak`` is true when the transcript reads this repo's ``evals/``
+    files or their absolute paths.
     """
-    wrong = 0
+    views = []
     for match in _SKILL_VIEW.finditer(text):
         skill = match.group(2)
         if skill == _WRONG_SKILL or skill.startswith("plugin:"):
-            wrong += 1
+            views.append(skill)
+    rewrites = _rewrite_rows(calls)
+    if views and rewrites:
+        paired = min(len(views), len(rewrites))
+        rewritten = paired
+        wrong = len(views) - paired
+    elif rewrites:
+        rewritten = len(rewrites)
+        wrong = 0
+    else:
+        rewritten = 0
+        wrong = len(views)
     stamps = _STAMP.findall(text)
     minutes = None
     if len(stamps) >= 2:
@@ -372,10 +388,42 @@ def score_transcript(text: str) -> dict:
         "tool_calls": len(records),
         "plugin_calls": len(plugin),
         "wrong_skill_ids": wrong,
+        "skill_id_rewritten": rewritten,
         "deleted_files": _DELETE.findall(text),
         "minutes": minutes,
         "leak": _text_leaks(text),
     }
+
+
+def _rewrite_rows(calls) -> list[str]:
+    """``rewrite_from`` values from a calls.jsonl path or an in-memory list."""
+    if calls is None:
+        return []
+    if isinstance(calls, (str, Path)):
+        from photopart.sessions import rewrite_ids
+
+        return rewrite_ids(calls)
+    found = []
+    for item in calls:
+        if isinstance(item, str) and item.strip():
+            found.append(item.strip())
+        elif isinstance(item, dict) and item.get("rewrite_from"):
+            found.append(str(item["rewrite_from"]))
+    return found
+
+
+def _calls_log(source: str, home: Path | None) -> Path | None:
+    """Sidecar the hook writes. A missing file leaves the transcript count alone."""
+    candidates = []
+    raw = Path(str(source))
+    if raw.is_file():
+        candidates.append(raw.parent / ".photopart" / "calls.jsonl")
+    if home is not None:
+        candidates.append(Path(home) / ".photopart" / "calls.jsonl")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _answer_name(name: str) -> bool:
@@ -1260,6 +1308,48 @@ def _real_photo() -> dict:
         }
 
 
+def _pip_hinge_fine() -> dict:
+    """160-segment barrels, Ø3.8 pin-clearance bores, five coaxial knuckles.
+
+    Not registered in ``_checks``: ``tasks.json`` has no prompt for it.
+    ``tests/test_v0112.py`` covers the same mesh.
+    """
+    from evals.meshes import pip_hinge_fine_tessellation
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        mesh = pip_hinge_fine_tessellation()
+        path = root / "pip_hinge_v1.stl"
+        mesh.export(path)
+        code, report = run_validate(
+            str(path),
+            spec={"hole_count": 2, "knuckles": 5, "knuckle_axis": "x"},
+        )
+        rows = {item.get("name"): item for item in report.get("spec") or []}
+        bores = (rows.get("hole_count") or {}).get("bores") or []
+        diameters = [float(item.get("diameter") or 0) for item in bores if isinstance(item, dict)]
+        clearances = [float(item.get("clearance_mm") or 0) for item in bores if isinstance(item, dict)]
+        kinds = [item.get("kind") for item in bores if isinstance(item, dict)]
+        knuckles = rows.get("knuckles") or {}
+        passed = (
+            code == 0
+            and rows.get("hole_count", {}).get("actual") == 2
+            and len(diameters) == 2
+            and all(abs(item - 3.8) <= 0.08 for item in diameters)
+            and all(item == "pin_clearance" for item in kinds)
+            and all(abs(item - 0.4) <= 0.05 for item in clearances)
+            and knuckles.get("actual") == 5
+            and int(knuckles.get("cylinders") or 0) >= 2
+        )
+        return {
+            "passed": passed,
+            "tool_calls": 2,
+            "wrong_skill_ids": 0,
+            "deleted_files": [],
+            "detail": None if passed else {"code": code, "spec": report.get("spec"), "failures": report.get("failures")},
+        }
+
+
 def _overlay_low() -> dict:
     from evals.meshes import washer_mesh
 
@@ -1290,8 +1380,9 @@ def _overlay_low() -> dict:
         alignment = manifest.get("alignment") or {}
         passed = (
             alignment.get("confidence") == "low"
-            and manifest.get("overlay_iou") is None
-            and alignment.get("iou") is None
+            and alignment.get("iou_trusted") is False
+            and alignment.get("iou") is not None
+            and manifest.get("overlay_iou") is not None
             and OVERLAY_LOW_STEP in str(manifest.get("next_step"))
         )
         return {

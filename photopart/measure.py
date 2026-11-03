@@ -332,6 +332,7 @@ def measure(payload: dict) -> dict:
         "reference_bbox": _reference_bbox(kind, bbox_pair, reference_px, coin_detect),
         "coin_px": None if coin_detect is None else coin_detect.get("coin_px"),
         "coin_detect": None if coin_detect is None else coin_detect.get("coin_detect"),
+        "coin_ellipse": None if coin_detect is None else coin_detect.get("coin_ellipse"),
         "scale_uncertainty_pct": None if coin_detect is None else coin_detect.get("scale_uncertainty_pct"),
         "px_per_mm": float(px_per_mm),
         "mm_per_px": float(1.0 / px_per_mm),
@@ -399,6 +400,27 @@ def _project_directory(payload: dict) -> Path | None:
     return _accept(Path.cwd())
 
 
+def _stored_homography(payload: dict):
+    """3×3 homography for a TL,TR,BR,BL quad, or None when the quad is absent."""
+    quad = payload.get("quad")
+    if quad is None:
+        return None
+    try:
+        source = _quad(quad)
+        width = float(np.max(source[:, 0]) - np.min(source[:, 0]))
+        height = float(np.max(source[:, 1]) - np.min(source[:, 1]))
+        if width < 2 or height < 2:
+            return None
+        dest = np.array(
+            [[0.0, 0.0], [width, 0.0], [width, height], [0.0, height]],
+            dtype=float,
+        )
+        matrix = homography(source, dest)
+    except (TypeError, ValueError):
+        return None
+    return [[round(float(value), 8) for value in row] for row in np.asarray(matrix, dtype=float)]
+
+
 def _write_last_measure(report: dict, payload: dict) -> Path | None:
     """Remember px/mm and an optional part region, scoped to the project directory."""
     directory = _project_directory(payload)
@@ -414,6 +436,9 @@ def _write_last_measure(report: dict, payload: dict) -> Path | None:
         "image": None if not image else str(Path(str(image)).expanduser().resolve()),
         "angled": bool(report.get("angled")),
         "project": str(directory),
+        "quad": payload.get("quad"),
+        "homography": _stored_homography(payload),
+        "coin_ellipse": report.get("coin_ellipse") or payload.get("coin_ellipse"),
     }
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -620,8 +645,10 @@ def _detect_coin(image: np.ndarray) -> dict | None:
     refined = _round_contour(blurred, min_r, max_r, hough, cv2)
     if refined is None and hough is None:
         return None
+    ellipse = None
     if refined is not None:
-        cx, cy, radius = refined
+        cx, cy, radius = refined[:3]
+        ellipse = refined[3] if len(refined) > 3 else None
         coin_px = radius * 2.0
         method = "hough" if hough is not None else "contour"
         uncertainty = 4.0 if hough is None else max(2.0, abs(hough[2] * 2.0 - coin_px))
@@ -639,6 +666,7 @@ def _detect_coin(image: np.ndarray) -> dict | None:
         "coin_detect": method,
         "scale_uncertainty_pct": float(uncertainty / coin_px * 100.0),
         "hough_px": None if hough is None else float(hough[2] * 2.0),
+        "coin_ellipse": ellipse,
     }
 
 
@@ -675,7 +703,21 @@ def _round_contour(blurred, min_r: int, max_r: int, hough, cv2):
         score = abs(float(radius) - (hough[2] if hough is not None else float(radius))) - circularity * 0.01
         if score < best_score:
             best_score = score
-            best = (float(cx), float(cy), float(radius))
+            ellipse = None
+            if len(contour) >= 5:
+                try:
+                    _center, axes, eangle = cv2.fitEllipse(contour)
+                    major = max(float(axes[0]), float(axes[1]))
+                    minor = min(float(axes[0]), float(axes[1]))
+                    ellipse = {
+                        "major_px": round(major, 3),
+                        "minor_px": round(minor, 3),
+                        "angle_deg": round(float(eangle), 3),
+                        "ratio": round(minor / major, 4) if major else None,
+                    }
+                except cv2.error:
+                    ellipse = None
+            best = (float(cx), float(cy), float(radius), ellipse)
     return best
 
 

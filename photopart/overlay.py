@@ -87,8 +87,9 @@ def paint_overlay(
         )
     iou = None if foreground is None else _iou(placed, foreground)
     alignment = _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=photo_scale)
+    if alignment.get("iou") is not None:
+        iou = alignment["iou"]
     if alignment["confidence"] == "low":
-        iou = None
         unreliable = OVERLAY_LOW_STEP
         note = f"{note} {unreliable}".strip() if note else unreliable
     poses = []
@@ -140,6 +141,7 @@ def paint_auto_views(
     seed: tuple[float, float] | None = None,
     exclude: list | None = None,
     angled: bool = False,
+    measure: dict | None = None,
 ) -> dict:
     """Try front, side, and top. Keep the pose with the best overlap.
 
@@ -152,6 +154,7 @@ def paint_auto_views(
     if not views:
         raise ValueError("overlay auto needs at least one view")
     image = np.array(Image.open(photo).convert("RGB"))
+    image = _rectify_for_measure(image, measure)
     foreground, blob, roi_warnings, roi_expanded = _foreground_for_overlay(
         image, roi=roi, seed=seed, exclude=exclude, hints=True
     )
@@ -205,10 +208,9 @@ def paint_auto_views(
             for row in (chosen, *rest)
         ]
     alignment = _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=photo_scale)
+    if alignment.get("iou") is not None:
+        iou = alignment["iou"]
     if alignment["confidence"] == "low":
-        iou = None
-        for row in poses:
-            row["iou"] = None
         unreliable = OVERLAY_LOW_STEP
         note = f"{note} {unreliable}".strip() if note else unreliable
     warnings = _overlay_warnings(
@@ -297,7 +299,7 @@ def _select_pose(model: np.ndarray, foreground: np.ndarray, image: np.ndarray, r
     iou_metrics = _chamfer_of_placed(iou_pose["placed"], image, roi)
     if chamfer is None:
         iou_pose.update(iou_metrics)
-        return iou_pose
+        return _ecc_pose(iou_pose, foreground, image, roi)
     # A rectangle matches at 180°. When the chamfer scores are that close,
     # keep the pose nearer to 0°, which is what the IoU search already picks.
     iou_px = iou_metrics.get("chamfer_px")
@@ -306,11 +308,11 @@ def _select_pose(model: np.ndarray, foreground: np.ndarray, image: np.ndarray, r
             float(chamfer["rotation_deg"]), bool(chamfer["mirror"])
         ):
             iou_pose.update(iou_metrics)
-            return iou_pose
+            return _ecc_pose(iou_pose, foreground, image, roi)
     if float(chamfer.get("chamfer_norm") or 1.0) <= 0.05 or float(chamfer["iou"]) + 0.08 >= float(iou_pose["iou"]):
-        return chamfer
+        return _ecc_pose(chamfer, foreground, image, roi)
     iou_pose.update(iou_metrics)
-    return iou_pose
+    return _ecc_pose(iou_pose, foreground, image, roi)
 
 
 def _search_chamfer(model: np.ndarray, image: np.ndarray, foreground: np.ndarray, roi) -> dict | None:
@@ -465,12 +467,15 @@ def _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=None) ->
     fit_confidence = None if fit is None else fit.get("fit_confidence")
     overall = segmentation if fit_confidence is None else _lower_confidence(segmentation, fit_confidence)
     iou = None
-    if segmentation != "low" and foreground is not None and placed is not None:
+    if foreground is not None and placed is not None:
         iou = round(float(_iou(placed, foreground)), 4)
+    trusted = segmentation != "low" and iou is not None
     return {
         "chamfer_px": metrics.get("chamfer_px"),
         "chamfer_norm": metrics.get("chamfer_norm"),
         "iou": iou,
+        "iou_trusted": bool(trusted),
+        "iou_trust_reason": None if trusted else gate["reason"],
         "stability": gate["stability"],
         "segmentation_confidence": segmentation,
         "confidence": segmentation,
@@ -820,7 +825,12 @@ def _write_overlay(
     Image.fromarray(diff, mode="RGB").save(diff_destination, format="PNG")
     label = None
     if iou is not None:
-        label = "guide_only" if angled else "measured"
+        if angled:
+            label = "guide_only"
+        elif isinstance(alignment, dict) and alignment.get("iou_trusted") is False:
+            label = "untrusted"
+        else:
+            label = "measured"
     return {
         "overlay_fit": fit,
         "overlay_iou": None if iou is None else round(float(iou), 4),
@@ -1021,28 +1031,219 @@ def grabcut_mask(image: np.ndarray, roi=None, seed=None, iterations: int = 3) ->
     return foreground
 
 
+def _rectify_for_measure(image: np.ndarray, measure: dict | None) -> np.ndarray:
+    """Undo a stored homography, or pre-scale a tilted coin, before the pose search."""
+    if not isinstance(measure, dict):
+        return image
+    matrix = measure.get("homography")
+    if isinstance(matrix, list) and matrix:
+        try:
+            import cv2
+
+            warp = np.asarray(matrix, dtype=np.float32)
+            if warp.shape == (3, 3):
+                height, width = image.shape[:2]
+                return cv2.warpPerspective(image, warp, (width, height))
+        except Exception:
+            return image
+    ellipse = measure.get("coin_ellipse")
+    if isinstance(ellipse, dict):
+        try:
+            ratio = float(ellipse.get("ratio") or 1.0)
+        except (TypeError, ValueError):
+            ratio = 1.0
+        if 0.2 < ratio < 0.95:
+            try:
+                import cv2
+
+                angle = float(ellipse.get("angle_deg") or 0.0)
+                height, width = image.shape[:2]
+                center = (width / 2.0, height / 2.0)
+                rotation = cv2.getRotationMatrix2D(center, angle, 1.0)
+                straight = cv2.warpAffine(image, rotation, (width, height))
+                scale = np.array([[1.0, 0.0, 0.0], [0.0, 1.0 / ratio, 0.0]], dtype=np.float32)
+                return cv2.warpAffine(straight, scale, (width, height))
+            except Exception:
+                return image
+    return image
+
+
+def _ecc_pose(pose: dict, foreground, image, roi) -> dict:
+    """Affine then homography ECC, only when the chamfer is still coarse."""
+    chamfer = pose.get("chamfer_px")
+    placed = pose.get("placed")
+    if chamfer is None or placed is None or float(chamfer) <= 2.0:
+        return pose
+    refined = refine_silhouette(placed, foreground)
+    if refined is None:
+        return pose
+    updated = _chamfer_of_placed(refined, image, roi)
+    new_chamfer = updated.get("chamfer_px")
+    if new_chamfer is None or float(new_chamfer) + 1e-6 >= float(chamfer):
+        return pose
+    pose = dict(pose)
+    pose["placed"] = refined
+    pose["iou"] = float(_iou(refined, foreground))
+    pose["chamfer_px"] = new_chamfer
+    pose["chamfer_norm"] = updated.get("chamfer_norm")
+    pose["note"] = f"{pose.get('note') or ''} ECC refined.".strip()
+    return pose
+
+
+def refine_silhouette(source: np.ndarray, target: np.ndarray) -> np.ndarray | None:
+    """Warp ``source`` onto ``target`` with ECC. Reject a wild affine or homography.
+
+    The affine step runs first. A homography is kept only when its perspective
+    terms stay small and the chamfer to ``target`` improves. Returns None when
+    OpenCV cannot improve the overlap.
+    """
+    try:
+        import cv2
+    except ImportError:
+        return None
+    if source is None or target is None:
+        return None
+    if source.shape != target.shape or int(source.sum()) < 16 or int(target.sum()) < 16:
+        return None
+    src = np.where(source, np.float32(1), np.float32(0))
+    dst = np.where(target, np.float32(1), np.float32(0))
+    src = cv2.GaussianBlur(src, (5, 5), 0)
+    dst = cv2.GaussianBlur(dst, (5, 5), 0)
+    before = _mask_chamfer(source, target)
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 40, 1e-4)
+    best = None
+    best_chamfer = before
+    affine = np.eye(2, 3, dtype=np.float32)
+    try:
+        _cc, affine = cv2.findTransformECC(dst, src, affine, cv2.MOTION_AFFINE, criteria)
+    except cv2.error:
+        affine = None
+    if affine is not None and _warp_is_sane(affine):
+        warped = cv2.warpAffine(
+            np.where(source, np.uint8(255), np.uint8(0)),
+            affine,
+            (source.shape[1], source.shape[0]),
+            flags=cv2.WARP_INVERSE_MAP,
+        )
+        mask = warped > 127
+        chamfer = _mask_chamfer(mask, target)
+        if chamfer + 1e-6 < best_chamfer:
+            best = mask
+            best_chamfer = chamfer
+    homography = np.eye(3, dtype=np.float32)
+    try:
+        _cc, homography = cv2.findTransformECC(dst, src, homography, cv2.MOTION_HOMOGRAPHY, criteria)
+    except cv2.error:
+        homography = None
+    if homography is not None and _warp_is_sane(homography):
+        warped = cv2.warpPerspective(
+            np.where(source, np.uint8(255), np.uint8(0)),
+            homography,
+            (source.shape[1], source.shape[0]),
+            flags=cv2.WARP_INVERSE_MAP,
+        )
+        mask = warped > 127
+        chamfer = _mask_chamfer(mask, target)
+        if chamfer + 1e-6 < best_chamfer:
+            best = mask
+    return best
+
+
+def _warp_is_sane(matrix: np.ndarray) -> bool:
+    warp = np.asarray(matrix, dtype=float)
+    if warp.shape == (2, 3):
+        linear = warp[:, :2]
+    elif warp.shape == (3, 3):
+        if abs(float(warp[2, 0])) > 1e-3 or abs(float(warp[2, 1])) > 1e-3:
+            return False
+        scale = float(warp[2, 2]) if abs(float(warp[2, 2])) > 1e-9 else 1.0
+        linear = warp[:2, :2] / scale
+    else:
+        return False
+    sx = float(np.linalg.norm(linear[:, 0]))
+    sy = float(np.linalg.norm(linear[:, 1]))
+    if sx < 1e-6 or sy < 1e-6:
+        return False
+    if abs(sx - 1.0) > 0.15 or abs(sy - 1.0) > 0.15:
+        return False
+    shear = abs(float(np.dot(linear[:, 0], linear[:, 1])) / (sx * sy))
+    return shear <= 0.1
+
+
+def _mask_chamfer(left: np.ndarray, right: np.ndarray) -> float:
+    distance = _symmetric_contour_distance(left.astype(bool), right.astype(bool))
+    if distance[0] is None:
+        return 1e6
+    return float(distance[0])
+
+
+def _grabcut_component(image, roi, seed, exclude):
+    cut = grabcut_mask(image, roi=roi, seed=seed)
+    if cut is None:
+        return None, None
+    for rect in exclude or []:
+        _zero_rect(cut, rect)
+    if seed is not None:
+        component = _component_at(cut, seed)
+    elif roi is not None:
+        gated = np.zeros_like(cut)
+        _copy_rect(cut, gated, roi)
+        component = _largest_component(gated)
+    else:
+        component = cut
+    if component is None or int(component.sum()) < 16:
+        return None, None
+    box = _bbox(component)
+    blob = None
+    if box is not None:
+        x0, y0, x1, y1 = box
+        blob = {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "source": "grabcut"}
+    return component, blob
+
+
+def _grabcut_with_growth(image, *, roi, seed, exclude):
+    """Re-run GrabCut on a ×1.5 ROI, up to twice, when the mask touches the box."""
+    current = None if roi is None else (float(roi[0]), float(roi[1]), float(roi[2]), float(roi[3]))
+    masks = []
+    chosen = None
+    warnings = []
+    for grows in range(3):
+        component, blob = _grabcut_component(image, current, seed, exclude)
+        if component is None:
+            break
+        masks.append(component)
+        touches = current is not None and _mask_meets_roi_edge(component, current)
+        stable = _mean_pairwise_iou(masks) >= 0.85 or len(masks) == 1
+        chosen = (component, blob, list(warnings), grows > 0)
+        if not touches and stable:
+            break
+        if current is None or grows >= 2:
+            break
+        grown = _grow_roi(current, image.shape, fraction=0.25)
+        if _roi_same(grown, current):
+            warnings.append(
+                "ROI crops the silhouette and meets the image edge, so it cannot expand further. "
+                "The IoU may score only the visible band."
+            )
+            chosen = (component, blob, list(warnings), grows > 0)
+            break
+        current = grown
+        x, y, w, h = current
+        warnings = [
+            "ROI cropped the silhouette (the mask meets the ROI edge). "
+            f"Expanded the ROI to x={x:.0f}, y={y:.0f}, w={w:.0f}, h={h:.0f}."
+        ]
+    if chosen is None or chosen[0] is None:
+        return None
+    return chosen
+
+
 def _foreground_for_overlay(image, *, roi, seed, exclude, hints: bool):
     """Segment the part. A roi or seed tries GrabCut before the colour mask."""
     if hints and (roi is not None or seed is not None):
-        cut = grabcut_mask(image, roi=roi, seed=seed)
-        if cut is not None:
-            for rect in exclude or []:
-                _zero_rect(cut, rect)
-            if seed is not None:
-                component = _component_at(cut, seed)
-            elif roi is not None:
-                gated = np.zeros_like(cut)
-                _copy_rect(cut, gated, roi)
-                component = _largest_component(gated)
-            else:
-                component = cut
-            if component is not None and int(component.sum()) >= 16:
-                box = _bbox(component)
-                blob = None
-                if box is not None:
-                    x0, y0, x1, y1 = box
-                    blob = {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0, "source": "grabcut"}
-                return component, blob, [], False
+        grown = _grabcut_with_growth(image, roi=roi, seed=seed, exclude=exclude)
+        if grown is not None:
+            return grown
     if not hints:
         mask, blob = _foreground_for_score(image, roi=None, seed=None, exclude=None, hints=False)
         return mask, blob, [], False

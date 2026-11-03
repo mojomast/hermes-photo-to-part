@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.12 — 2026-11-03
+
+- Bores are accepted by a least-squares circle fit on a simplified outline, not by 4πA/P² on a snapped staircase. The snap grid is `min(0.05, 0.01 × the smallest extent)` and uses `shapely.set_precision`. Each shell is sliced on its own, so a pin inside a sleeve is a `pin_clearance` bore with `clearance_mm`. A 0.5 mm staircase square is still not a bore.
+- `check_standard` runs only for a fastener role: a `fasteners` entry, a tagged thread, or a part name that is a screw, bolt, nut, washer, or standoff. "Mounts with an M5 screw" is compared with ISO 273 clearance holes (fine/medium/coarse for M2.5–M8, the rows read from the ISO 273:1979 preview), never with the bounding box. A size outside 0.5× nominal to 2× the largest cited dimension is skipped. A named flange is compared with the ISO 4162 dc max, not with the nearest hex. The spec is not edited.
+- `detect_knuckles` counts coaxial cylinders (arc, radius, length, and a gap). `count_knuckles` stays a warning when it disagrees. Zero cylinders is a warning, not a failure, and the strap-hinge template does not add a knuckle check unless `pivot` is true.
+- Thread and knurl detection from the mesh is the source of truth when no sidecar and no face tags are present. The crest gate stays 0.12 mm: an M3 thread unioned with a hex head measures under 0.15 mm. Tags already on the mesh still exclude those faces. The sidecar is a cache keyed by `mesh_sha256`. A copied screw without a sidecar is not a thin-wall warning. A thin flange beside a thread still warns. `tags_source` is `sidecar`, `3mf`, `detected`, or `none`.
+- 3MF export can carry `photopart:regions` metadata and a `photopart-thread` triangle set. Those are read before the sidecar.
+- Overlay fit IoU is always reported. `iou_trusted` is false, with the gate reason, when segmentation is low. GrabCut grows the ROI by ×1.5 up to twice when the mask touches the box. ECC may refine a coarse chamfer. Elevation views at 30° and 60° are searched after the orthographic views and listed only when one of them wins. `last_measure.json` stores a quad homography and a coin ellipse.
+- A user dimension that an assumed feature pushes out of tolerance is a warning (`z 23.0 > user 20.0; assumed hub boss adds 3.0`) and does not fail when the addition explains the gap.
+- Hook rewrites of a skill id (`rewrite_from` in `.photopart/calls.jsonl`) count as `skill_id_rewritten`, not `wrong_skill_ids`.
+- Plugin tools are called through Hermes `tool_call` (`calls: [{name, arguments}]`). `photo_part_template` is not a bare tool name. Real-photo runs should be launched detached (`setsid nohup`) and polled.
+
 ## 0.1.11 — 2026-11-03
 
 - `post_tool_call` counts every tool call in a session that has already used this plugin, and `transform_tool_result` adds one budget line at 60%, 80%, and 95% of the cap. The budget uses the larger of that hook count, the Hermes session record, `calls_used`, and this plugin's own counter. A session that has not used the plugin is unchanged. A hook error does not block the other tool.

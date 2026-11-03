@@ -492,3 +492,26 @@ def _parse_timestamp(value) -> float | None:
         except ValueError:
             continue
     return None
+
+
+def rewrite_ids(path) -> list[str]:
+    """Skill ids the pre_tool_call hook rewrote, one per calls.jsonl row."""
+    file = Path(path)
+    if not file.is_file():
+        return []
+    found: list[str] = []
+    try:
+        lines = file.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(item, dict) and item.get("rewrite_from"):
+            found.append(str(item["rewrite_from"]))
+    return found

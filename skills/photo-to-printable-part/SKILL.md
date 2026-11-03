@@ -3,13 +3,16 @@ name: photo-to-printable-part
 description: >-
   skill_view("photo-to-part:photo-to-printable-part"). That string is the
   whole skill id. Do not add a plugin: prefix.
+  Hermes v0.21.7 does not register photo_part_template as a bare tool.
+  Call it through tool_call with calls: [{name: photo_part_template, arguments: {...}}].
+  A direct photo_part_template call does not exist.
   photo-to-part:photo-to-printable-part. Rebuild a physical part as a
   printable STL or 3MF from photos and a few measurements, or turn a messy
   scan into a clean solid. Use for a replacement part, a fit-test print, an
   STL, a 2 mm grid-paper photo, or a scan cleaned into CAD. Call the
   photo_part_* tools. Read next_step. About 40 tool calls in total. Deliver
   as soon as validate passes.
-version: "0.1.11"
+version: "0.1.12"
 author: mojomast
 license: MIT
 compatibility: >-
@@ -24,6 +27,11 @@ metadata:
 ---
 
 # Photo or scan to printable part
+
+Hermes v0.21.7 exposes this plugin's tools only through the `tool_call`
+wrapper. A direct call named `photo_part_template` does not exist. Use
+`tool_call` with `calls: [{name: "photo_part_template", arguments: {...}}]`.
+`skill_view` is separate. Its id is `photo-to-part:photo-to-printable-part`.
 
 skill_view("photo-to-part:photo-to-printable-part")
 

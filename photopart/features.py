@@ -1044,7 +1044,11 @@ def tag_faces(mesh: trimesh.Trimesh, *, thread=None, knurl=None, teeth=None, pat
 
 
 def write_face_tags(mesh: trimesh.Trimesh, stl_path) -> None:
-    """Store face indices and geometric regions beside an STL. STL itself drops them."""
+    """Store face indices and geometric regions beside an STL. STL itself drops them.
+
+    ``mesh_sha256`` is the cache key. A sidecar whose hash does not match the
+    mesh is ignored on load.
+    """
     meta = mesh.metadata if isinstance(getattr(mesh, "metadata", None), dict) else {}
     tags = meta.get("face_tags")
     payload = {}
@@ -1059,11 +1063,23 @@ def write_face_tags(mesh: trimesh.Trimesh, stl_path) -> None:
         payload["regions"] = regions
     if not any(payload.get(key) for key in ("thread", "knurl", "teeth")) and not payload.get("regions"):
         return
+    mesh_path = Path(stl_path)
+    if mesh_path.is_file():
+        try:
+            from photopart.stamp import mesh_hash
+
+            payload["mesh_sha256"] = mesh_hash(mesh_path)
+        except OSError:
+            pass
     path = Path(str(stl_path) + ".faces.json")
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def load_face_tags(stl_path) -> dict | None:
+    """Face tags from a 3MF hint, then from a sidecar whose hash still matches."""
+    from_3mf = _tags_from_3mf(stl_path)
+    if from_3mf is not None:
+        return from_3mf
     path = Path(str(stl_path) + ".faces.json")
     if not path.is_file():
         return None
@@ -1073,13 +1089,89 @@ def load_face_tags(stl_path) -> dict | None:
         return None
     if not isinstance(loaded, dict):
         return None
+    digest = loaded.get("mesh_sha256")
+    mesh_path = Path(stl_path)
+    if isinstance(digest, str) and digest and mesh_path.is_file():
+        try:
+            from photopart.stamp import mesh_hash
+
+            if mesh_hash(mesh_path) != digest:
+                return None
+        except OSError:
+            return None
     found = {
         key: [int(item) for item in (loaded.get(key) or [])]
         for key in ("thread", "knurl", "teeth")
     }
     regions = loaded.get("regions")
     found["regions"] = list(regions) if isinstance(regions, list) else []
+    found["tags_source"] = "sidecar"
     return found
+
+
+def _tags_from_3mf(stl_path) -> dict | None:
+    """Read photopart metadata and the photopart-thread triangle set from a 3MF."""
+    path = Path(stl_path)
+    candidates = []
+    if path.suffix.lower() == ".3mf":
+        candidates.append(path)
+    else:
+        candidates.append(path.with_suffix(".3mf"))
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        loaded = _read_3mf_tags(candidate)
+        if loaded is not None:
+            return loaded
+    return None
+
+
+def _read_3mf_tags(path: Path) -> dict | None:
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            name = next((item for item in archive.namelist() if item.lower().endswith("3dmodel.model")), None)
+            if name is None:
+                return None
+            root = ET.fromstring(archive.read(name))
+    except (OSError, zipfile.BadZipFile, ET.ParseError):
+        return None
+    regions = None
+    for element in root.iter():
+        if element.tag.endswith("metadata") and element.attrib.get("name") == "photopart:regions":
+            raw = element.text or element.attrib.get("value") or ""
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                regions = parsed
+            elif isinstance(parsed, dict) and isinstance(parsed.get("regions"), list):
+                regions = parsed["regions"]
+    thread_indexes: list[int] = []
+    for element in root.iter():
+        if not element.tag.endswith("triangleset"):
+            continue
+        if element.attrib.get("name") != "photopart-thread":
+            continue
+        for ref in element.iter():
+            if not ref.tag.endswith("ref"):
+                continue
+            try:
+                thread_indexes.append(int(ref.attrib.get("index", "")))
+            except (TypeError, ValueError):
+                continue
+    if regions is None and not thread_indexes:
+        return None
+    return {
+        "thread": thread_indexes,
+        "knurl": [],
+        "teeth": [],
+        "regions": list(regions or []),
+        "tags_source": "3mf",
+    }
 
 
 def _install_tag_export() -> None:
