@@ -37,15 +37,20 @@ def check_printability(
     warnings: list[str] = []
     info: list[str] = []
     raw = _min_wall(mesh, samples)
-    excluded = _excluded_sources(mesh, face_tags)
     auto_regions: list[dict] = []
-    if not excluded and raw is not None and raw < min_wall_mm:
+    # Metadata tags (tag_faces) win over a fresh detect. Detection is the
+    # source of truth only when neither an argument nor the mesh carries tags.
+    stored = face_tags if face_tags is not None else _stored_tags(mesh)
+    if stored is None:
         try:
             auto_regions = detect_periodic_regions(mesh)
         except Exception:
             auto_regions = []
-        if auto_regions:
-            excluded = _faces_in_regions(mesh, auto_regions)
+        excluded = _faces_in_regions(mesh, auto_regions) if auto_regions else set()
+        tags_source = "detected" if auto_regions else "none"
+    else:
+        excluded = _excluded_sources(mesh, stored)
+        tags_source = str(stored.get("tags_source") or "sidecar") if isinstance(stored, dict) else "sidecar"
     p5, thin_fraction = _sdf_wall(mesh, samples, min_wall_mm, excluded)
     wall = p5 if p5 is not None else raw
     overhang_area, overhang_fraction, bed_area = _faces(mesh, overhang_deg)
@@ -99,6 +104,7 @@ def check_printability(
         "info": info,
         "auto_feature": auto_feature,
         "regions": auto_regions,
+        "tags_source": tags_source,
     }
 
 
@@ -114,6 +120,24 @@ def _auto_feature_label(regions: list[dict]) -> str | None:
                 return f"knurl periods={int(periods)}"
             return "knurl"
     return None
+
+
+def _stored_tags(mesh: trimesh.Trimesh) -> dict | None:
+    """Face tags or feature regions already on the mesh, or None."""
+    meta = getattr(mesh, "metadata", None)
+    if not isinstance(meta, dict):
+        return None
+    tags = meta.get("face_tags") if isinstance(meta.get("face_tags"), dict) else None
+    regions = meta.get("feature_regions") if isinstance(meta.get("feature_regions"), list) else None
+    if tags is None and not regions:
+        return None
+    resolved = dict(tags) if tags else {}
+    if regions and not resolved.get("regions"):
+        resolved["regions"] = list(regions)
+    has_indices = any(resolved.get(key) for key in ("thread", "knurl", "teeth"))
+    if not has_indices and not resolved.get("regions"):
+        return None
+    return resolved
 
 
 def _excluded_sources(mesh: trimesh.Trimesh, face_tags: dict | None) -> set[int]:
@@ -394,9 +418,8 @@ def detect_periodic_regions(mesh: trimesh.Trimesh) -> list[dict]:
 
     A thread is a radius that repeats along z with a pitch in 0.35–3 mm and
     shifts phase with angle. A knurl repeats around the axis at least 12
-    times. The crest-to-core step on the M3 helper is about 0.16 mm, so the
-    gate is a peak-to-peak change above 0.12 mm (an ISO M3 coarse tooth is
-    under the 0.2 mm figure measured on a sharp external crest).
+    times. The naked M3 helper crests about 0.16 mm, but an M3 thread unioned
+    with a hex head measures under 0.15 mm, so the gate stays 0.12 mm.
     """
     if mesh is None or len(getattr(mesh, "faces", [])) < 16:
         return []

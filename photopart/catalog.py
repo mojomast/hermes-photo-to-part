@@ -110,7 +110,7 @@ SHAPES: dict[str, dict] = {
         "params": {"width_mm": 6.0, "thickness_mm": 3.0, "turns": 1.25, "end_radius_mm": 18.0, "spiral": "archimedean"},
     },
     "strap_hinge": {
-        "summary": "Straight strap with a spiral scroll on one or both ends. One shell.",
+        "summary": "Straight strap with a spiral scroll on one or both ends. One shell. No knuckle check unless pivot is true.",
         "params": {
             "length_mm": 80.0,
             "width_mm": 8.0,
@@ -119,6 +119,8 @@ SHAPES: dict[str, dict] = {
             "end_radius_mm": 16.0,
             "spiral": "archimedean",
             "ends": 2,
+            "pivot": False,
+            "knuckles": None,
         },
     },
 }

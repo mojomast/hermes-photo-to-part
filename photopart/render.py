@@ -89,6 +89,41 @@ def _ortho_map(view: str, axes: dict[str, str]) -> tuple[tuple[int, float], tupl
     raise ValueError(f"unknown view {view}")
 
 
+def _publish_poses(report: dict) -> dict:
+    """Keep 30° and 60° views in the search, and list them only when one wins.
+
+    The orthographic set stays ``front``, ``side``, and ``top`` otherwise, so
+    a rectangle that prefers an earlier view is not reported as five poses.
+    """
+    winner = report.get("overlay_view") or "front"
+    poses = list(report.get("overlay_poses") or [])
+    if winner in {"front", "side", "top"}:
+        poses = [row for row in poses if row.get("view") in {"front", "side", "top"}]
+        report = dict(report)
+        report["overlay_poses"] = poses
+        report["overlay_top_poses"] = poses[:3]
+    return report
+
+
+def _elevate(vertices: np.ndarray, axes: dict[str, str], degrees: float) -> np.ndarray:
+    """Rotate around the front view's horizontal axis so the camera looks down."""
+    horizontal, _vertical, _depth = _ortho_map("front", axes)
+    axis = np.zeros(3, dtype=float)
+    axis[horizontal[0]] = 1.0
+    theta = math.radians(float(degrees))
+    k = axis / np.linalg.norm(axis)
+    cross = np.array(
+        [
+            [0.0, -k[2], k[1]],
+            [k[2], 0.0, -k[0]],
+            [-k[1], k[0], 0.0],
+        ],
+        dtype=float,
+    )
+    rotation = np.eye(3) + math.sin(theta) * cross + (1.0 - math.cos(theta)) * (cross @ cross)
+    return np.asarray(vertices, dtype=float) @ rotation.T
+
+
 def _project(vertices: np.ndarray, view: str, axes: dict[str, str]) -> tuple[np.ndarray, np.ndarray]:
     if view == "iso":
         xy = np.column_stack(
@@ -534,6 +569,7 @@ def render_views(
     samples: int | None = None,
     length_unit: str = "millimetres",
     unit_meta: dict | None = None,
+    measure: dict | None = None,
 ) -> dict:
     if photo_scale is not None and photo is None:
         raise ValueError("--photo-scale needs --photo")
@@ -600,6 +636,10 @@ def render_views(
             for view_name in ("front", "side", "top"):
                 projected, _depth = _project(vertices, view_name, axes)
                 view_sets.append((view_name, projected, faces))
+            for degrees, name in ((30.0, "elev30"), (60.0, "elev60")):
+                spun = _elevate(vertices, axes, degrees)
+                projected, _depth = _project(spun, "front", axes)
+                view_sets.append((name, projected, faces))
             overlay_report = paint_auto_views(
                 view_sets,
                 photo,
@@ -610,7 +650,9 @@ def render_views(
                 seed=overlay_seed,
                 exclude=overlay_exclude,
                 angled=overlay_angled,
+                measure=measure,
             )
+            overlay_report = _publish_poses(overlay_report)
         else:
             overlay_report = overlay_outline(
                 mesh,
@@ -807,6 +849,7 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         if args.photo:
             photo = resolve_file(args.photo, max_bytes=args.max_bytes, label="photo")
         origin = None if args.overlay_origin is None else _parse_origin(args.overlay_origin)
+        measure_hint = None
         if args.photo and (args.photo_scale is None or args.roi is None or args.seed is None):
             from photopart.measure import load_last_measure
             from photopart.paths import plugin_root
@@ -824,6 +867,9 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
                     args.roi = _roi_text(hint["roi"])
                 if args.seed is None and hint.get("seed"):
                     args.seed = _pair_text(hint["seed"])
+                measure_hint = hint
+            else:
+                measure_hint = None
         roi = None if args.roi is None else _parse_rect(args.roi)
         seed = None if args.seed is None else _parse_pair(args.seed, "--seed")
         exclude = [_parse_rect(item) for item in args.exclude_roi]
@@ -849,6 +895,7 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
             overlay_seed=seed,
             overlay_exclude=exclude,
             overlay_angled=angled,
+            measure=measure_hint,
             up=args.up,
             front_axis=args.front_axis,
             length_unit=meta["length_unit"],

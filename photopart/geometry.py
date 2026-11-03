@@ -190,6 +190,68 @@ def export_3mf(mesh: trimesh.Trimesh, path: Path) -> None:
     snapshot(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
+    _annotate_3mf(path, mesh)
+
+
+def _annotate_3mf(path: Path, mesh: trimesh.Trimesh) -> None:
+    """Add photopart region metadata and a thread triangle set. Geometry is unchanged."""
+    import json
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    meta = mesh.metadata if isinstance(getattr(mesh, "metadata", None), dict) else {}
+    regions = meta.get("feature_regions")
+    tags = meta.get("face_tags") if isinstance(meta.get("face_tags"), dict) else {}
+    thread = []
+    for item in tags.get("thread") or []:
+        try:
+            thread.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    if not regions and not thread:
+        return
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            model_name = next((item for item in names if item.lower().endswith("3dmodel.model")), None)
+            if model_name is None:
+                return
+            blobs = {name: archive.read(name) for name in names}
+    except (OSError, zipfile.BadZipFile):
+        return
+    try:
+        root = ET.fromstring(blobs[model_name])
+    except ET.ParseError:
+        return
+    ns = root.tag.split("}")[0].strip("{") if root.tag.startswith("{") else ""
+    if ns:
+        ET.register_namespace("", ns)
+    if regions:
+        meta_el = ET.Element(f"{{{ns}}}metadata" if ns else "metadata", {"name": "photopart:regions"})
+        meta_el.text = json.dumps(regions, separators=(",", ":"))
+        root.insert(0, meta_el)
+    if thread:
+        ts_ns = "http://schemas.microsoft.com/3dmanufacturing/trianglesets/2021/07"
+        ET.register_namespace("t", ts_ns)
+        sets = ET.Element(f"{{{ts_ns}}}trianglesets")
+        group = ET.SubElement(sets, f"{{{ts_ns}}}triangleset", {"name": "photopart-thread"})
+        for index in thread:
+            ET.SubElement(group, f"{{{ts_ns}}}ref", {"index": str(index)})
+        host = None
+        for element in root.iter():
+            if element.tag.endswith("object"):
+                host = element
+                break
+        if host is None:
+            host = root
+        host.append(sets)
+    blobs[model_name] = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    try:
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, blob in blobs.items():
+                archive.writestr(name, blob)
+    except OSError:
+        return
 
 
 def params_document(params: Mapping[str, float]) -> dict:
