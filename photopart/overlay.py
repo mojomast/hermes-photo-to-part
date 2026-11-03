@@ -161,7 +161,17 @@ def paint_auto_views(
     chosen = None
     found = []
     if foreground is not None:
-        for index, (name, points, faces) in enumerate(views):
+        ortho = []
+        elevated = []
+        for index, item in enumerate(views):
+            if str(item[0]).startswith("elev"):
+                elevated.append((index, item))
+            else:
+                ortho.append((index, item))
+
+        def _consider(index, item) -> None:
+            nonlocal chosen
+            name, points, faces = item
             model, _minimum, _maximum = raster_model(points, faces, photo_scale)
             pose = _select_pose(model, foreground, image, roi)
             row = {
@@ -175,6 +185,13 @@ def paint_auto_views(
             found.append(row)
             if chosen is None or _prefer_pose(pose["iou"], index, chosen["iou"], chosen["index"]):
                 chosen = row
+
+        for index, item in ortho:
+            _consider(index, item)
+        # 30° and 60° views are only worth searching when the orthographic fit is still weak.
+        if chosen is None or float(chosen["iou"]) < 0.72:
+            for index, item in elevated:
+                _consider(index, item)
     poses = []
     if chosen is None:
         name, points, faces = views[0]
@@ -990,12 +1007,34 @@ def _overlay_warnings(iou, blob, *, angled: bool, missed: bool, extra: list | No
 
 
 def grabcut_mask(image: np.ndarray, roi=None, seed=None, iterations: int = 3) -> np.ndarray | None:
-    """OpenCV GrabCut seeded by a rectangle or a point. None if OpenCV is absent."""
+    """OpenCV GrabCut seeded by a rectangle or a point. None if OpenCV is absent.
+
+    Photos longer than 960 px are segmented on that shorter side and the mask
+    is scaled back. The sealed coin scenes are 720 px and stay full size.
+    Iterations are capped at 5.
+    """
     try:
         import cv2
     except ImportError:
         return None
+    # GrabCut draws from OpenCV's process-wide RNG. A fixed seed keeps the
+    # mask stable after earlier tests have used cv2.
+    cv2.setRNGSeed(0)
     height, width = image.shape[:2]
+    long_side = max(height, width)
+    if long_side > 960 and height >= 2 and width >= 2:
+        factor = 960.0 / float(long_side)
+        small_w = max(2, int(round(width * factor)))
+        small_h = max(2, int(round(height * factor)))
+        small = cv2.resize(image, (small_w, small_h), interpolation=cv2.INTER_AREA)
+        small_roi = None if roi is None else tuple(float(value) * factor for value in roi)
+        small_seed = None if seed is None else (float(seed[0]) * factor, float(seed[1]) * factor)
+        cut = grabcut_mask(small, roi=small_roi, seed=small_seed, iterations=iterations)
+        if cut is None:
+            return None
+        full = cv2.resize(cut.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+        return full > 0
+    iterations = max(1, min(5, int(iterations)))
     if roi is not None:
         x, y, w, h = (int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3]))
     elif seed is not None:
@@ -1069,10 +1108,17 @@ def _rectify_for_measure(image: np.ndarray, measure: dict | None) -> np.ndarray:
 
 
 def _ecc_pose(pose: dict, foreground, image, roi) -> dict:
-    """Affine then homography ECC, only when the chamfer is still coarse."""
+    """Affine then homography ECC, only when the chamfer is still coarse.
+
+    A chamfer already inside 2 px, or a normalised chamfer of 0.05 or better,
+    is left as it is. ECC does not move a fit that is already good.
+    """
     chamfer = pose.get("chamfer_px")
     placed = pose.get("placed")
+    norm = pose.get("chamfer_norm")
     if chamfer is None or placed is None or float(chamfer) <= 2.0:
+        return pose
+    if norm is not None and float(norm) <= 0.05:
         return pose
     refined = refine_silhouette(placed, foreground)
     if refined is None:
@@ -1093,9 +1139,11 @@ def _ecc_pose(pose: dict, foreground, image, roi) -> dict:
 def refine_silhouette(source: np.ndarray, target: np.ndarray) -> np.ndarray | None:
     """Warp ``source`` onto ``target`` with ECC. Reject a wild affine or homography.
 
-    The affine step runs first. A homography is kept only when its perspective
-    terms stay small and the chamfer to ``target`` improves. Returns None when
-    OpenCV cannot improve the overlap.
+    The affine step runs first, on a mask no wider than 360 px. A homography
+    is kept only when the affine step is still coarse, its perspective terms
+    stay small, and the chamfer to ``target`` improves. The winning warp is
+    applied at the original resolution. Returns None when OpenCV cannot
+    improve the overlap.
     """
     try:
         import cv2
@@ -1105,13 +1153,20 @@ def refine_silhouette(source: np.ndarray, target: np.ndarray) -> np.ndarray | No
         return None
     if source.shape != target.shape or int(source.sum()) < 16 or int(target.sum()) < 16:
         return None
-    src = np.where(source, np.float32(1), np.float32(0))
-    dst = np.where(target, np.float32(1), np.float32(0))
+    long_side = max(source.shape)
+    limit = 360
+    factor = 1.0 if long_side <= limit else limit / float(long_side)
+    work_src = source if factor == 1.0 else _resize_by(source, factor)
+    work_dst = target if factor == 1.0 else _resize_by(target, factor)
+    src = np.where(work_src, np.float32(1), np.float32(0))
+    dst = np.where(work_dst, np.float32(1), np.float32(0))
     src = cv2.GaussianBlur(src, (5, 5), 0)
     dst = cv2.GaussianBlur(dst, (5, 5), 0)
-    before = _mask_chamfer(source, target)
-    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 40, 1e-4)
-    best = None
+    before = _mask_chamfer(work_src, work_dst)
+    # Twelve iterations is enough for a few degrees. Forty on a full photo dominates render time.
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 12, 1e-3)
+    best_kind = None
+    best_matrix = None
     best_chamfer = before
     affine = np.eye(2, 3, dtype=np.float32)
     try:
@@ -1120,33 +1175,71 @@ def refine_silhouette(source: np.ndarray, target: np.ndarray) -> np.ndarray | No
         affine = None
     if affine is not None and _warp_is_sane(affine):
         warped = cv2.warpAffine(
-            np.where(source, np.uint8(255), np.uint8(0)),
+            np.where(work_src, np.uint8(255), np.uint8(0)),
             affine,
-            (source.shape[1], source.shape[0]),
+            (work_src.shape[1], work_src.shape[0]),
             flags=cv2.WARP_INVERSE_MAP,
         )
         mask = warped > 127
-        chamfer = _mask_chamfer(mask, target)
+        chamfer = _mask_chamfer(mask, work_dst)
         if chamfer + 1e-6 < best_chamfer:
-            best = mask
+            best_kind = "affine"
+            best_matrix = affine
             best_chamfer = chamfer
-    homography = np.eye(3, dtype=np.float32)
+    # Skip the homography when the affine chamfer is already tight.
+    if best_chamfer > 1.5:
+        homography = np.eye(3, dtype=np.float32)
+        try:
+            _cc, homography = cv2.findTransformECC(dst, src, homography, cv2.MOTION_HOMOGRAPHY, criteria)
+        except cv2.error:
+            homography = None
+        if homography is not None and _warp_is_sane(homography):
+            warped = cv2.warpPerspective(
+                np.where(work_src, np.uint8(255), np.uint8(0)),
+                homography,
+                (work_src.shape[1], work_src.shape[0]),
+                flags=cv2.WARP_INVERSE_MAP,
+            )
+            mask = warped > 127
+            chamfer = _mask_chamfer(mask, work_dst)
+            if chamfer + 1e-6 < best_chamfer:
+                best_kind = "homography"
+                best_matrix = homography
+                best_chamfer = chamfer
+    if best_matrix is None:
+        return None
+    full = _apply_ecc(source, best_kind, best_matrix, factor)
+    if full is None:
+        return None
+    if factor == 1.0:
+        return full
+    if _mask_chamfer(full, target) + 1e-6 >= _mask_chamfer(source, target):
+        return None
+    return full
+
+
+def _apply_ecc(source: np.ndarray, kind: str, matrix: np.ndarray, factor: float) -> np.ndarray | None:
+    """Apply a warp estimated on a smaller mask to ``source``."""
     try:
-        _cc, homography = cv2.findTransformECC(dst, src, homography, cv2.MOTION_HOMOGRAPHY, criteria)
-    except cv2.error:
-        homography = None
-    if homography is not None and _warp_is_sane(homography):
-        warped = cv2.warpPerspective(
-            np.where(source, np.uint8(255), np.uint8(0)),
-            homography,
-            (source.shape[1], source.shape[0]),
-            flags=cv2.WARP_INVERSE_MAP,
-        )
-        mask = warped > 127
-        chamfer = _mask_chamfer(mask, target)
-        if chamfer + 1e-6 < best_chamfer:
-            best = mask
-    return best
+        import cv2
+    except ImportError:
+        return None
+    warp = np.asarray(matrix, dtype=np.float32).copy()
+    if factor < 0.999:
+        scale = 1.0 / float(factor)
+        if warp.shape == (2, 3):
+            warp[0, 2] *= scale
+            warp[1, 2] *= scale
+        elif warp.shape == (3, 3):
+            zoom = np.array([[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+            shrink = np.array([[factor, 0.0, 0.0], [0.0, factor, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
+            warp = zoom @ warp @ shrink
+    canvas = np.where(source, np.uint8(255), np.uint8(0))
+    if kind == "affine":
+        warped = cv2.warpAffine(canvas, warp, (source.shape[1], source.shape[0]), flags=cv2.WARP_INVERSE_MAP)
+    else:
+        warped = cv2.warpPerspective(canvas, warp, (source.shape[1], source.shape[0]), flags=cv2.WARP_INVERSE_MAP)
+    return warped > 127
 
 
 def _warp_is_sane(matrix: np.ndarray) -> bool:
@@ -1543,7 +1636,43 @@ def _close(mask: np.ndarray) -> np.ndarray:
     return _erode(_dilate(mask, 1), 1)
 
 
+def _disk_kernel(radius: int):
+    size = int(radius) * 2 + 1
+    kernel = np.zeros((size, size), dtype=np.uint8)
+    center = int(radius)
+    for dy in range(size):
+        for dx in range(size):
+            if (dx - center) ** 2 + (dy - center) ** 2 <= radius * radius + 0.1:
+                kernel[dy, dx] = 1
+    return kernel
+
+
 def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+    if radius <= 0 or not np.any(mask):
+        return mask.copy()
+    try:
+        import cv2
+
+        out = cv2.dilate(mask.astype(np.uint8), _disk_kernel(int(radius)))
+        return out > 0
+    except ImportError:
+        return _dilate_python(mask, radius)
+
+
+def _erode(mask: np.ndarray, radius: int) -> np.ndarray:
+    """Keep pixels whose full neighborhood is set."""
+    if radius <= 0 or not np.any(mask):
+        return mask.copy()
+    try:
+        import cv2
+
+        out = cv2.erode(mask.astype(np.uint8), _disk_kernel(int(radius)))
+        return out > 0
+    except ImportError:
+        return _erode_python(mask, radius)
+
+
+def _dilate_python(mask: np.ndarray, radius: int) -> np.ndarray:
     height, width = mask.shape
     ys, xs = np.nonzero(mask)
     out = np.zeros_like(mask)
@@ -1560,8 +1689,7 @@ def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
     return out
 
 
-def _erode(mask: np.ndarray, radius: int) -> np.ndarray:
-    """Keep pixels whose full neighborhood is set. Walks the mask, not its inverse."""
+def _erode_python(mask: np.ndarray, radius: int) -> np.ndarray:
     out = mask.copy()
     ys, xs = np.nonzero(mask)
     if ys.size == 0:

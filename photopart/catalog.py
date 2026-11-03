@@ -8,7 +8,9 @@ from __future__ import annotations
 from photopart.flow import SKILL_ID
 
 _NOTE = (
-    f'skill_view("{SKILL_ID}"). That is the only skill id. It has no plugin: prefix.\n'
+    f'skill_view("{SKILL_ID}"). That is the only skill id. '
+    "It has no plugin: prefix and no slash. Do not pass it to skills_list.\n"
+    "Shape values go in params, for example params={knuckles: 5}. "
     "Do not open features.py, parts.py, launcher.py, evals/, or tests/. "
     "Check photo_part_template before a custom script. "
     "Do not import build123d or cadquery, and do not install or patch around a missing CAD library. "

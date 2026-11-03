@@ -1,18 +1,19 @@
 ---
 name: photo-to-printable-part
 description: >-
-  skill_view("photo-to-part:photo-to-printable-part"). That string is the
-  whole skill id. Do not add a plugin: prefix.
+  The only skill id is photo-to-part:photo-to-printable-part. Load it with
+  skill_view("photo-to-part:photo-to-printable-part"). Do not add plugin:,
+  a slash, or pass that id to skills_list.
   Hermes v0.21.7 does not register photo_part_template as a bare tool.
   Call it through tool_call with calls: [{name: photo_part_template, arguments: {...}}].
   A direct photo_part_template call does not exist.
-  photo-to-part:photo-to-printable-part. Rebuild a physical part as a
-  printable STL or 3MF from photos and a few measurements, or turn a messy
-  scan into a clean solid. Use for a replacement part, a fit-test print, an
-  STL, a 2 mm grid-paper photo, or a scan cleaned into CAD. Call the
-  photo_part_* tools. Read next_step. About 40 tool calls in total. Deliver
-  as soon as validate passes.
-version: "0.1.12"
+  Shape values belong in params, for example params={knuckles: 5}.
+  Rebuild a physical part as a printable STL or 3MF from photos and a few
+  measurements, or turn a messy scan into a clean solid. Use for a replacement
+  part, a fit-test print, an STL, a 2 mm grid-paper photo, or a scan cleaned
+  into CAD. Call the photo_part_* tools. Read next_step. About 40 tool calls
+  in total. Deliver as soon as validate passes.
+version: "0.1.13"
 author: mojomast
 license: MIT
 compatibility: >-
@@ -37,11 +38,17 @@ skill_view("photo-to-part:photo-to-printable-part")
 
 The skill id is exactly `photo-to-part:photo-to-printable-part`. Load that
 exact id with `skill_view("photo-to-part:photo-to-printable-part")`. Copy it
-exactly. It has no plugin: prefix.
+exactly. It has no `plugin:` prefix and no slash. Do not pass it to
+`skills_list`. `photo-to-printable-part` alone is not the id.
 `plugin:photo-to-part:photo-to-printable-part` is not a skill name. A `plugin:`
 prefix in Hermes docs is a placeholder, not part of this id. Hermes has no
 alias that registers that string: a skill name cannot contain a colon. Never
-pass a `plugin:` id to `skill_view`.
+pass a `plugin:` id, a slash form, or the bare name to `skill_view` or
+`skills_list`.
+
+Shape values belong in `params`. `photo_part_template` with `knuckles: 5`
+next to `shape` is moved into `params`. An unknown name is an error. Do not
+leave `knuckles` outside `params` and accept the 4-knuckle default.
 
 trimesh and manifold3d are already installed. Do not search for them, do not
 pip install them, and do not run sudo apt. Do not search for OpenSCAD or

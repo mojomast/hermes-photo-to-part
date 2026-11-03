@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from photopart.spec import count_bores, section_areas_mm2
+from photopart.spec import openings, section_areas_mm2
 
 
 def mesh_facts(mesh) -> dict:
@@ -31,9 +31,11 @@ def mesh_facts(mesh) -> dict:
                 "volume": volume,
             }
         )
+    found = openings(mesh)
     return {
         "bodies": bodies,
-        "bores": count_bores(mesh),
+        "bores": found["bores"],
+        "recesses": found["recesses"],
         "sections_mm2": section_areas_mm2(mesh),
     }
 

@@ -101,7 +101,9 @@ def apply_spec(mesh, *, spec=None, dims=None, tolerance: float = 0.3) -> tuple[l
                     "The ring count is a warning, not a failure."
                 )
         elif name == "hole_count":
-            bores = count_bores(mesh)
+            found = openings(mesh)
+            bores = found["bores"]
+            recesses = found["recesses"]
             info = genus_report(mesh)
             actual = float(len(bores))
             genus = info.get("genus")
@@ -111,6 +113,12 @@ def apply_spec(mesh, *, spec=None, dims=None, tolerance: float = 0.3) -> tuple[l
                 "genus_reliable": bool(info.get("reliable")),
                 "note": GENUS_NOTE,
             }
+            if recesses:
+                extra["recesses"] = recesses
+                extra["recess_note"] = (
+                    f"{len(recesses)} shallow dish(es) or recess(es) are not bores. "
+                    "Do not add them to hole_count."
+                )
             if info.get("reason") and not info.get("reliable"):
                 extra["genus_reason"] = info["reason"]
             # Zero bores plus a positive genus, or a genus we cannot trust,
@@ -626,15 +634,45 @@ def count_holes(mesh) -> int:
     return len(count_bores(mesh))
 
 
+# A blind opening shallower than this fraction of its diameter is a recess.
+# A 23.5 mm dish a couple of millimetres deep fails it. A pin-clearance bore
+# and a real blind tap pass it. Through-holes are bores regardless of depth.
+_RECESS_RATIO = 0.35
+_OPEN_CACHE: list = [None, None]
+
+
+def openings(mesh) -> dict:
+    """Circular bores, and the shallow dishes that are not bores.
+
+    Through-holes and blind bores whose depth is at least max(1 mm, 0.35 ×
+    diameter) are bores. A blind dish shallower than that is a recess and is
+    left out of ``hole_count``.
+    """
+    key = _openings_key(mesh)
+    if key is not None and key == _OPEN_CACHE[0]:
+        return _OPEN_CACHE[1]
+    if mesh is None or len(getattr(mesh, "faces", [])) == 0:
+        result = {"bores": [], "recesses": []}
+    else:
+        merged = _merge_bores(_bores_from_sections(mesh), _bores_from_rays(mesh))
+        marked = _mark_through(mesh, merged)
+        bores, recesses = _split_recesses(mesh, marked)
+        result = {"bores": bores, "recesses": recesses}
+    if key is not None:
+        _OPEN_CACHE[0] = key
+        _OPEN_CACHE[1] = result
+    return result
+
+
 def count_bores(mesh) -> list[dict]:
     """Circular bores from per-leg slices on all three axes, plus ray casting.
 
     Whole-part stations at 25, 50, and 75 percent stay, and each planar leg
     is also sliced at 30, 50, and 70 percent of its own thickness. An interior
-    ring whose circularity (4πA/P²) is above 0.85 is a bore section. Sections
-    whose centres agree within 0.6 mm are the same bore. A sampled station
-    between two sightings with no ring splits them, so two collinear knuckle
-    bores stay two bores.
+    ring is accepted by a least-squares circle fit. Sections whose centres
+    agree within 0.6 mm are the same bore. A sampled station between two
+    sightings with no ring splits them, so two collinear knuckle bores stay
+    two bores.
 
     Through-holes are also found by casting a grid of rays along each axis.
     A void column enclosed by material is a bore. A ray that never hits is
@@ -642,15 +680,103 @@ def count_bores(mesh) -> list[dict]:
     and a perpendicular centre with a section bore are not added again, so a
     pair of collinear knuckle bores is not collapsed into one tunnel.
 
+    A blind opening whose depth is under max(1 mm, 0.35 × diameter) is a
+    recess, not a bore. Decorative dishes fail that test. Through-holes and
+    pin-clearance bores of meaningful depth stay.
+
     trimesh's ``section_multiplane`` needs scipy, which this plugin does not
     install. The slices are computed with numpy and shapely.
     """
-    if mesh is None or len(getattr(mesh, "faces", [])) == 0:
-        return []
-    section_bores = _bores_from_sections(mesh)
-    ray_bores = _bores_from_rays(mesh)
-    merged = _merge_bores(section_bores, ray_bores)
-    return _mark_through(mesh, merged)
+    return openings(mesh)["bores"]
+
+
+def _openings_key(mesh):
+    try:
+        bounds = np.round(np.asarray(mesh.bounds, dtype=float).ravel(), 3)
+        return (id(mesh), int(len(mesh.faces)), tuple(float(value) for value in bounds))
+    except Exception:
+        return None
+
+
+def _split_recesses(mesh, bores: list[dict]) -> tuple[list[dict], list[dict]]:
+    kept: list[dict] = []
+    recesses: list[dict] = []
+    for bore in bores:
+        if bore.get("through"):
+            kept.append(bore)
+            continue
+        depth = _void_run_mm(mesh, bore)
+        row = dict(bore)
+        row["depth_mm"] = round(float(depth), 3)
+        diameter = float(row.get("diameter") or 0.0)
+        needed = max(1.0, _RECESS_RATIO * diameter) if diameter > 0 else 1.0
+        if depth + 1e-9 >= needed:
+            kept.append(row)
+            continue
+        row["kind"] = "recess"
+        row["depth_ratio"] = round(float(depth) / diameter, 4) if diameter > 0 else 0.0
+        recesses.append(row)
+    return kept, recesses
+
+
+def _void_run_mm(mesh, bore: dict) -> float:
+    """Longest axial run where the opening is void and a wall sample is material."""
+    axis = {"x": 0, "y": 1, "z": 2}[str(bore["axis"])]
+    center = np.asarray(bore["center"], dtype=float)
+    radius = float(bore.get("diameter") or 0.0) / 2.0
+    if radius < 0.25:
+        return 0.0
+    bounds = np.asarray(mesh.bounds, dtype=float)
+    start = float(bounds[0, axis]) + 0.2
+    stop = float(bounds[1, axis]) - 0.05
+    if stop <= start:
+        return 0.0
+    step = 0.45
+    stations = np.arange(start, stop + 1e-6, step)
+    if len(stations) == 0:
+        return 0.0
+    perp = [slot for slot in range(3) if slot != axis]
+    # Pin clearance is the gap around the pin. An empty bore is open near the centre.
+    frac = 0.90 if bore.get("kind") == "pin_clearance" else 0.45
+    wall = 1.20
+    # Offset from the cardinal axes so a sample does not ride a polygon edge.
+    angles = tuple(0.37 + index * (math.pi / 2.0) for index in range(4))
+    hole_pts = []
+    wall_pts = []
+    for position in stations:
+        base = center.copy()
+        base[axis] = float(position)
+        for angle in angles:
+            cosine = math.cos(angle)
+            sine = math.sin(angle)
+            hole = base.copy()
+            hole[perp[0]] += frac * radius * cosine
+            hole[perp[1]] += frac * radius * sine
+            hole_pts.append(hole)
+            outer = base.copy()
+            outer[perp[0]] += wall * radius * cosine
+            outer[perp[1]] += wall * radius * sine
+            wall_pts.append(outer)
+    hole_in = _points_inside(mesh, np.vstack(hole_pts), axis).reshape(len(stations), 4)
+    wall_in = _points_inside(mesh, np.vstack(wall_pts), axis).reshape(len(stations), 4)
+    # One ray through a shared edge flips parity. Three of four samples must agree.
+    open_station = (np.sum(~hole_in, axis=1) >= 3) & (np.sum(wall_in, axis=1) >= 3)
+    best = 0
+    run = 0
+    for flag in open_station:
+        if flag:
+            run += 1
+            best = max(best, run)
+        else:
+            run = 0
+    if best == 0:
+        return 0.0
+    return float(best) * step
+
+
+def _points_inside(mesh, points: np.ndarray, axis: int) -> np.ndarray:
+    hits = _hit_counts(mesh, points, axis)
+    return (hits % 2) == 1
 
 
 def _bores_from_sections(mesh) -> list[dict]:
@@ -911,14 +1037,52 @@ def _confirm_ray(mesh, bore: dict) -> bool:
 
 
 def _hit_counts(mesh, origins: np.ndarray, axis: int) -> np.ndarray:
-    from photopart.holes import _ray_hits
+    """Axis-aligned Möller–Trumbore, vectorised in ray chunks.
 
-    direction = np.zeros(3, dtype=float)
-    direction[axis] = 1.0
+    The counts match the per-triangle test. A chunk's perpendicular bounds
+    drop triangles the rays cannot meet.
+    """
     triangles = np.asarray(mesh.triangles, dtype=float)
+    origins = np.asarray(origins, dtype=float).reshape(-1, 3)
     hits = np.zeros(len(origins), dtype=np.int32)
-    for triangle in triangles:
-        hits += _ray_hits(origins, direction, triangle).astype(np.int32)
+    if len(triangles) == 0 or len(origins) == 0:
+        return hits
+    direction = np.zeros(3, dtype=float)
+    direction[int(axis)] = 1.0
+    v0 = triangles[:, 0, :]
+    edge1 = triangles[:, 1, :] - v0
+    edge2 = triangles[:, 2, :] - v0
+    pvec = np.cross(direction, edge2)
+    det = np.einsum("ij,ij->i", edge1, pvec)
+    valid = np.abs(det) >= 1e-9
+    if not np.any(valid):
+        return hits
+    inv = np.zeros(len(triangles), dtype=float)
+    inv[valid] = 1.0 / det[valid]
+    perp = [slot for slot in range(3) if slot != int(axis)]
+    tri_min = triangles[:, :, perp].min(axis=1)
+    tri_max = triangles[:, :, perp].max(axis=1)
+    chunk = 64
+    for start in range(0, len(origins), chunk):
+        block = origins[start : start + chunk]
+        span = block[:, perp]
+        low = span.min(axis=0) - 1e-6
+        high = span.max(axis=0) + 1e-6
+        use = valid & np.all(tri_max >= low, axis=1) & np.all(tri_min <= high, axis=1)
+        if not np.any(use):
+            continue
+        sel_v0 = v0[use]
+        sel_e1 = edge1[use]
+        sel_e2 = edge2[use]
+        sel_p = pvec[use]
+        sel_inv = inv[use]
+        offset = block[:, None, :] - sel_v0[None, :, :]
+        u = sel_inv * np.einsum("rti,ti->rt", offset, sel_p)
+        qvec = np.cross(offset, sel_e1[None, :, :])
+        v = sel_inv * np.einsum("rti,i->rt", qvec, direction)
+        t = sel_inv * np.einsum("rti,ti->rt", qvec, sel_e2)
+        mask = (u >= 0.0) & (v >= 0.0) & ((u + v) <= 1.0) & (t > 1e-9)
+        hits[start : start + len(block)] = mask.sum(axis=1).astype(np.int32)
     return hits
 
 
@@ -1082,7 +1246,18 @@ def _mesh_bodies(mesh) -> list:
 
 
 def _rings_on_bodies(bodies, origin: np.ndarray, normal: np.ndarray, axis: int) -> list[dict]:
-    sections = [_section_polygons(body, origin, normal) for body in bodies]
+    sections = []
+    for body in bodies:
+        try:
+            bounds = np.asarray(body.bounds, dtype=float)
+        except Exception:
+            bounds = None
+        if bounds is not None and (
+            float(bounds[1, axis]) < float(origin[axis]) - 1e-6 or float(bounds[0, axis]) > float(origin[axis]) + 1e-6
+        ):
+            sections.append([])
+            continue
+        sections.append(_section_polygons(body, origin, normal))
     rings = []
     for index, polygons in enumerate(sections):
         others = [poly for other_index, group in enumerate(sections) if other_index != index for poly in group]

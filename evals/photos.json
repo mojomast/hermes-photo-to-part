@@ -1,6 +1,6 @@
 {
   "canary": "p2p-canary-7f3a9c2e-6b14-4d88-a1e0-9c5d2f8b4a17",
-  "note": "Reference only. The runner does not download these files and the bytes are not in the repo. Use them in a Hermes session when a task needs a real photo. Synthetic stand-ins cover the in-process suite. coin_scale_sealed does not use these URLs: caliper photos are not in the repo, so that task renders a disk and a peg.",
+  "note": "Reference only. The runner does not download these files and the bytes are not in the repo. Use them in a Hermes session when a task needs a real photo. Synthetic stand-ins cover the in-process suite. coin_scale_sealed does not use these URLs. Staging writes us_quarter.png, cad_loonie.png, and euro_1.png, the same synthetic coin scenes the in-process check measures. Real caliper photos are not in the repo.",
   "sealed_coin_scale": {
     "coins_mm": {"us_quarter": 24.26, "cad_loonie": 26.5, "euro_1": 23.25},
     "pass": "part bbox within 5 percent straight-on, 8 percent at about 20 degrees"

@@ -15,11 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from photopart.canary import EVAL_CANARY
-from photopart.flow import SKILL_ID
+from photopart.skillref import rewrite_arguments, skill_id_status, touches_plugin
 
-_SKILL_MISSPELL = re.compile(
-    r"^(?:plugin:|plugins:)?photo-to-part[:/]photo-to-printable-part$|^photo-to-printable-part$"
-)
 _PROBE = re.compile(r"\b(?:cv2|PIL|Image\.open|imread)\b")
 _TERMINALS = {"terminal", "execute_code", "code_execution", "bash", "shell", "python"}
 _PATH_KEYS = ("path", "file_path", "file", "image", "mesh", "script", "pattern", "command", "cmd", "code")
@@ -96,25 +93,20 @@ HOOKS = (
 def _pre(*args, **kwargs):
     fields = _fields(args, kwargs)
     name = fields["tool_name"]
-    arguments = fields["args"] if isinstance(fields["args"], dict) else {}
+    arguments, was_string = _coerce_args(fields["args"])
     sid = fields["session_id"]
-    if name == "skill_view":
-        skill = arguments.get("name") or arguments.get("skill")
-        if isinstance(skill, str) and _SKILL_MISSPELL.fullmatch(skill.strip()):
-            if sid:
-                _mark_active(sid, arguments)
-            if skill.strip() != SKILL_ID:
-                if sid:
-                    _log(sid, arguments, {"tool": "skill_view", "rewrite_from": skill.strip(), "paths": []})
-                updated = dict(arguments)
-                updated["name"] = SKILL_ID
-                return {"action": "modify", "args": updated}
-            return None
-        return None
-    if name.startswith("photo_part_"):
+    updated, misses = rewrite_arguments(name, arguments)
+    if sid and (touches_plugin(name, arguments) or misses):
+        _mark_active(sid, updated if isinstance(updated, dict) else arguments)
+        _remember_image(sid, arguments)
+        _remember_wrapped_images(sid, arguments)
+    if misses:
         if sid:
-            _mark_active(sid, arguments)
-            _remember_image(sid, arguments)
+            for tool, original in misses:
+                _log(sid, arguments, {"tool": tool, "rewrite_from": original, "paths": []})
+        payload = json.dumps(updated) if was_string else updated
+        return {"action": "modify", "args": payload}
+    if name.startswith("photo_part_"):
         return None
     if not sid or sid not in _active:
         return None
@@ -200,9 +192,37 @@ def _fields(args, kwargs) -> dict:
     return fields
 
 
+def _coerce_args(raw) -> tuple[dict, bool]:
+    """Return ``(arguments, was_json_string)``. A non-object stays an empty dict."""
+    if isinstance(raw, dict):
+        return raw, False
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text[:1] in "{[":
+            try:
+                loaded = json.loads(text)
+            except json.JSONDecodeError:
+                return {}, False
+            if isinstance(loaded, dict):
+                return loaded, True
+    return {}, False
+
+
 def _is_our_skill(arguments: dict) -> bool:
-    skill = arguments.get("name") or arguments.get("skill")
-    return isinstance(skill, str) and bool(_SKILL_MISSPELL.fullmatch(skill.strip()))
+    skill = arguments.get("name") or arguments.get("skill") or arguments.get("skill_name")
+    return isinstance(skill, str) and skill_id_status(skill) in {"exact", "miss"}
+
+
+def _remember_wrapped_images(sid: str, arguments: dict) -> None:
+    calls = arguments.get("calls") if isinstance(arguments, dict) else None
+    if not isinstance(calls, list):
+        return
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        inner = call.get("arguments") if isinstance(call.get("arguments"), dict) else call.get("args")
+        if isinstance(inner, dict):
+            _remember_image(sid, inner)
 
 
 def _mark_active(sid: str, arguments: dict) -> None:
@@ -331,10 +351,40 @@ def _log(sid: str, arguments: dict, row: dict) -> None:
         "session_id": sid,
         **row,
     }
+    line = json.dumps(body, sort_keys=True) + "\n"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(body, sort_keys=True) + "\n")
+            handle.write(line)
+    except OSError:
+        pass
+    _mirror_rewrite(path, line, row)
+
+
+def _mirror_rewrite(written: Path, line: str, row: dict) -> None:
+    """Copy a skill-id rewrite to ``$HERMES_HOME/.photopart`` so the scorer sees it.
+
+    The project log is not next to the session file. ``score_hermes_session``
+    reads ``HERMES_HOME/.photopart/calls.jsonl``.
+    """
+    if not row.get("rewrite_from"):
+        return
+    raw = os.environ.get("HERMES_HOME", "").strip()
+    if not raw:
+        return
+    directory = Path(raw).expanduser()
+    if _plugin_dir(directory):
+        return
+    path = _calls_path(directory)
+    try:
+        if path.resolve() == written.resolve():
+            return
+    except OSError:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line)
     except OSError:
         return
 

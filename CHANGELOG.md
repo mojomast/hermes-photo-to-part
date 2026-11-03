@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.13 — 2026-11-03
+
+- `photo_part_template` no longer drops a shape value that arrives next to `shape`. Known keys, for every template, are merged into `params`. `knuckles: 5` at the top level builds a 5-knuckle hinge. An unknown name, or the same key with two different values, is an error that says the value belongs in `params`.
+- A blind opening shallower than max(1 mm, 0.35 × diameter) is a recess, not a bore. `hole_count` leaves it out and says so in `recess_note`. Through-holes stay bores. A pin-clearance bore and a blind tap of meaningful depth stay too. The decorative 23.5 mm rosette dish does not become a second hole.
+- `pre_tool_call` rewrites this skill's id on `skill_view`, on `skills_list`, and inside a `tool_call` `{calls:[...]}` list, including a JSON-string `arguments` and slash or `plugin:` forms. The scorer reads those same forms. A `rewrite_from` row counts as `skill_id_rewritten`. A wrong id with no matching rewrite counts as `wrong_skill_ids`. A sentence that only mentions the `plugin:` form is not a call. The exact id is `photo-to-part:photo-to-printable-part`.
+- Bore rays are vectorised, and a body that does not cross the slice is skipped. Overlay skips ECC when the chamfer is already within 2 px or 0.05 of the diagonal, estimates ECC on a mask no wider than 360 px, and skips 30°/60° views when an orthographic IoU is already at least 0.72. GrabCut downscales images longer than 960 px, caps iterations at 5, and uses a fixed OpenCV RNG seed so a mask does not depend on earlier cv2 calls.
+- `coin_scale_sealed` staging writes `us_quarter.png`, `cad_loonie.png`, and `euro_1.png`, so `photo_part_measure` runs on a photo. Real caliper photos are still not in this repo.
+
 ## 0.1.12 — 2026-11-03
 
 - Bores are accepted by a least-squares circle fit on a simplified outline, not by 4πA/P² on a snapped staircase. The snap grid is `min(0.05, 0.01 × the smallest extent)` and uses `shapely.set_precision`. Each shell is sliced on its own, so a pin inside a sleeve is a `pin_clearance` bore with `clearance_mm`. A 0.5 mm staircase square is still not a bore.
