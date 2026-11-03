@@ -94,10 +94,11 @@ def write_shape(
     *,
     ascii_stl: bool = False,
     write_3mf: bool = True,
+    stl_name: str | None = None,
 ) -> dict:
     """Write one building block. plate_clip keeps its existing filenames."""
     name = (shape or "plate_clip").strip()
-    if name == "plate_clip":
+    if name == "plate_clip" and not stl_name:
         from photopart.geometry import write_template
 
         written = write_template(out_dir, params, ascii_stl=ascii_stl, write_3mf=write_3mf)
@@ -109,12 +110,13 @@ def write_shape(
     out_dir.mkdir(parents=True, exist_ok=True)
     from photopart.geometry import export_3mf, export_stl
 
-    stl_path = out_dir / f"{name}.stl"
+    stem = Path(stl_name).stem if stl_name else f"{name}_v1"
+    stl_path = out_dir / f"{stem}.stl"
     export_stl(mesh, stl_path, ascii_stl=ascii_stl)
     (out_dir / "params.json").write_text(
         json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    threemf = out_dir / f"{name}.3mf"
+    threemf = out_dir / f"{stem}.3mf"
     threemf_error = None
     if write_3mf:
         try:
@@ -142,16 +144,52 @@ def write_shape(
     return result
 
 
-def output_names(shape: str, *, write_3mf: bool) -> list[str]:
+def default_stl_name(shape: str, out_dir: Path, requested: str | None = None) -> str | None:
+    """Filename for a template. plate_clip stays put. Never the placeholder name_v1.stl."""
+    if requested:
+        name = Path(str(requested)).name
+        if not name.lower().endswith(".stl"):
+            name = name + ".stl"
+        if name == "name_v1.stl":
+            raise ValueError("refusing the placeholder name_v1.stl. Name the file after the part, such as spur_gear_v1.stl.")
+        return name
+    if (shape or "plate_clip") == "plate_clip":
+        return None
+    slug = _spec_part_slug(out_dir)
+    base = slug or (shape or "part")
+    return f"{base}_v1.stl"
+
+
+def _spec_part_slug(out_dir: Path) -> str | None:
+    import re
+
+    for directory in (Path(out_dir), Path.cwd()):
+        spec_path = directory / "spec.json"
+        if not spec_path.is_file():
+            continue
+        try:
+            loaded = json.loads(spec_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            continue
+        if not isinstance(loaded, dict) or not loaded.get("part"):
+            continue
+        slug = re.sub(r"[^a-z0-9]+", "_", str(loaded["part"]).strip().lower()).strip("_")
+        if slug and slug != "name":
+            return slug
+    return None
+
+
+def output_names(shape: str, *, write_3mf: bool, stl_name: str | None = None) -> list[str]:
     name = shape or "plate_clip"
-    if name == "plate_clip":
+    if name == "plate_clip" and not stl_name:
         names = ["plate_clip.stl", "plate_clip.scad", "params.json"]
         if write_3mf:
             names.append("plate_clip.3mf")
         return names
-    names = [f"{name}.stl", "params.json"]
+    stem = Path(stl_name).stem if stl_name else f"{name}_v1"
+    names = [f"{stem}.stl", "params.json"]
     if write_3mf:
-        names.append(f"{name}.3mf")
+        names.append(f"{stem}.3mf")
     return names
 
 

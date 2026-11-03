@@ -137,12 +137,12 @@ def registration_report() -> dict:
 def load_tasks() -> list[dict]:
     payload = json.loads(TASKS_PATH.read_text(encoding="utf-8"))
     rows = payload.get("tasks")
-    if not isinstance(rows, list) or len(rows) < 15:
-        raise ValueError("evals/tasks.json needs at least 15 tasks")
+    if not isinstance(rows, list) or len(rows) < 24:
+        raise ValueError("evals/tasks.json needs at least 24 tasks")
     return rows
 
 
-def run_suite() -> dict:
+def run_suite(include_holdout: bool = False) -> dict:
     """Execute every task. ``passed`` is how many met their expectation.
 
     The suite first calls the plugin ``register(ctx)`` entrypoint. Fewer than
@@ -164,11 +164,13 @@ def run_suite() -> dict:
             "registration_error": registration["error"],
             "results": [],
         }
-    prompts = {row["id"]: row.get("prompt") or "" for row in load_tasks()}
+    tasks = load_tasks()
+    prompts = {row["id"]: row for row in tasks}
     started = time.perf_counter()
     results = []
     for task_id, func in _CHECKS:
-        if task_id not in prompts:
+        spec = prompts.get(task_id)
+        if spec is None:
             results.append(_row(task_id, False, detail="missing prompt in tasks.json"))
             continue
         one = time.perf_counter()
@@ -182,13 +184,21 @@ def run_suite() -> dict:
         outcome.setdefault("tool_calls", 0)
         outcome.setdefault("wrong_skill_ids", 0)
         outcome.setdefault("deleted_files", [])
+        outcome["holdout"] = bool(spec.get("holdout"))
+        _apply_budget(outcome, spec)
         results.append(outcome)
     elapsed = (time.perf_counter() - started) / 60.0
-    passed = sum(1 for row in results if row.get("passed"))
+    holdouts = [row for row in results if row.get("holdout")]
+    visible = results if include_holdout else [row for row in results if not row.get("holdout")]
+    passed = sum(1 for row in visible if row.get("passed"))
+    everything_passed = all(row.get("passed") for row in results) and len(results) == len(_CHECKS)
     return {
-        "ok": passed == len(results),
+        "ok": everything_passed,
         "passed": passed,
-        "tasks": len(results),
+        "tasks": len(visible),
+        "holdout_passed": sum(1 for row in holdouts if row.get("passed")),
+        "holdout_tasks": len(holdouts),
+        "holdouts": holdouts,
         "minutes": elapsed,
         "dim_error_mm": _max_dim(results),
         "tool_calls": sum(int(row.get("tool_calls") or 0) for row in results),
@@ -196,17 +206,37 @@ def run_suite() -> dict:
         "deleted_files": [item for row in results for item in row.get("deleted_files") or []],
         "tools_registered": registration["count"],
         "registered_tools": registration["names"],
-        "results": results,
+        "results": visible,
     }
 
 
+def _apply_budget(outcome: dict, spec: dict) -> None:
+    calls = spec.get("budget_calls")
+    minutes = spec.get("budget_minutes")
+    if isinstance(calls, (int, float)) and int(outcome.get("tool_calls") or 0) > int(calls):
+        outcome["passed"] = False
+        outcome["detail"] = f"tool_calls {outcome.get('tool_calls')} over budget_calls {calls}"
+    if isinstance(minutes, (int, float)) and float(outcome.get("minutes") or 0) > float(minutes):
+        outcome["passed"] = False
+        outcome["detail"] = f"minutes {outcome.get('minutes')} over budget_minutes {minutes}"
+
+
+_SKILL_VIEW = re.compile(r"skill_view\(\s*([\"'])(.*?)\1")
+_LEAK = re.compile(r"(?:evals/|runner\.py)")
+
+
 def score_transcript(text: str) -> dict:
-    """Count tool calls, a mistaken plugin: skill id, deletions, and minutes."""
+    """Count tool calls, mistaken skill_view ids, deletions, leaks, and minutes.
+
+    ``wrong_skill_ids`` counts only arguments of ``skill_view(...)``. A sentence
+    that mentions the plugin: form is not a call. ``leak`` is true when the
+    transcript reads ``evals/`` or ``runner.py``.
+    """
     wrong = 0
-    for line in text.splitlines():
-        if "is not a skill name" in line:
-            continue
-        wrong += line.count(_WRONG_SKILL)
+    for match in _SKILL_VIEW.finditer(text):
+        skill = match.group(2)
+        if skill == _WRONG_SKILL or skill.startswith("plugin:"):
+            wrong += 1
     stamps = _STAMP.findall(text)
     minutes = None
     if len(stamps) >= 2:
@@ -218,15 +248,50 @@ def score_transcript(text: str) -> dict:
         "wrong_skill_ids": wrong,
         "deleted_files": _DELETE.findall(text),
         "minutes": minutes,
+        "leak": bool(_LEAK.search(text)),
     }
+
+
+def stage_task(task_id: str, dest: Path) -> dict:
+    """Copy one task prompt and its fixtures outside the plugin tree."""
+    destination = Path(dest).expanduser().resolve()
+    repo = REPO.resolve()
+    if destination == repo or repo in destination.parents:
+        raise ValueError(f"stage directory must be outside the plugin tree, got {destination}")
+    spec = next((row for row in load_tasks() if row["id"] == task_id), None)
+    if spec is None:
+        raise ValueError(f"unknown task {task_id}")
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "prompt.txt").write_text(str(spec.get("prompt") or "") + "\n", encoding="utf-8")
+    copied = []
+    for name in spec.get("fixtures") or []:
+        source = ROOT / "fixtures" / name
+        if not source.is_file():
+            raise ValueError(f"fixture not found: {source}")
+        target = destination / name
+        target.write_bytes(source.read_bytes())
+        copied.append(name)
+    return {"ok": True, "task": task_id, "dir": str(destination), "fixtures": copied, "leak": False}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run photo-to-part evals.")
     parser.add_argument("--transcript", help="Score a saved Hermes transcript in addition to the suite.")
     parser.add_argument("--json-out", help="Write the suite report to this path.")
+    parser.add_argument("--stage", help="Copy one task prompt and fixtures to this directory, outside the plugin.")
+    parser.add_argument("--task", help="Task id for --stage.")
+    parser.add_argument("--include-holdout", action="store_true", help="Include held-out tasks in results.")
     args = parser.parse_args(argv)
-    report = run_suite()
+    if args.stage:
+        if not args.task:
+            parser.error("--stage needs --task")
+        report = stage_task(args.task, Path(args.stage))
+        text = json.dumps(report, indent=2, sort_keys=True)
+        print(text)
+        if args.json_out:
+            Path(args.json_out).write_text(text + "\n", encoding="utf-8")
+        return 0
+    report = run_suite(include_holdout=args.include_holdout)
     if report.get("registration_error"):
         print(report["registration_error"], file=sys.stderr)
     if args.transcript:
@@ -256,6 +321,15 @@ def _checks() -> list[tuple[str, object]]:
         ("worse_version_reverts", _revert),
         ("meshfix_absent_degrades", _meshfix),
         ("grabcut_seed", _grabcut),
+        ("template_default_name", _template_default_name),
+        ("best_version_filled", _best_version_filled),
+        ("checklist_bool_answered", _checklist_bool),
+        ("bores_not_genus", _bores_not_genus),
+        ("thread_no_thin_wall", _thread_wall),
+        ("validate_renders_on_pass", _validate_renders),
+        ("budget_hint", _budget_hint),
+        ("real_photo_overlay", _real_photo),
+        ("overlay_low_confidence", _overlay_low),
     ]
 
 
@@ -612,6 +686,399 @@ def _grabcut() -> dict:
         "wrong_skill_ids": 0,
         "deleted_files": [],
     }
+
+
+def _template_default_name() -> dict:
+    from photopart.tools import template_tool
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        gear = json.loads(template_tool({"out_dir": str(root), "shape": "spur_gear", "no_3mf": True}))
+        bracket = json.loads(
+            template_tool({"out_dir": str(root / "bracket"), "shape": "l_bracket", "no_3mf": True})
+        )
+        gear_name = str(gear.get("stl") or "")
+        bracket_name = str(bracket.get("stl") or "")
+        passed = (
+            gear.get("ok") is True
+            and gear_name.endswith("spur_gear_v1.stl")
+            and Path(gear_name).is_file()
+            and "name_v1.stl" not in gear_name
+            and bracket_name.endswith("l_bracket_v1.stl")
+            and "name_v1.stl" not in str(bracket.get("next_step"))
+            and isinstance(gear.get("bodies"), list)
+            and gear["bodies"]
+            and "bbox_mm" in gear["bodies"][0]
+            and "bores" in gear
+            and "sections_mm2" in gear
+        )
+        return {
+            "passed": passed,
+            "tool_calls": 2,
+            "wrong_skill_ids": _skill_misses(gear, bracket),
+            "deleted_files": [],
+            "detail": None if passed else {"gear": gear_name, "bracket": bracket_name},
+        }
+
+
+def _best_version_filled() -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        spec = {"x": 10, "y": 20, "z": 30, "tolerance": 0.4}
+        failed_v1 = root / "part_v1.stl"
+        passed_v2 = root / "part_v2.stl"
+        _box(failed_v1, (10, 20, 40))
+        _box(passed_v2, (10, 20, 30))
+        run_validate(str(failed_v1), spec=spec)
+        code, second = run_validate(str(passed_v2), spec=spec)
+        pair = root / "scores"
+        pair.mkdir()
+        low = pair / "part_v1.stl"
+        high = pair / "part_v2.stl"
+        _box(low, (10, 20, 30))
+        _box(high, (10, 20, 30))
+        code_low, first = run_validate(str(low), spec=spec)
+        code_high, later = run_validate(
+            str(high),
+            spec={**spec, "features": ["teardrop"]},
+        )
+        alone = root / "only.stl"
+        _box(alone, (8, 8, 8))
+        _code, single = run_validate(str(alone))
+        passed = (
+            code == 0
+            and second.get("best_version") == "part_v2.stl"
+            and second.get("revert_to") is None
+            and code_low == 0
+            and code_high == 0
+            and float(first["score"]) > float(later["score"])
+            and later.get("best_version") == "part_v1.stl"
+            and later.get("revert_to") == "part_v1.stl"
+            and single.get("best_version") == "only.stl"
+            and single.get("revert_to") is None
+            and isinstance(second.get("versions"), list)
+        )
+        return {
+            "passed": passed,
+            "tool_calls": 5,
+            "wrong_skill_ids": _skill_misses(second, later, single),
+            "deleted_files": [],
+            "detail": None
+            if passed
+            else {
+                "second": second.get("best_version"),
+                "revert": later.get("revert_to"),
+                "scores": [first.get("score"), later.get("score")],
+            },
+        }
+
+
+def _checklist_bool() -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        written = write_shape(root, "hinge", {"knuckles": 5}, write_3mf=False)
+        spec = dict(written["spec_checks"])
+        spec["features"] = ["5 knuckles", {"teardrop": True}, "scroll ends"]
+        code, report = run_validate(str(written["stl"]), spec=spec, expected_shells=2)
+        by_item = {row["item"]: row for row in report.get("checklist") or []}
+        code2, answered = run_validate(
+            str(written["stl"]),
+            spec=spec,
+            expected_shells=2,
+            answers=["scroll ends=yes"],
+        )
+        stored = json.loads(Path(str(written["stl"]) + ".validate.json").read_text(encoding="utf-8"))
+        code3, remembered = run_validate(str(written["stl"]), spec=spec, expected_shells=2)
+        passed = (
+            code == 0
+            and by_item["5 knuckles"].get("answer") == "yes"
+            and by_item["5 knuckles"].get("auto") is True
+            and by_item["teardrop"].get("answer") == "yes"
+            and code2 == 0
+            and stored.get("answers", {}).get("scroll ends") == "yes"
+            and remembered.get("answers", {}).get("scroll ends") == "yes"
+        )
+        return {
+            "passed": passed,
+            "tool_calls": 4,
+            "wrong_skill_ids": _skill_misses(report, answered),
+            "deleted_files": [],
+            "detail": None if passed else report.get("checklist"),
+        }
+
+
+def _bores_not_genus() -> dict:
+    from evals.meshes import bore_hinge, six_hole_bracket, blind_tap
+    from photopart.spec import GENUS_NOTE
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        hinge = bore_hinge()
+        hinge_path = root / "hinge_v1.stl"
+        hinge.export(hinge_path)
+        code, report = run_validate(str(hinge_path), spec={"hole_count": 2})
+        row = next(item for item in report.get("spec") or [] if item.get("name") == "hole_count")
+        bracket = six_hole_bracket()
+        bracket_path = root / "bracket.stl"
+        bracket.export(bracket_path)
+        _code, six = run_validate(str(bracket_path), spec={"hole_count": 6})
+        six_row = next(item for item in six.get("spec") or [] if item.get("name") == "hole_count")
+        tap = blind_tap()
+        tap_path = root / "tap.stl"
+        tap.export(tap_path)
+        _code, blind = run_validate(str(tap_path), spec={"hole_count": 1})
+        blind_row = next(item for item in blind.get("spec") or [] if item.get("name") == "hole_count")
+        bores = blind_row.get("bores") or []
+        passed = (
+            code == 0
+            and row.get("actual") == 2
+            and row.get("genus") == 4
+            and GENUS_NOTE in str(row.get("note"))
+            and six.get("ok") is True
+            and six_row.get("actual") == 6
+            and blind.get("ok") is True
+            and len(bores) == 1
+            and bores[0].get("through") is False
+        )
+        return {
+            "passed": passed,
+            "tool_calls": 3,
+            "wrong_skill_ids": _skill_misses(report),
+            "deleted_files": [],
+            "detail": None if passed else {"hinge": row, "six": six_row, "blind": bores},
+        }
+
+
+def _thread_wall() -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        screw = write_shape(root / "screw", "hex_screw", {"designation": "M3", "length_mm": 8}, write_3mf=False)
+        cap = write_shape(root / "cap", "bottle_cap", write_3mf=False)
+        plate = root / "thin.stl"
+        trimesh.creation.box(extents=(20, 20, 0.4)).export(plate)
+        _code, screw_report = run_validate(str(screw["stl"]))
+        _code, cap_report = run_validate(str(cap["stl"]))
+        _code, thin = run_validate(str(plate))
+        screw_warn = screw_report["printability"]["warnings"]
+        cap_warn = cap_report["printability"]["warnings"]
+        passed = (
+            not any("wall" in item for item in screw_warn)
+            and screw_report["printability"].get("min_wall_raw_mm") is not None
+            and not any("wall" in item for item in cap_warn)
+            and thin["printability"].get("min_wall_mm") is not None
+            and thin["printability"]["min_wall_mm"] < 0.8
+            and any("wall" in item for item in thin["printability"]["warnings"])
+        )
+        return {
+            "passed": passed,
+            "tool_calls": 3,
+            "wrong_skill_ids": 0,
+            "deleted_files": [],
+            "detail": None if passed else {"screw": screw_warn, "cap": cap_warn, "thin": thin["printability"]},
+        }
+
+
+def _validate_renders() -> dict:
+    from photopart.tools import validate_tool
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        mesh = root / "part_v1.stl"
+        _box(mesh, (10, 20, 30))
+        spec = root / "spec.json"
+        spec.write_text(json.dumps({"x": 10, "y": 20, "z": 30, "shells": 1}), encoding="utf-8")
+        report = json.loads(validate_tool({"mesh": str(mesh), "spec": str(spec)}))
+        bad = root / "bad" / "part_v1.stl"
+        bad.parent.mkdir()
+        _box(bad, (10, 20, 40))
+        spec_bad = bad.parent / "spec.json"
+        spec_bad.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
+        failed = json.loads(validate_tool({"mesh": str(bad), "spec": str(spec_bad)}))
+        sheet = Path(str(report.get("render", {}).get("sheet") or ""))
+        passed = (
+            report.get("ok") is True
+            and sheet.is_file()
+            and sheet.name == "sheet.png"
+            and failed.get("ok") is False
+            and "Failed:" in str(failed.get("next_step"))
+            and not failed.get("render")
+        )
+        return {
+            "passed": passed,
+            "tool_calls": 2,
+            "wrong_skill_ids": _skill_misses(report, failed),
+            "deleted_files": [],
+            "detail": None if passed else {"ok": report.get("ok"), "sheet": str(sheet), "fail": failed.get("next_step")},
+        }
+
+
+def _budget_hint() -> dict:
+    from photopart.tools import measure_tool
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        image = root / "photo.png"
+        Image.new("RGB", (32, 32), (255, 255, 255)).save(image)
+        last = {}
+        for _index in range(14):
+            last = json.loads(
+                measure_tool({"image": str(image), "diameter_mm": 20, "diameter_px": 80})
+            )
+        budget = last.get("budget") or {}
+        passed = (
+            int(budget.get("plugin_calls") or 0) >= 14
+            and int(budget.get("soft_limit") or 0) == 20
+            and str(last.get("next_step") or "").startswith("Budget: deliver the best validated version now")
+        )
+        return {
+            "passed": passed,
+            "tool_calls": 14,
+            "wrong_skill_ids": _skill_misses(last),
+            "deleted_files": [],
+            "detail": None if passed else last.get("next_step"),
+        }
+
+
+def _angle_distance(found: float, target: float) -> float:
+    return abs((float(found) - float(target) + 180.0) % 360.0 - 180.0)
+
+
+def _real_photo() -> dict:
+    from evals.meshes import washer_mesh
+    from photopart.overlay import _iou, _place, raster_model
+    from photopart.render import _project, choose_axes
+
+    fixture = json.loads((ROOT / "fixtures" / "fixture.json").read_text(encoding="utf-8"))
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        photo = root / "washer_photo.jpg"
+        photo.write_bytes((ROOT / "fixtures" / "washer_photo.jpg").read_bytes())
+        truth = np.asarray(Image.open(ROOT / "fixtures" / "washer_mask.png")) > 127
+        measured = measure(
+            {
+                "image": str(photo),
+                "diameter_mm": fixture["coin_mm"],
+                "points": fixture["coin_points"],
+                "roi": fixture["part_roi"],
+            }
+        )
+        mesh = washer_mesh()
+        stl = root / "washer_v1.stl"
+        mesh.export(stl)
+        extents = [float(value) for value in mesh.extents]
+        spec = {
+            "x": round(extents[0], 1),
+            "y": round(extents[1], 1),
+            "z": round(extents[2], 1),
+            "tolerance": 0.5,
+            "hole_count": 1,
+            "shells": 1,
+        }
+        code, checked = run_validate(str(stl), spec=spec)
+        cx, cy = fixture["coin_center_px"]
+        diameter = float(fixture["coin_diameter_px"])
+        exclude = f"{cx - diameter / 2 - 6},{cy - diameter / 2 - 6},{diameter + 12},{diameter + 12}"
+        _render_code, manifest = run_render(
+            [
+                str(stl),
+                "--out-dir",
+                str(root / "renders"),
+                "--photo",
+                str(photo),
+                "--overlay-fit",
+                "auto",
+                "--exclude-roi",
+                exclude,
+                "--overwrite",
+            ]
+        )
+        alignment = manifest.get("alignment") or {}
+        axes = choose_axes(mesh.extents)
+        points, _depth = _project(np.asarray(mesh.vertices, dtype=float), "front", axes)
+        model, _minimum, _maximum = raster_model(points, np.asarray(mesh.faces), float(fixture["px_per_mm"]))
+        placed = _place(
+            model,
+            truth,
+            float(manifest.get("overlay_rotation_deg") or 0),
+            bool(manifest.get("overlay_mirror")),
+            close=True,
+            scale_mode="fixed",
+        )
+        overlap = float(_iou(placed, truth))
+        rotation = float(manifest.get("overlay_rotation_deg") or 0)
+        pose_error = min(
+            _angle_distance(rotation, fixture["angle_deg"]),
+            _angle_distance(rotation, -float(fixture["angle_deg"])),
+        )
+        passed = (
+            code == 0
+            and checked.get("ok") is True
+            and alignment.get("confidence") not in {None, "low"}
+            and alignment.get("chamfer_norm") is not None
+            and float(alignment["chamfer_norm"]) <= 0.05
+            and pose_error <= 10.0
+            and overlap >= 0.7
+            and abs(float(manifest.get("photo_scale_px_per_mm") or 0) - float(fixture["px_per_mm"])) < 0.05
+        )
+        return {
+            "passed": passed,
+            "tool_calls": 4,
+            "wrong_skill_ids": _skill_misses(checked, manifest),
+            "deleted_files": [],
+            "detail": None
+            if passed
+            else {
+                "confidence": alignment.get("confidence"),
+                "chamfer_norm": alignment.get("chamfer_norm"),
+                "pose_error": pose_error,
+                "iou": overlap,
+                "scale": manifest.get("photo_scale_px_per_mm"),
+                "failures": checked.get("failures"),
+            },
+        }
+
+
+def _overlay_low() -> dict:
+    from evals.meshes import washer_mesh
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        photo = root / "washer_photo.jpg"
+        photo.write_bytes((ROOT / "fixtures" / "washer_photo.jpg").read_bytes())
+        mesh = washer_mesh()
+        stl = root / "washer_v1.stl"
+        mesh.export(stl)
+        run_validate(str(stl))
+        _code, manifest = run_render(
+            [
+                str(stl),
+                "--out-dir",
+                str(root / "renders"),
+                "--photo",
+                str(photo),
+                "--photo-scale",
+                "4",
+                "--overlay-fit",
+                "auto",
+                "--roi",
+                "2,2,28,28",
+                "--overwrite",
+            ]
+        )
+        alignment = manifest.get("alignment") or {}
+        passed = (
+            alignment.get("confidence") == "low"
+            and manifest.get("overlay_iou") is None
+            and alignment.get("iou") is None
+            and "overlay unreliable: pass roi= or a seed; do not iterate geometry on it" in str(manifest.get("next_step"))
+        )
+        return {
+            "passed": passed,
+            "tool_calls": 2,
+            "wrong_skill_ids": _skill_misses(manifest),
+            "deleted_files": [],
+            "detail": None if passed else {"alignment": alignment, "next": manifest.get("next_step")},
+        }
 
 
 _CHECKS = _checks()

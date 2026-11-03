@@ -650,6 +650,7 @@ def render_views(
         "overlay_poses": overlay_report.get("overlay_poses") or [],
         "overlay_top_poses": (overlay_report.get("overlay_top_poses") or overlay_report.get("overlay_poses") or [])[:3],
         "overlay_roi_expanded": bool(overlay_report.get("overlay_roi_expanded", False)),
+        "alignment": overlay_report.get("alignment"),
         "photo_scale_px_per_mm": photo_scale,
         "view_axes": axes,
         "units": length_unit,
@@ -806,6 +807,16 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         if args.photo:
             photo = resolve_file(args.photo, max_bytes=args.max_bytes, label="photo")
         origin = None if args.overlay_origin is None else _parse_origin(args.overlay_origin)
+        if args.photo and (args.photo_scale is None or args.roi is None):
+            from photopart.measure import load_last_measure
+
+            photo_path = Path(args.photo).expanduser()
+            hint = load_last_measure(photo_path.resolve().parent, out_dir, Path.cwd())
+            if hint:
+                if args.photo_scale is None and hint.get("px_per_mm"):
+                    args.photo_scale = float(hint["px_per_mm"])
+                if args.roi is None and hint.get("roi"):
+                    args.roi = _roi_text(hint["roi"])
         roi = None if args.roi is None else _parse_rect(args.roi)
         seed = None if args.seed is None else _parse_pair(args.seed, "--seed")
         exclude = [_parse_rect(item) for item in args.exclude_roi]
@@ -854,15 +865,24 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     if best is not None and Path(best["path"]) != requested:
         manifest["deliverable"] = str(mesh_path)
     _attach_sheet(manifest, mesh, mesh_path, out_dir)
-    attach_flow(
-        manifest,
-        step_render(
-            str(mesh_path),
-            stale=stamp["stale_validation"],
-            validation_ok=stamp["validation_ok"],
-        ),
+    step = step_render(
+        str(mesh_path),
+        stale=stamp["stale_validation"],
+        validation_ok=stamp["validation_ok"],
     )
+    alignment = manifest.get("alignment") or {}
+    if isinstance(alignment, dict) and alignment.get("confidence") == "low":
+        step = "overlay unreliable: pass roi= or a seed; do not iterate geometry on it"
+    attach_flow(manifest, step)
     return 0, manifest
+
+
+def _roi_text(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return f"{float(value['x'])},{float(value['y'])},{float(value['w'])},{float(value['h'])}"
+    return ",".join(str(float(item)) for item in value)
 
 
 _VERSIONED = re.compile(r"^(?P<prefix>.+)_v(?P<n>\d+)$")

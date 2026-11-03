@@ -183,6 +183,9 @@ class EvalTests(unittest.TestCase):
         failed = [row["id"] for row in report["results"] if not row.get("passed")]
         self.assertEqual(failed, [], json.dumps(report["results"], indent=2, default=str))
         self.assertGreaterEqual(report["passed"], 15)
+        self.assertTrue(report["ok"], report.get("holdouts"))
+        self.assertGreaterEqual(report["holdout_tasks"], 3)
+        self.assertEqual(report["holdout_passed"], report["holdout_tasks"])
         self.assertEqual(report["tools_registered"], 6)
         self.assertIsNone(report.get("registration_error"))
         self.assertEqual(report["wrong_skill_ids"], 0)
@@ -198,6 +201,7 @@ class EvalTests(unittest.TestCase):
             )
         )
         self.assertEqual(scored["wrong_skill_ids"], 1)
+        self.assertFalse(scored["leak"])
         self.assertEqual(scored["tool_calls"], 1)
         self.assertEqual(len(scored["deleted_files"]), 1)
         self.assertAlmostEqual(scored["minutes"], 4.0)

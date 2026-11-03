@@ -166,8 +166,11 @@ def export_stl(mesh: trimesh.Trimesh, path: Path, *, ascii_stl: bool) -> None:
         from trimesh.exchange.stl import export_stl_ascii
 
         path.write_text(export_stl_ascii(mesh), encoding="utf-8")
-        return
-    path.write_bytes(mesh.export(file_type="stl"))
+    else:
+        path.write_bytes(mesh.export(file_type="stl"))
+    from photopart.features import write_face_tags
+
+    write_face_tags(mesh, path)
 
 
 def export_3mf(mesh: trimesh.Trimesh, path: Path) -> None:

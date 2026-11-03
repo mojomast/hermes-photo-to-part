@@ -6,7 +6,7 @@ description: >-
   measurements, or turn a messy scan into a clean solid. Use for a replacement
   part, a fit-test print, an STL, a 2 mm grid-paper photo, or a scan cleaned
   into CAD. Call the photo_part_* tools. Read next_step. Stay under 25 calls.
-version: "0.1.7"
+version: "0.1.8"
 author: mojomast
 license: MIT
 compatibility: >-
@@ -63,9 +63,11 @@ installed plugin.
 
 Stay under 25 tool calls. The whole job is one measure only if the photo has a coin or ruler, one template or one build, one validate, one render, then stop. A failed build may be fixed once. Read each JSON `next_step` and do that. Do not spend the whole 40 turns. Do not explore, install, or re-render.
 
+Do not write probe scripts. Read `bodies`, `bores`, and `sections_mm2` on the template or build result. Batch independent plugin calls in one tool_call. Target ≤ 20 plugin calls and ≤ 30 total. A passing `photo_part_validate` that was given a spec writes the sheet in that same call. `photo_part_render` is for an extra or final render. Every result includes `budget`. At 14 calls, deliver the best validated file instead of exploring.
+
 1. Write `spec.json` from the user's numbers before any modelling or measuring: bbox (`x`, `y`, `z`) and the key features (shells, hole count, knuckle count, diameters). Check dimensions. Reject impossible geometry, such as a countersink deeper than the sheet. A single flat photo cannot show thickness or depth. Say which of those are unobserved. Ask the user or mark them assumed. Do not copy an in-plane width into thickness.
 2. `photo_part_measure` only when the photo has a coin or ruler. Keep its JSON. Pass it to render so the coin is excluded. Skip this call when there is no reference.
-3. `photo_part_template` first. If you must script, one `photo_part_build` with an absolute project `cwd`. Write `name_v1.stl`. If the script fails, fix it once and build again, then stop editing.
+3. `photo_part_template` first. If you must script, one `photo_part_build` with an absolute project `cwd`. The template names the file `<shape>_v1.stl` (or the `part` slug from spec.json). plate_clip stays `plate_clip.stl`. If the script fails, fix it once and build again, then stop editing.
 4. One `photo_part_validate` of that file, passing `spec.json`. Keep every check the template emitted. Use one photo_part_validate and one photo_part_render per version.
 5. One `photo_part_render` of that same file, and only after that validate. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`). Look at `contact.png` once. The deliver render sets `final` true.
 6. Deliver the best validated `name_vN` only when validate `ok` is true and `stale_validation` is not true. `next_step` says stop when every check passed. If a later version scores worse, it says revert to the better `name_vK`. Stop.
@@ -95,7 +97,7 @@ A print-in-place part (the hinge template has 2 shells) needs `expected_shells`.
 
 `spec.json` can list yes/no `features` such as `5 knuckles`, `teardrop`, and `scroll ends`. The first validate freezes that checklist. A later edit needs `--reason`, and the reason is in the report. Do not drop a feature to make the mesh pass.
 
-`photo_part_validate --spec spec.json` fails when the mesh drifts from that file, and fails when a check the template wrote is missing from the spec. It also reports min wall, overhang past 45 degrees, bed contact, and the gap between bodies (warn under 0.3 mm per side). `--dim name=value±tol` is the same check for `x`, `y`, `z`, `shells`, `knuckles`, or `hole_count`. Knuckles use `knuckle_axis` (default `x`). The probe samples between the pin and the knuckle wall, so do not delete a knuckle check. Hole count is the genus, not the knuckle count. The only validation file is `<file>.validate.json`. Each run keeps the previous record in `history`. Do not pass a second path such as `model.validate.json`.
+`photo_part_validate --spec spec.json` fails when the mesh drifts from that file, and fails when a check the template wrote is missing from the spec. It also reports min wall, overhang past 45 degrees, bed contact, and the gap between bodies (warn under 0.3 mm per side). `--dim name=value±tol` is the same check for `x`, `y`, `z`, `shells`, `knuckles`, or `hole_count`. Knuckles use `knuckle_axis` (default `x`). The probe samples between the pin and the knuckle wall, so do not delete a knuckle check. Hole count is the circular bore count, not the genus and not the knuckle count. Genus counts handles and is reported beside the bore count. The only validation file is `<file>.validate.json`. Each run keeps the previous record in `history`. Do not pass a second path such as `model.validate.json`.
 
 `photo_part_heal` reports `fan_requested`, `fan_used`, and `fan_fallback`. `shells_dropped` counts input shells only. `union_applied` is true when `--union` merged shells. Caps are flat. Read `references/scan-cleanup.md` in scan mode.
 

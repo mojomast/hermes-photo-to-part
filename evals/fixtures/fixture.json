@@ -1,0 +1,36 @@
+{
+  "angle_deg": 18.0,
+  "coin_center_px": [
+    202,
+    87
+  ],
+  "coin_diameter_px": 93,
+  "coin_mm": 23.25,
+  "coin_points": [
+    [
+      155.5,
+      87
+    ],
+    [
+      248.5,
+      87
+    ]
+  ],
+  "front_axis": "z",
+  "license": "CC0-1.0",
+  "mask": "washer_mask.png",
+  "note": "Self-made synthetic photo of a washer and a coin disc. No third-party bytes.",
+  "offset_xy": [
+    36,
+    36
+  ],
+  "part_roi": [
+    8,
+    8,
+    159,
+    159
+  ],
+  "photo": "washer_photo.jpg",
+  "px_per_mm": 4.0,
+  "up": "y"
+}

@@ -37,7 +37,7 @@ def step_measure() -> str:
         "(try spur_gear, scroll, strap_hinge, thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, l_bracket, "
         "hinge, plate, countersink, revolve, or ribs before custom code) or "
         "photo_part_build. A build script imports photopart.features. "
-        "Write name_v1.stl in an absolute project directory. Then photo_part_validate "
+        "Write <shape>_v1.stl in an absolute project directory. Then photo_part_validate "
         "that file with the spec. Do not write into HERMES_HOME/cache. Do not delete an STL or 3MF."
     )
 
@@ -56,6 +56,8 @@ def step_validate(
     was_stale: bool | None,
     score: float | None = None,
     best: dict | None = None,
+    failures: list | None = None,
+    open_items: int | None = None,
 ) -> str:
     name = Path(path).name
     if best and score is not None and float(best["score"]) > float(score) + 1e-9:
@@ -64,6 +66,12 @@ def step_validate(
             "Do not deliver this file. photo_part_render the better version."
         )
     if ok:
+        pending = int(open_items or 0)
+        if pending:
+            return (
+                f"answer {pending} open items: --answer 'item=yes', judged against render sheet.png. "
+                f"Do not overwrite {path}."
+            )
         extra = ""
         if was_stale:
             extra = (
@@ -74,8 +82,10 @@ def step_validate(
             f"stop. Every check passed. Next: photo_part_render this same file ({path}), then deliver it.{extra} "
             "Do not overwrite it."
         )
+    listed = "; ".join(str(item) for item in (failures or []) if item)
+    failed_bit = f" Failed: {listed}." if listed else ""
     return (
-        f"Fix the mesh as a new name_vN.stl. Do not overwrite {path}. "
+        f"Fix the mesh as a new name_vN.stl. Do not overwrite {path}.{failed_bit} "
         "Then photo_part_validate and photo_part_render the new file."
     )
 

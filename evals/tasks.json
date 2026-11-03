@@ -2,67 +2,165 @@
   "tasks": [
     {
       "id": "box_matches_spec",
-      "prompt": "Model a 10 x 20 x 30 mm box as part_v1.stl. Write those sizes to spec.json first. Validate, then stop if next_step says stop."
+      "prompt": "Model a 10 x 20 x 30 mm box as part_v1.stl. Write those sizes to spec.json first. Validate, then stop if next_step says stop.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "box_dimension_error",
-      "prompt": "The spec says x=12 mm. The mesh is 10 mm. Validate and report the dimension error. Do not change the spec to make it pass."
+      "prompt": "The spec says x=12 mm. The mesh is 10 mm. Validate and report the dimension error. Do not change the spec to make it pass.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "hinge_four_knuckles",
-      "prompt": "Use the hinge template with 4 knuckles. Validate expected shells 2 and the template checks, including knuckles."
+      "prompt": "Use the hinge template with 4 knuckles. Validate expected shells 2 and the template checks, including knuckles.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "hinge_five_knuckles",
-      "prompt": "Use the hinge template with 5 knuckles. The spec must keep the knuckle count the template wrote."
+      "prompt": "Use the hinge template with 5 knuckles. The spec must keep the knuckle count the template wrote.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "countersink_deeper_than_sheet",
-      "prompt": "A countersink deeper than the sheet is impossible. Reject it before writing an STL."
+      "prompt": "A countersink deeper than the sheet is impossible. Reject it before writing an STL.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "dropped_template_knuckles",
-      "prompt": "Validate a hinge while omitting the knuckles check the template emitted. The check must fail."
+      "prompt": "Validate a hinge while omitting the knuckles check the template emitted. The check must fail.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "frozen_edit_needs_reason",
-      "prompt": "spec.json lists features 5 knuckles, teardrop, and scroll ends. After the first validate, do not drop a feature unless you pass a reason."
+      "prompt": "spec.json lists features 5 knuckles, teardrop, and scroll ends. After the first validate, do not drop a feature unless you pass a reason.",
+      "budget_calls": 40,
+      "budget_minutes": 5,
+      "holdout": true
     },
     {
       "id": "thin_wall_warning",
-      "prompt": "Validate a 0.4 mm plate. Printability should warn that the wall is under 0.8 mm and still return the measurements."
+      "prompt": "Validate a 0.4 mm plate. Printability should warn that the wall is under 0.8 mm and still return the measurements.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "print_in_place_gap",
-      "prompt": "Two bodies 0.15 mm apart should warn that the gap is under 0.3 mm per side."
+      "prompt": "Two bodies 0.15 mm apart should warn that the gap is under 0.3 mm per side.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "eight_view_sheet",
-      "prompt": "Render the comparison sheet: front, back, side, right, top, bottom, iso, and iso2. Previous version in red, new in green, plus the dimension table."
+      "prompt": "Render the comparison sheet: front, back, side, right, top, bottom, iso, and iso2. Previous version in red, new in green, plus the dimension table.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "out_of_plane_uncertainty",
-      "prompt": "A thickness read from a single front photo is out of plane. Tag it and warn. Do not treat it as a caliper measurement."
+      "prompt": "A thickness read from a single front photo is out of plane. Tag it and warn. Do not treat it as a caliper measurement.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "aruco_scale",
-      "prompt": "Scale the photo from an ArUco marker of known side length instead of guessing pixels per millimetre."
+      "prompt": "Scale the photo from an ArUco marker of known side length instead of guessing pixels per millimetre.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "unvalidated_version_refused",
-      "prompt": "Do not render part_v1.stl until photo_part_validate has written a fresh sidecar."
+      "prompt": "Do not render part_v1.stl until photo_part_validate has written a fresh sidecar.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "worse_version_reverts",
-      "prompt": "part_v2 is larger than the spec and scores below part_v1. Revert to part_v1. Do not deliver part_v2."
+      "prompt": "part_v2 is larger than the spec and scores below part_v1. Revert to part_v1. Do not deliver part_v2.",
+      "budget_calls": 40,
+      "budget_minutes": 5,
+      "holdout": true
     },
     {
       "id": "meshfix_absent_degrades",
-      "prompt": "Heal with engine meshfix. If PyMeshFix is not installed, keep the manifold result and say so."
+      "prompt": "Heal with engine meshfix. If PyMeshFix is not installed, keep the manifold result and say so.",
+      "budget_calls": 40,
+      "budget_minutes": 5
     },
     {
       "id": "grabcut_seed",
-      "prompt": "Segment the part with GrabCut from a seed on the dark silhouette, not the largest bright object."
+      "prompt": "Segment the part with GrabCut from a seed on the dark silhouette, not the largest bright object.",
+      "budget_calls": 40,
+      "budget_minutes": 5
+    },
+    {
+      "id": "template_default_name",
+      "prompt": "Call photo_part_template for spur_gear and l_bracket with no stl path. The files are spur_gear_v1.stl and l_bracket_v1.stl. Read bodies, bores, and sections_mm2 from the result. Do not write a probe script.",
+      "budget_calls": 40,
+      "budget_minutes": 5
+    },
+    {
+      "id": "best_version_filled",
+      "prompt": "Validate part_v1 that fails the spec and part_v2 that passes. part_v2 best_version is itself and revert_to is null. When an earlier passing version scores higher, best_version and revert_to name that file. A single passing file names itself.",
+      "budget_calls": 40,
+      "budget_minutes": 5
+    },
+    {
+      "id": "checklist_bool_answered",
+      "prompt": "Boolean features count as answered. A 5 knuckles item is filled from the knuckle check. photo_part_validate --answer item=yes is stored on the sidecar and is not a spec edit.",
+      "budget_calls": 40,
+      "budget_minutes": 5
+    },
+    {
+      "id": "bores_not_genus",
+      "prompt": "hole_count is the circular bore count. A 6-hole L-bracket is 6. A 5-knuckle body with two bores is hole_count 2 while genus stays 4. A blind M5 hole is one blind bore.",
+      "budget_calls": 40,
+      "budget_minutes": 5
+    },
+    {
+      "id": "thread_no_thin_wall",
+      "prompt": "An M3 hex_screw and a bottle_cap do not warn on minimum wall. A 0.4 mm plate does. Raw wall is still reported.",
+      "budget_calls": 40,
+      "budget_minutes": 5
+    },
+    {
+      "id": "validate_renders_on_pass",
+      "prompt": "One photo_part_validate with spec.json that passes also writes renders/sheet.png. A failing validate does not render and next_step lists the failures.",
+      "budget_calls": 40,
+      "budget_minutes": 5
+    },
+    {
+      "id": "budget_hint",
+      "prompt": "After 14 plugin calls, next_step starts with Budget: deliver the best validated version now.",
+      "budget_calls": 20,
+      "budget_minutes": 5
+    },
+    {
+      "id": "real_photo_overlay",
+      "prompt": "Measure the coin in the staged washer_photo.jpg, build the notched 20 mm washer with an 8 mm hole and a rim notch, validate, and render the overlay. Pass when confidence is not low, chamfer_norm is at most 0.05, pose error is within 10 degrees, and IoU against the truth mask is at least 0.7. Optional Hermes budget is 25 calls.",
+      "budget_calls": 25,
+      "budget_minutes": 5,
+      "holdout": true,
+      "fixtures": [
+        "washer_photo.jpg",
+        "washer_mask.png",
+        "fixture.json"
+      ]
+    },
+    {
+      "id": "overlay_low_confidence",
+      "prompt": "Render the washer photo with an roi that crops the part out. Confidence is low and overlay_iou is null. Do not change the mesh because of that overlay.",
+      "budget_calls": 40,
+      "budget_minutes": 5,
+      "fixtures": [
+        "washer_photo.jpg",
+        "fixture.json"
+      ]
     }
   ]
 }

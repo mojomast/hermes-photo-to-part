@@ -194,7 +194,7 @@ class BlocksAndHealTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             summary = json.loads(template_tool({"out_dir": str(Path(tmp) / "part"), "shape": "l_bracket", "no_3mf": True}))
         self.assertTrue(summary["ok"], summary)
-        self.assertTrue(summary["stl"].endswith("l_bracket.stl"))
+        self.assertTrue(summary["stl"].endswith("l_bracket_v1.stl"))
         self.assertEqual(summary["shape"], "l_bracket")
 
     def test_union_merges_overlapping_boxes(self):

@@ -72,7 +72,7 @@ def paint_overlay(
                 "Pass roi or seed on the part, and exclude the coin."
             )
         else:
-            pose = search_alignment(model, foreground)
+            pose = _select_pose(model, foreground, image, roi)
             placed = pose["placed"]
             note = pose["note"]
             rotation = pose["rotation_deg"]
@@ -84,6 +84,11 @@ def paint_overlay(
             image, roi=roi, seed=seed, exclude=exclude, hints=hints
         )
     iou = None if foreground is None else _iou(placed, foreground)
+    alignment = _alignment(image, placed, foreground, roi, seed, exclude)
+    if alignment["confidence"] == "low":
+        iou = None
+        unreliable = "overlay unreliable: pass roi= or a seed; do not iterate geometry on it"
+        note = f"{note} {unreliable}".strip() if note else unreliable
     poses = []
     if used == "auto" and iou is not None:
         poses = [
@@ -117,6 +122,7 @@ def paint_overlay(
         poses=poses,
         roi_expanded=roi_expanded,
         angled=angled,
+        alignment=alignment,
     )
 
 
@@ -151,7 +157,7 @@ def paint_auto_views(
     if foreground is not None:
         for index, (name, points, faces) in enumerate(views):
             model, _minimum, _maximum = raster_model(points, faces, photo_scale)
-            pose = search_alignment(model, foreground)
+            pose = _select_pose(model, foreground, image, roi)
             row = {
                 "pose": pose,
                 "name": name,
@@ -195,6 +201,13 @@ def paint_auto_views(
             }
             for row in (chosen, *rest)
         ]
+    alignment = _alignment(image, placed, foreground, roi, seed, exclude)
+    if alignment["confidence"] == "low":
+        iou = None
+        for row in poses:
+            row["iou"] = None
+        unreliable = "overlay unreliable: pass roi= or a seed; do not iterate geometry on it"
+        note = f"{note} {unreliable}".strip() if note else unreliable
     warnings = _overlay_warnings(
         iou, blob, angled=angled, missed=foreground is None, extra=roi_warnings
     )
@@ -215,6 +228,7 @@ def paint_auto_views(
         poses=poses,
         roi_expanded=roi_expanded,
         angled=angled,
+        alignment=alignment,
     )
 
 
@@ -273,6 +287,299 @@ def search_alignment(model: np.ndarray, foreground: np.ndarray) -> dict:
     }
 
 
+def _select_pose(model: np.ndarray, foreground: np.ndarray, image: np.ndarray, roi) -> dict:
+    """Chamfer picks the pose when image edges exist. IoU search is the fallback."""
+    iou_pose = search_alignment(model, foreground)
+    chamfer = _search_chamfer(model, image, foreground, roi)
+    iou_metrics = _chamfer_of_placed(iou_pose["placed"], image, roi)
+    if chamfer is None:
+        iou_pose.update(iou_metrics)
+        return iou_pose
+    # A rectangle matches at 180°. When the chamfer scores are that close,
+    # keep the pose nearer to 0°, which is what the IoU search already picks.
+    iou_px = iou_metrics.get("chamfer_px")
+    if iou_px is not None and float(chamfer["chamfer_px"]) + 0.35 >= float(iou_px):
+        if _pose_key(float(iou_pose["rotation_deg"]), bool(iou_pose["mirror"])) <= _pose_key(
+            float(chamfer["rotation_deg"]), bool(chamfer["mirror"])
+        ):
+            iou_pose.update(iou_metrics)
+            return iou_pose
+    if float(chamfer.get("chamfer_norm") or 1.0) <= 0.05 or float(chamfer["iou"]) + 0.08 >= float(iou_pose["iou"]):
+        return chamfer
+    iou_pose.update(iou_metrics)
+    return iou_pose
+
+
+def _search_chamfer(model: np.ndarray, image: np.ndarray, foreground: np.ndarray, roi) -> dict | None:
+    """Truncated chamfer on Canny edges. Scale stays at the known px/mm raster."""
+    try:
+        import cv2
+    except ImportError:
+        return None
+    edges, dist, tau, diagonal = _edge_field(image, roi)
+    if edges is None or int(np.count_nonzero(edges)) < 20 or diagonal <= 1.0:
+        return None
+    contour = _contour_points(model)
+    if contour is None:
+        return None
+    center = _mask_center(model)
+    photo = _mask_center(foreground)
+    if center is None or photo is None:
+        return None
+
+    def score(angle: float, mirror: bool) -> float:
+        samples = _rotated_samples(contour, center, photo, angle, mirror, dist)
+        if samples is None:
+            return 1e6
+        return float(np.mean(np.minimum(samples, tau)))
+
+    ranked = []
+    for mirror in (False, True):
+        for step in range(0, 360, 15):
+            ranked.append((score(float(step), mirror), float(step) % 360.0, mirror))
+    ranked.sort(key=lambda item: (item[0], _pose_key(item[1], item[2])))
+    coarse = ranked[0]
+    fine = []
+    for mirror in (False, True):
+        for delta in range(-15, 16):
+            angle = (coarse[1] + delta) % 360.0
+            fine.append((score(angle, mirror), angle, mirror))
+    fine.sort(key=lambda item: (item[0], _pose_key(item[1], item[2])))
+    top = fine[:3]
+    chamfer_px, angle, mirror = top[0]
+    placed = _place(model, foreground, angle, mirror, close=True, scale_mode="fixed")
+    full = _iou(placed, foreground)
+    norm = float(chamfer_px) / float(diagonal)
+    note = f"Aligned at {angle:g} deg, mirror {'on' if mirror else 'off'}. chamfer {chamfer_px:.2f} px."
+    return {
+        "placed": placed,
+        "rotation_deg": round(float(angle), 2),
+        "mirror": bool(mirror),
+        "iou": full,
+        "note": note,
+        "chamfer_px": round(float(chamfer_px), 4),
+        "chamfer_norm": round(norm, 4),
+        "top": [
+            {"rotation_deg": round(float(item[1]), 2), "mirror": bool(item[2]), "chamfer_px": round(float(item[0]), 4)}
+            for item in top
+        ],
+    }
+
+
+def _edge_field(image: np.ndarray, roi):
+    import cv2
+
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
+    edges = cv2.Canny(gray, 40, 120)
+    height, width = edges.shape
+    diagonal = math.hypot(width, height)
+    if roi is not None:
+        x, y, w, h = (int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3]))
+        x = max(0, min(width - 1, x))
+        y = max(0, min(height - 1, y))
+        w = max(1, min(width - x, w))
+        h = max(1, min(height - y, h))
+        gate = np.zeros_like(edges)
+        gate[y : y + h, x : x + w] = edges[y : y + h, x : x + w]
+        edges = gate
+        diagonal = math.hypot(w, h)
+    inv = np.where(edges > 0, np.uint8(0), np.uint8(255))
+    dist = cv2.distanceTransform(inv, cv2.DIST_L2, 3)
+    tau = 0.03 * float(diagonal)
+    return edges, dist, tau, float(diagonal)
+
+
+def _contour_points(model: np.ndarray):
+    import cv2
+
+    mask = (model.astype(np.uint8)) * 255
+    contours, _hierarchy = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return None
+    points = np.vstack([item.reshape(-1, 2) for item in contours]).astype(float)
+    if len(points) > 500:
+        points = points[:: max(1, len(points) // 500)]
+    return points
+
+
+def _mask_center(mask: np.ndarray):
+    ys, xs = np.nonzero(mask)
+    if xs.size == 0:
+        return None
+    return float(xs.mean()), float(ys.mean())
+
+
+def _rotated_samples(points, center, photo, angle: float, mirror: bool, dist: np.ndarray):
+    mcx, mcy = center
+    pcx, pcy = photo
+    dx = points[:, 0] - mcx
+    dy = points[:, 1] - mcy
+    if mirror:
+        dx = -dx
+    rad = math.radians(float(angle))
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    rx = cos_a * dx - sin_a * dy
+    ry = sin_a * dx + cos_a * dy
+    qx = np.rint(pcx + rx).astype(np.int32)
+    qy = np.rint(pcy + ry).astype(np.int32)
+    height, width = dist.shape
+    keep = (qx >= 0) & (qy >= 0) & (qx < width) & (qy < height)
+    if int(np.count_nonzero(keep)) < 8:
+        return None
+    return dist[qy[keep], qx[keep]]
+
+
+def _chamfer_of_placed(placed: np.ndarray, image: np.ndarray, roi) -> dict:
+    try:
+        edges, dist, _tau, diagonal = _edge_field(image, roi)
+    except Exception:
+        return {"chamfer_px": None, "chamfer_norm": None}
+    if edges is None or diagonal <= 1.0 or int(np.count_nonzero(edges)) < 20:
+        return {"chamfer_px": None, "chamfer_norm": None}
+    points = _contour_points(placed)
+    if points is None:
+        return {"chamfer_px": None, "chamfer_norm": None}
+    height, width = dist.shape
+    qx = np.rint(points[:, 0]).astype(np.int32)
+    qy = np.rint(points[:, 1]).astype(np.int32)
+    keep = (qx >= 0) & (qy >= 0) & (qx < width) & (qy < height)
+    if int(np.count_nonzero(keep)) < 8:
+        return {"chamfer_px": None, "chamfer_norm": None}
+    samples = dist[qy[keep], qx[keep]]
+    tau = 0.03 * diagonal
+    chamfer_px = float(np.mean(np.minimum(samples, tau)))
+    return {"chamfer_px": round(chamfer_px, 4), "chamfer_norm": round(chamfer_px / diagonal, 4)}
+
+
+def _alignment(image, placed, foreground, roi, seed, exclude) -> dict:
+    gate = _segmentation_gate(image, foreground, roi, seed, exclude)
+    metrics = _chamfer_of_placed(placed, image, roi) if placed is not None else {"chamfer_px": None, "chamfer_norm": None}
+    iou = None
+    if gate["confidence"] != "low" and foreground is not None and placed is not None:
+        iou = round(float(_iou(placed, foreground)), 4)
+    return {
+        "chamfer_px": metrics.get("chamfer_px"),
+        "chamfer_norm": metrics.get("chamfer_norm"),
+        "iou": iou,
+        "stability": gate["stability"],
+        "confidence": gate["confidence"],
+        "reason": gate["reason"],
+    }
+
+
+def _segmentation_gate(image, foreground, roi, seed, exclude) -> dict:
+    """Stability of the part mask. Low confidence drops the IoU headline."""
+    color_masks = []
+    for scale in (0.85, 1.0, 1.15):
+        raw = color_mask(image, threshold_scale=scale)
+        if raw is None:
+            continue
+        chosen = _gate_mask(raw, roi, seed, exclude)
+        if chosen is not None and int(chosen.sum()) >= 16:
+            color_masks.append(chosen)
+    grab = []
+    if roi is not None or seed is not None:
+        for iterations in (1, 3, 5):
+            cut = grabcut_mask(image, roi=roi, seed=seed, iterations=iterations)
+            if cut is not None and int(np.count_nonzero(cut)) >= 16:
+                grab.append(cut.astype(bool))
+    color_stability = _mean_pairwise_iou(color_masks)
+    grab_stability = _mean_pairwise_iou(grab)
+    if grab and grab_stability >= 0.85:
+        stability = grab_stability
+    elif color_masks:
+        stability = color_stability
+    else:
+        stability = 0.0
+    touches, fraction = _roi_stats(foreground, image.shape, roi)
+    reasons = []
+    low = foreground is None
+    if foreground is None:
+        reasons.append("no part mask")
+    else:
+        if stability < 0.85:
+            reasons.append(f"stability {stability:.2f} is under 0.85")
+            low = True
+        # The 5% floor applies inside an explicit roi. A part that is small in
+        # the full frame is still a real segmentation; cropping it out of the
+        # roi is what should drop confidence.
+        if roi is not None and fraction < 0.05:
+            reasons.append(f"mask area {fraction:.2f} of the roi is under 5%")
+            low = True
+        if fraction > 0.90 and touches >= 2:
+            reasons.append(f"mask area {fraction:.2f} of the roi and it touches two borders")
+            low = True
+        elif touches >= 2 and roi is not None and fraction > 0.5:
+            reasons.append("mask touches two or more roi borders")
+            low = True
+    if low:
+        confidence = "low"
+    elif stability >= 0.92 and touches == 0:
+        confidence = "high"
+    else:
+        confidence = "medium"
+    reason = "; ".join(reasons) if reasons else "segmentation stable"
+    return {"stability": round(float(stability), 4), "confidence": confidence, "reason": reason}
+
+
+def _gate_mask(mask, roi, seed, exclude):
+    chosen = mask.copy()
+    for rect in exclude or []:
+        _zero_rect(chosen, rect)
+    if roi is not None:
+        gated = np.zeros_like(chosen)
+        _copy_rect(chosen, gated, roi)
+        chosen = gated
+    if seed is not None:
+        component = _component_at(chosen, seed)
+    else:
+        component = _largest_component(chosen)
+    if component is None or int(component.sum()) < 16:
+        return None
+    return component
+
+
+def _mean_pairwise_iou(masks: list) -> float:
+    if len(masks) < 2:
+        return 1.0 if masks else 0.0
+    scores = []
+    for index, left in enumerate(masks):
+        for right in masks[index + 1 :]:
+            scores.append(_iou(left, right))
+    if not scores:
+        return 0.0
+    return float(sum(scores) / len(scores))
+
+
+def _roi_stats(mask, shape, roi) -> tuple[int, float]:
+    if mask is None:
+        return 0, 0.0
+    height, width = shape[:2]
+    if roi is not None:
+        x, y, w, h = (int(roi[0]), int(roi[1]), int(max(1, roi[2])), int(max(1, roi[3])))
+        x = max(0, min(width - 1, x))
+        y = max(0, min(height - 1, y))
+        w = max(1, min(width - x, w))
+        h = max(1, min(height - y, h))
+        region = mask[y : y + h, x : x + w]
+    else:
+        region = mask
+    if region.size == 0:
+        return 0, 0.0
+    fraction = float(np.count_nonzero(region)) / float(region.size)
+    touches = 0
+    if region[0].any():
+        touches += 1
+    if region[-1].any():
+        touches += 1
+    if region[:, 0].any():
+        touches += 1
+    if region[:, -1].any():
+        touches += 1
+    return touches, fraction
+
+
 def _prefer_pose(new_iou: float, new_index: int, old_iou: float, old_index: int) -> bool:
     if new_iou > old_iou + 0.01:
         return True
@@ -296,7 +603,15 @@ def _resize_by(mask: np.ndarray, factor: float) -> np.ndarray:
     return small > 127
 
 
-def _place(model: np.ndarray, foreground: np.ndarray, angle_deg: float, mirror: bool, *, close: bool) -> np.ndarray:
+def _place(
+    model: np.ndarray,
+    foreground: np.ndarray,
+    angle_deg: float,
+    mirror: bool,
+    *,
+    close: bool,
+    scale_mode: str = "match",
+) -> np.ndarray:
     model_box = _bbox(model)
     photo_box = _bbox(foreground)
     if model_box is None or photo_box is None:
@@ -307,7 +622,9 @@ def _place(model: np.ndarray, foreground: np.ndarray, angle_deg: float, mirror: 
     pys, pxs = np.nonzero(foreground)
     model_pixels = int(xs.size)
     photo_pixels = int(pxs.size)
-    if model_pixels > 0 and photo_pixels > 0:
+    if scale_mode == "fixed":
+        scale = 1.0
+    elif model_pixels > 0 and photo_pixels > 0:
         # Pixel area stays stable when the part is rotated. The axis-aligned
         # box of a rotated silhouette is larger than the part.
         scale = math.sqrt(photo_pixels / model_pixels)
@@ -360,6 +677,7 @@ def _write_overlay(
     poses=None,
     roi_expanded=False,
     angled=False,
+    alignment=None,
 ) -> dict:
     if warnings and note:
         note = note + " " + " ".join(warnings)
@@ -388,6 +706,7 @@ def _write_overlay(
         "overlay_poses": list(poses or []),
         "overlay_top_poses": list(poses or [])[:3],
         "overlay_roi_expanded": bool(roi_expanded),
+        "alignment": alignment,
     }
 
 
@@ -425,7 +744,7 @@ def foreground_mask(image: np.ndarray) -> np.ndarray | None:
     return component
 
 
-def color_mask(image: np.ndarray) -> np.ndarray | None:
+def color_mask(image: np.ndarray, threshold_scale: float = 1.0) -> np.ndarray | None:
     """Pixels that differ from the border color, before a blob is chosen."""
     if image.ndim != 3 or image.shape[0] < 4 or image.shape[1] < 4:
         return None
@@ -433,7 +752,7 @@ def color_mask(image: np.ndarray) -> np.ndarray | None:
     background = np.median(border, axis=0)
     distance = np.linalg.norm(image.astype(np.float64) - background, axis=2)
     spread = float(np.median(np.abs(border - background)))
-    mask = distance > max(18.0, spread * 4.0 + 12.0)
+    mask = distance > max(18.0, spread * 4.0 + 12.0) * float(threshold_scale)
     if int(mask.sum()) < 16:
         return None
     return mask
@@ -521,7 +840,7 @@ def _overlay_warnings(iou, blob, *, angled: bool, missed: bool, extra: list | No
     return warnings
 
 
-def grabcut_mask(image: np.ndarray, roi=None, seed=None) -> np.ndarray | None:
+def grabcut_mask(image: np.ndarray, roi=None, seed=None, iterations: int = 3) -> np.ndarray | None:
     """OpenCV GrabCut seeded by a rectangle or a point. None if OpenCV is absent."""
     try:
         import cv2
@@ -554,7 +873,7 @@ def grabcut_mask(image: np.ndarray, roi=None, seed=None) -> np.ndarray | None:
     bgd = np.zeros((1, 65), np.float64)
     fgd = np.zeros((1, 65), np.float64)
     try:
-        cv2.grabCut(image, mask, (x, y, w, h), bgd, fgd, 3, mode)
+        cv2.grabCut(image, mask, (x, y, w, h), bgd, fgd, max(1, int(iterations)), mode)
     except cv2.error:
         return None
     foreground = (mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD)

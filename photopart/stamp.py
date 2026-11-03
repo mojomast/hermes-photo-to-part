@@ -97,6 +97,7 @@ def _history_of(prior: dict | None) -> list[dict]:
                 "failures": list(prior.get("failures") or []),
                 "validated_at": prior.get("validated_at"),
                 "file": prior.get("file"),
+                "answers": dict(prior.get("answers") or {}),
             }
         )
     return history[-_HISTORY_CAP:]
