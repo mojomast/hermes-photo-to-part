@@ -1,0 +1,37 @@
+{
+  "part": "i_screw",
+  "units": "mm",
+  "x": 6.9,
+  "y": 6.9,
+  "z": 11.2,
+  "tolerance": 0.3,
+  "shells": 1,
+  "hole_count": 0,
+  "diameters": {
+    "flange": 6.9,
+    "thread_major": 3.1,
+    "thread_minor": 2.4
+  },
+  "features": [
+    "hex head",
+    "flange",
+    "M3x0.5 external thread"
+  ],
+  "measured_from_photo": {
+    "px_per_mm": 31.27,
+    "across_corners": 6.2,
+    "across_flats": 5.37,
+    "flange_dia": 6.9,
+    "head_height_total": 4.21,
+    "thread_length": 6.94,
+    "thread_major_dia": 2.97,
+    "overall_length": 11.15
+  },
+  "notes": [
+    "1:1 metric scale from the mm ruler in the photo (5 mm major ticks = 156 px, '1' cm numeral at 10 mm).",
+    "Head across corners measured 6.20 mm -> 5.37 mm across flats; modelled 5.5 mm nominal so a 5.5 mm spanner fits the print.",
+    "Flange diameter is not separable from the hex silhouette in a side-on photo: assumed 6.9 mm from flange-bolt proportions.",
+    "Flange thickness assumed 0.9 mm, included inside the 4.2 mm measured head height.",
+    "Thread modelled oversized for FDM: 3.1 mm major, 0.5 mm pitch, flat crests, wide root."
+  ]
+}

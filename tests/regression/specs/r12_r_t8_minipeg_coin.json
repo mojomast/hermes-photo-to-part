@@ -1,0 +1,17 @@
+{
+  "part": "peg_leg",
+  "note": "One jaw half of a 21.4 mm red decorative clothespin. L and W are photo_part_measure output (coin scale, px_per_mm 34.0989). T is assumed.",
+  "x": 5.628,
+  "y": 21.418,
+  "z": 2.2,
+  "shells": 1,
+  "hole_count": 1,
+  "holes": [{"x": 0.0, "y": 6.018, "diameter": 1.97, "axis": "z"}],
+  "features": {
+    "rounded jaw end R2.81": true,
+    "tapered tail R2.0": true,
+    "spring groove 2.4x0.7 on inner face": true,
+    "two wire edge notches R0.7": true,
+    "pivot bore 1.97 through": true
+  }
+}

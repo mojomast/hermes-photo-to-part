@@ -1,0 +1,21 @@
+{
+  "part": "cap",
+  "description": "Printable replacement screw cap for a PCO 1881 PET bottle neck, no tether. Straight-knurled skirt, internal thread, 1.2 mm top wall.",
+  "x": 33.0,
+  "y": 33.0,
+  "z": 17.0,
+  "shells": 1,
+  "features": {
+    "internal PCO 1881 thread (27.4 mm thread OD, 2.7 mm pitch)": true,
+    "60 straight knurls on the skirt": true,
+    "no tether / no tamper band": true,
+    "top wall 1.2 mm": true
+  },
+  "assumptions": [
+    "Height 17 mm is the full cap height measured from the sealing rim at the bottom to the flat top face.",
+    "Outer diameter 33 mm is the outside of the knurl crests; skirt land diameter is that minus the knurl depth.",
+    "The photo cannot show wall thickness, thread depth, or the inside of the cap; those come from the user's numbers and PCO 1881 practice, not from the image.",
+    "Internal thread is modelled metal-free at the stated 27.4 mm thread OD with a print clearance for FDM.",
+    "The tether, tamper-evident band and top-surface branding in the photo are deliberately omitted."
+  ]
+}

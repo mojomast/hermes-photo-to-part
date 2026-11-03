@@ -1,0 +1,22 @@
+{
+  "part": "flat_corner_bracket_125",
+  "units": "mm",
+  "x": 125.0,
+  "y": 125.0,
+  "z": 1.5,
+  "shells": 1,
+  "hole_count": 6,
+  "holes": [
+    {"x": 30.0, "y": 7.5, "diameter": 7.0},
+    {"x": 65.0, "y": 7.5, "diameter": 7.0},
+    {"x": 100.0, "y": 7.5, "diameter": 7.0},
+    {"x": 7.5, "y": 30.0, "diameter": 7.0},
+    {"x": 7.5, "y": 65.0, "diameter": 7.0},
+    {"x": 7.5, "y": 100.0, "diameter": 7.0}
+  ],
+  "notes": [
+    "Leg length 125 outside corner and 1.5 mm sheet: given by the user.",
+    "Strip width, hole diameter and hole spacing: estimated from the photo (assumed).",
+    "Flat L plate in one plane; no 3D flange bend, so no out-of-plane geometry is unobserved."
+  ]
+}

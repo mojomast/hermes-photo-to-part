@@ -1,0 +1,17 @@
+{
+  "part": "teardrop_hinge",
+  "units": "mm",
+  "x": 100.0,
+  "y": 50.0,
+  "z": 6.0,
+  "shells": 2,
+  "knuckles": 5,
+  "hole_count": 2,
+  "features": {
+    "teardrop profile (leaf flares into the knuckle)": "yes",
+    "5 alternating knuckles": "yes",
+    "print in place, 2 bodies": "yes",
+    "laid out 180 deg open for printing": "yes",
+    "leaf plates flat on the bed": "yes"
+  }
+}

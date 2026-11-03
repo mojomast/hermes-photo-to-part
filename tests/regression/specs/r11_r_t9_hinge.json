@@ -1,0 +1,28 @@
+{
+  "part": "teardrop_piano_hinge",
+  "units": "mm",
+  "x": 100.0,
+  "y": 50.0,
+  "z": 6.0,
+  "shells": 2,
+  "knuckles": 5,
+  "knuckle_axis": "x",
+  "holes": [
+    {"x": 10.0, "y": 0.0, "diameter": 3.8, "axis": "x", "note": "printed bore = 3.0 mm nominal pin + 2 x 0.4 mm radial clearance; probed inside knuckle 1"}
+  ],
+  "features": {
+    "print in place": true,
+    "5 knuckles": true,
+    "teardrop knuckle profile": true,
+    "laid flat 180 degrees open": true,
+    "3.8 mm pin bore": true,
+    "two leaves": true
+  },
+  "notes": [
+    "length 100 mm along the pin axis (X)",
+    "each leaf 25 mm from the knuckle centre line, 50 mm overall across Y",
+    "leaf thickness 1.5 mm, knuckle outer diameter 6.0 mm (Z)",
+    "pin nominal 3.0 mm diameter with 0.4 mm clearance per side -> 3.8 mm bore",
+    "5 alternating knuckles, print-in-place, two bodies (one per leaf); no printed pin"
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "part": "piano_hinge_teardrop",
+  "units": "mm",
+  "note": "Print-in-place teardrop piano hinge, 180 deg open (flat). Leaf A carries 3 knuckles plus the captive pin; leaf B carries 2 bored knuckles. 2 bodies by design: the pin is moulded into leaf A, so no separate pin part.",
+  "bbox": {"x": 100.0, "y": 50.0, "z": 6.0},
+  "x": 100.0,
+  "y": 50.0,
+  "z": 6.0,
+  "shells": 2,
+  "knuckles": 5,
+  "knuckle_axis": "x",
+  "dims": {
+    "length_mm": 100.0,
+    "leaf_width_from_knuckle_centre_mm": 25.0,
+    "leaf_thickness_mm": 1.5,
+    "knuckle_outer_diameter_mm": 6.0,
+    "pin_diameter_mm": 3.0,
+    "bore_diameter_mm": 3.8,
+    "pin_clearance_mm": 0.4,
+    "knuckle_count": 5
+  },
+  "features": {
+    "5 alternating knuckles": true,
+    "teardrop knuckle profile": true,
+    "print-in-place, 180 degrees open": true,
+    "two bodies: leaf A with integral pin, leaf B": true
+  },
+  "assumed": {
+    "axial gap between knuckle end faces": "0.4 mm, same as the stated pin clearance",
+    "gap between the two leaf inner edges": "0.4 mm, hidden under the knuckle barrel",
+    "teardrop taper length from leaf top into the barrel": "6.0 mm",
+    "barrel axis height above the bed": "3.0 mm, knuckle tangent to the bed so both leaves print flat",
+    "bed-contact and overhang behaviour": "not observable in a single photo"
+  }
+}

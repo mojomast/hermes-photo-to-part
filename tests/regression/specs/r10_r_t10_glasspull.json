@@ -1,0 +1,28 @@
+{
+  "part": "glass_pull",
+  "description": "Antique pressed-glass rosette drawer pull, resin replica. Face at z=0, M5 blind hole in the shank end at z=50.",
+  "units": "mm",
+  "x": 45.0,
+  "y": 45.0,
+  "z": 50.0,
+  "shells": 1,
+  "hole_count": 1,
+  "holes": [
+    {"x": 0.0, "y": 0.0, "diameter": 4.2, "z": 42.5, "axis": "z"}
+  ],
+  "features": {
+    "rosette face diameter 45 mm": "yes",
+    "overall length 50 mm": "yes",
+    "shank diameter 16 mm": "yes",
+    "M5 tap hole 4.2 mm diameter": "yes",
+    "tap hole 15 mm deep from shank end": "yes",
+    "12 petal scallops on the rosette": "yes",
+    "single watertight body": "yes"
+  },
+  "assumed": [
+    "face disc thickness 8.2 mm (not visible in an oblique photo)",
+    "shoulder/neck outer diameters: shoulder 36.8 mm max, waist 23.6 mm",
+    "petal count 12, petal relief 2 mm above the face plane",
+    "shank groove depth 0.4 mm, four grooves"
+  ]
+}

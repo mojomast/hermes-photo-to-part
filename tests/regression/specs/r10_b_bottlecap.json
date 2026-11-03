@@ -1,0 +1,34 @@
+{
+  "part": "bottle_cap",
+  "units": "mm",
+  "x": 33.0,
+  "y": 33.0,
+  "z": 17.0,
+  "shells": 1,
+  "hole_count": 1,
+  "source": "user numbers + photo; no scale reference in image (px/mm inferred from cap OD)",
+  "dimensions": {
+    "outer_diameter_mm": {"value": 33.0, "source": "user", "observed": "in-plane, photo"},
+    "height_mm": {"value": 17.0, "source": "user", "observed": "in-plane, photo"},
+    "top_wall_mm": {"value": 1.2, "source": "user", "observed": "not visible in photo (depth)"},
+    "knurl_count": {"value": 60, "source": "user", "observed": "photo shows fine vertical ribs"},
+    "knurl_depth_mm": {"value": 0.55, "source": "assumed", "observed": "not measurable"},
+    "thread": {"value": "PCO 1881 internal", "source": "user", "observed": "hidden inside cap"},
+    "thread_od_mm": {"value": 27.4, "source": "user (neck thread OD)", "observed": "hidden"},
+    "thread_pitch_mm": {"value": 2.7, "source": "user", "observed": "hidden"},
+    "thread_depth_mm": {"value": 1.25, "source": "assumed (PCO 1881 E-I)/2 = 1.25", "observed": "hidden"},
+    "bore_major_mm": {"value": 27.8, "source": "assumed: 27.4 + 0.4 diametral clearance", "observed": "hidden"},
+    "thread_turns": {"value": 2.0, "source": "assumed (PCO 1881 has ~1.5)", "observed": "hidden"},
+    "bottom_chamfer_mm": {"value": 0.5, "source": "assumed", "observed": "small bevel visible"},
+    "top_edge_round_mm": {"value": 0.8, "source": "assumed", "observed": "rounded rim in photo"},
+    "tether": {"value": "none", "source": "user", "observed": "photo shows tether ring + straps, deliberately omitted"}
+  },
+  "features": [
+    "single shell",
+    "closed flat top with 1.2 mm wall",
+    "one open bore from below",
+    "internal single-start thread 2.7 mm pitch",
+    "60 straight knurls on the skirt",
+    "no tether ring or strap"
+  ]
+}

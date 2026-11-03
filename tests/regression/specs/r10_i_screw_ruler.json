@@ -1,0 +1,30 @@
+{
+  "part": "m3_flange_hex_screw",
+  "units": "mm",
+  "scale": "1:1",
+  "source": "M3_screw_and_6-32_UTS_screw_with_ruler_thread_pitch.png",
+  "photo_px_per_mm": 31.1,
+  "bbox": {"x": 7.0, "y": 7.0, "z": 9.15},
+  "shells": 1,
+  "hole_count": 0,
+  "measured": {
+    "flange_diameter": 7.0,
+    "across_flats": 5.5,
+    "head_height_total": 3.2,
+    "thread_length": 6.0,
+    "thread_pitch": 0.5,
+    "overall_length": 9.2
+  },
+  "features": {
+    "circular flange under head": "yes",
+    "external M3 thread": "yes",
+    "hex head 5.5 mm across flats": "yes",
+    "internal hex socket": "no",
+    "through bore": "no"
+  },
+  "assumptions": [
+    "Thread major diameter printed at 3.2 mm (+0.2 oversize) for FDM shrinkage; ISO nominal is 3.0 mm.",
+    "Head height split as 2.5 mm hex + 0.7 mm flange; the photo cannot separate the two on a side-on view.",
+    "Thread runs full length under the head (photo shows no plain shank)."
+  ]
+}

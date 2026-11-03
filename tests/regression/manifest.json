@@ -1,0 +1,340 @@
+{
+  "version": "0.1.14",
+  "cases": [
+    {
+      "id": "r10/a_gear",
+      "round": "r10",
+      "case": "a_gear",
+      "mesh": "meshes/r10_a_gear.stl",
+      "spec": "specs/r10_a_gear.json",
+      "sidecar": "meshes/r10_a_gear.stl.faces.json",
+      "note": "",
+      "expect": {
+        "bores": 1,
+        "spec_pass": true,
+        "wall_warning": false
+      }
+    },
+    {
+      "id": "r10/b_bottlecap",
+      "round": "r10",
+      "case": "b_bottlecap",
+      "mesh": "meshes/r10_b_bottlecap.stl",
+      "spec": "specs/r10_b_bottlecap.json",
+      "sidecar": "meshes/r10_b_bottlecap.stl.faces.json",
+      "note": "Copied cap, with and without its sidecar: no thin-wall warning.",
+      "expect": {
+        "bores": 1,
+        "spec_pass": true,
+        "wall_warning": false,
+        "cylinders_max": 0
+      }
+    },
+    {
+      "id": "r10/d_strap_hinge",
+      "round": "r10",
+      "case": "d_strap_hinge",
+      "mesh": "meshes/r10_d_strap_hinge.stl",
+      "spec": "specs/r10_d_strap_hinge.json",
+      "sidecar": null,
+      "note": "No knuckle check. The mesh is 3 shells, so shells=1 fails. Four fastener holes.",
+      "expect": {
+        "bores": 4,
+        "spec_pass": false,
+        "cylinders_max": 0,
+        "no_knuckle_failure": true
+      }
+    },
+    {
+      "id": "r10/i_screw_ruler",
+      "round": "r10",
+      "case": "i_screw_ruler",
+      "mesh": "meshes/r10_i_screw_ruler.stl",
+      "spec": "specs/r10_i_screw_ruler.json",
+      "sidecar": "meshes/r10_i_screw_ruler.stl.faces.json",
+      "note": "v0.1.13 warned at 0.70 mm with and without the sidecar.",
+      "expect": {
+        "bores": 0,
+        "spec_pass": true,
+        "wall_warning": false
+      }
+    },
+    {
+      "id": "r10/r_t10_glasspull",
+      "round": "r10",
+      "case": "r_t10_glasspull",
+      "mesh": "meshes/r10_r_t10_glasspull.stl",
+      "spec": "specs/r10_r_t10_glasspull.json",
+      "sidecar": null,
+      "note": "Rosette decimated to 8000 faces. The 4.2 mm tap is the only bore. The dish is not a bore.",
+      "expect": {
+        "bores": 1,
+        "dish_not_bore": true,
+        "spec_pass": true
+      }
+    },
+    {
+      "id": "r10/r_t7_graybracket_persp",
+      "round": "r10",
+      "case": "r_t7_graybracket_persp",
+      "mesh": "meshes/r10_r_t7_graybracket_persp.stl",
+      "spec": "specs/r10_r_t7_graybracket_persp.json",
+      "sidecar": null,
+      "note": "",
+      "expect": {
+        "bores": 6,
+        "spec_pass": true
+      }
+    },
+    {
+      "id": "r10/r_t8_minipeg_coin",
+      "round": "r10",
+      "case": "r_t8_minipeg_coin",
+      "mesh": "meshes/r10_r_t8_minipeg_coin.stl",
+      "spec": "specs/r10_r_t8_minipeg_coin.json",
+      "sidecar": null,
+      "note": "",
+      "expect": {
+        "bores": 0,
+        "spec_pass": true
+      }
+    },
+    {
+      "id": "r10/r_t9_hinge",
+      "round": "r10",
+      "case": "r_t9_hinge",
+      "mesh": "meshes/r10_r_t9_hinge.stl",
+      "spec": "specs/r10_r_t9_hinge.json",
+      "sidecar": null,
+      "note": "Rings are 5. v0.1.13 reported 1 merged cylinder. The archived solid is one shell, so shells=2 still fails.",
+      "expect": {
+        "knuckles": 5,
+        "no_knuckle_failure": true,
+        "spec_pass": false
+      }
+    },
+    {
+      "id": "r11/a_gear",
+      "round": "r11",
+      "case": "a_gear",
+      "mesh": "meshes/r11_a_gear.stl",
+      "spec": "specs/r11_a_gear.json",
+      "sidecar": "meshes/r11_a_gear.stl.faces.json",
+      "note": "",
+      "expect": {
+        "bores": 1,
+        "spec_pass": true,
+        "wall_warning": false
+      }
+    },
+    {
+      "id": "r11/b_bottlecap",
+      "round": "r11",
+      "case": "b_bottlecap",
+      "mesh": "meshes/r11_b_bottlecap.stl",
+      "spec": "specs/r11_b_bottlecap.json",
+      "sidecar": null,
+      "note": "No sidecar for this STL. v0.1.13 warned on thin area. Dimensions in the file are 32 x 16.1, short of the spec.",
+      "expect": {
+        "spec_pass": false,
+        "wall_warning": false,
+        "cylinders_max": 0
+      }
+    },
+    {
+      "id": "r11/d_strap_hinge",
+      "round": "r11",
+      "case": "d_strap_hinge",
+      "mesh": "meshes/r11_d_strap_hinge.stl",
+      "spec": "specs/r11_d_strap_hinge.json",
+      "sidecar": null,
+      "note": "Spec knuckles is 0. Zero cylinders, so the ring count is only a warning.",
+      "expect": {
+        "bores": 0,
+        "spec_pass": true,
+        "knuckles": 0,
+        "cylinders_max": 0,
+        "no_knuckle_failure": true
+      }
+    },
+    {
+      "id": "r11/i_screw_ruler",
+      "round": "r11",
+      "case": "i_screw_ruler",
+      "mesh": "meshes/r11_i_screw_ruler.stl",
+      "spec": "specs/r11_i_screw_ruler.json",
+      "sidecar": "meshes/r11_i_screw_ruler.stl.faces.json",
+      "note": "Thread already quiet in v0.1.13. Keep it quiet with and without the sidecar.",
+      "expect": {
+        "bores": 0,
+        "spec_pass": true,
+        "wall_warning": false
+      }
+    },
+    {
+      "id": "r11/r_t10_glasspull",
+      "round": "r11",
+      "case": "r_t10_glasspull",
+      "mesh": "meshes/r11_r_t10_glasspull.stl",
+      "spec": "specs/r11_r_t10_glasspull.json",
+      "sidecar": null,
+      "note": "Archived spec sets hole_count to 2 after the dish was counted as a bore. The tap is the only bore.",
+      "expect": {
+        "bores": 1,
+        "dish_not_bore": true,
+        "spec_pass": false
+      }
+    },
+    {
+      "id": "r11/r_t7_graybracket_persp",
+      "round": "r11",
+      "case": "r_t7_graybracket_persp",
+      "mesh": "meshes/r11_r_t7_graybracket_persp.stl",
+      "spec": "specs/r11_r_t7_graybracket_persp.json",
+      "sidecar": null,
+      "note": "",
+      "expect": {
+        "bores": 6,
+        "spec_pass": true
+      }
+    },
+    {
+      "id": "r11/r_t8_minipeg_coin",
+      "round": "r11",
+      "case": "r_t8_minipeg_coin",
+      "mesh": "meshes/r11_r_t8_minipeg_coin.stl",
+      "spec": "specs/r11_r_t8_minipeg_coin.json",
+      "sidecar": null,
+      "note": "",
+      "expect": {
+        "bores": 1,
+        "spec_pass": true
+      }
+    },
+    {
+      "id": "r11/r_t9_hinge",
+      "round": "r11",
+      "case": "r_t9_hinge",
+      "mesh": "meshes/r11_r_t9_hinge.stl",
+      "spec": "specs/r11_r_t9_hinge.json",
+      "sidecar": null,
+      "note": "Five knuckles, and the spec passes. v0.1.13 already counted 5 here.",
+      "expect": {
+        "knuckles": 5,
+        "spec_pass": true
+      }
+    },
+    {
+      "id": "r12/a_gear",
+      "round": "r12",
+      "case": "a_gear",
+      "mesh": "meshes/r12_a_gear.stl",
+      "spec": "specs/r12_a_gear.json",
+      "sidecar": "meshes/r12_a_gear.stl.faces.json",
+      "note": "",
+      "expect": {
+        "bores": 1,
+        "spec_pass": true,
+        "wall_warning": false
+      }
+    },
+    {
+      "id": "r12/b_bottlecap",
+      "round": "r12",
+      "case": "b_bottlecap",
+      "mesh": "meshes/r12_b_bottlecap.stl",
+      "spec": "specs/r12_b_bottlecap.json",
+      "sidecar": "meshes/r12_b_bottlecap.stl.faces.json",
+      "note": "Sidecar hash does not match. v0.1.13 warned. Detection must keep the wall quiet.",
+      "expect": {
+        "bores": 1,
+        "spec_pass": true,
+        "wall_warning": false,
+        "cylinders_max": 0
+      }
+    },
+    {
+      "id": "r12/d_strap_hinge",
+      "round": "r12",
+      "case": "d_strap_hinge",
+      "mesh": "meshes/r12_d_strap_hinge.stl",
+      "spec": "specs/r12_d_strap_hinge.json",
+      "sidecar": null,
+      "note": "No knuckle field. Six holes, zero cylinders.",
+      "expect": {
+        "bores": 6,
+        "spec_pass": true,
+        "cylinders_max": 0,
+        "no_knuckle_failure": true
+      }
+    },
+    {
+      "id": "r12/i_screw_ruler",
+      "round": "r12",
+      "case": "i_screw_ruler",
+      "mesh": "meshes/r12_i_screw_ruler.stl",
+      "spec": "specs/r12_i_screw_ruler.json",
+      "sidecar": "meshes/r12_i_screw_ruler.stl.faces.json",
+      "note": "v0.1.13 warned min wall 0.75 mm with and without the sidecar.",
+      "expect": {
+        "bores": 0,
+        "spec_pass": true,
+        "wall_warning": false
+      }
+    },
+    {
+      "id": "r12/r_t10_glasspull",
+      "round": "r12",
+      "case": "r_t10_glasspull",
+      "mesh": "meshes/r12_r_t10_glasspull.stl",
+      "spec": "specs/r12_r_t10_glasspull.json",
+      "sidecar": null,
+      "note": "hole_count 1. The decorative dish is not a bore.",
+      "expect": {
+        "bores": 1,
+        "dish_not_bore": true,
+        "spec_pass": true
+      }
+    },
+    {
+      "id": "r12/r_t7_graybracket_persp",
+      "round": "r12",
+      "case": "r_t7_graybracket_persp",
+      "mesh": "meshes/r12_r_t7_graybracket_persp.stl",
+      "spec": "specs/r12_r_t7_graybracket_persp.json",
+      "sidecar": null,
+      "note": "",
+      "expect": {
+        "bores": 6,
+        "spec_pass": true
+      }
+    },
+    {
+      "id": "r12/r_t8_minipeg_coin",
+      "round": "r12",
+      "case": "r_t8_minipeg_coin",
+      "mesh": "meshes/r12_r_t8_minipeg_coin.stl",
+      "spec": "specs/r12_r_t8_minipeg_coin.json",
+      "sidecar": null,
+      "note": "",
+      "expect": {
+        "bores": 1,
+        "spec_pass": true
+      }
+    },
+    {
+      "id": "r12/r_t9_hinge",
+      "round": "r12",
+      "case": "r_t9_hinge",
+      "mesh": "meshes/r12_r_t9_hinge.stl",
+      "spec": "specs/r12_r_t9_hinge.json",
+      "sidecar": null,
+      "note": "Built with 5 knuckles. v0.1.13 merged them and reported 3.",
+      "expect": {
+        "knuckles": 5,
+        "spec_pass": true,
+        "wall_warning": false
+      }
+    }
+  ]
+}

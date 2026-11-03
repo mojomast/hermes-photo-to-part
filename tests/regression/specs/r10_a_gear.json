@@ -1,0 +1,24 @@
+{
+  "part": "spur_gear",
+  "units": "mm",
+  "x": 45.0,
+  "y": 45.0,
+  "z": 23.0,
+  "shells": 1,
+  "hole_count": 1,
+  "holes": [
+    {"x": 0.0, "y": 0.0, "diameter": 25.0}
+  ],
+  "features": {
+    "16 involute teeth, module 2.5, 20 deg pressure angle, tip dia 45.0, root dia 33.75": true,
+    "single 25 mm through bore": true,
+    "raised hub boss dia 32 mm, 3 mm proud on the photographed face (assumed)": true
+  },
+  "notes": [
+    "16 teeth / module 2.5 / 20 deg PA: user, confirmed against tip dia 45.0 mm in the photo",
+    "face width 20 mm and bore 25 mm: user, not measurable from one flat photo (assumed correct)",
+    "hub boss dia 32 mm x 3 mm proud: ASSUMED from the visible raised ring around the bore",
+    "no keyway/D-flat: none visible in the photo (assumed plain bore)",
+    "caliper span 27.69 mm vs nominal W4 = 26.39 mm for m2.5/z16 (see report); model uses the user's module"
+  ]
+}

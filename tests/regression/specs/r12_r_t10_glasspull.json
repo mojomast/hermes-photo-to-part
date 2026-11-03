@@ -1,0 +1,29 @@
+{
+  "part": "glass_rosette_drawer_pull",
+  "units": "mm",
+  "source": "user numbers (prompt.txt) + MET photo DP236494 for stylization",
+  "bbox": {"x": 45.0, "y": 45.0, "z": 50.0},
+  "shells": 1,
+  "hole_count": 1,
+  "holes": [
+    {"x": 0.0, "y": 0.0, "diameter": 4.2, "axis": "z", "depth": 15.0,
+     "note": "M5 tap drill in shank end, 15 mm deep"}
+  ],
+  "features": {
+    "single solid": true,
+    "rosette face diameter 45": true,
+    "overall length 50": true,
+    "shank diameter 16": true,
+    "revolved profile": true,
+    "petal scallops": true,
+    "M5 tap hole 4.2 mm x 15 deep": true
+  },
+  "assumed": [
+    "rosette face is flat-topped with a small raised centre boss and radial petals (from photo)",
+    "petal count 12 (photo shows ~12 scallops around the rim)",
+    "neck between rosette and shank ~22 mm dia, shank length ~17 mm (photo proportion; total 50 fixed)",
+    "shank end is flat with a small chamfer",
+    "rosette dish depth ~4 mm"
+  ],
+  "notes": "Axis of revolution = Z. Z=0 at rosette outer face, Z=50 at shank end. M5 tap hole enters at Z=50 going down to Z=35."
+}

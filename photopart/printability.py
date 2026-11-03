@@ -9,6 +9,7 @@ between separate shells.
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 import trimesh
@@ -38,8 +39,8 @@ def check_printability(
     info: list[str] = []
     raw = _min_wall(mesh, samples)
     auto_regions: list[dict] = []
-    # Metadata tags (tag_faces) win over a fresh detect. Detection is the
-    # source of truth only when neither an argument nor the mesh carries tags.
+    # A sidecar with a cylinder region wins. Indices alone do not describe the
+    # collar, so a periodic crest is detected and excluded as well.
     stored = face_tags if face_tags is not None else _stored_tags(mesh)
     if stored is None:
         try:
@@ -50,6 +51,13 @@ def check_printability(
         tags_source = "detected" if auto_regions else "none"
     else:
         excluded = _excluded_sources(mesh, stored)
+        if not _regions_of(mesh, stored):
+            try:
+                auto_regions = detect_periodic_regions(mesh)
+            except Exception:
+                auto_regions = []
+            if auto_regions:
+                excluded |= _faces_in_regions(mesh, auto_regions)
         tags_source = str(stored.get("tags_source") or "sidecar") if isinstance(stored, dict) else "sidecar"
     p5, thin_fraction = _sdf_wall(mesh, samples, min_wall_mm, excluded)
     wall = p5 if p5 is not None else raw
@@ -181,7 +189,13 @@ def _index_sources(mesh: trimesh.Trimesh, face_tags: dict | None) -> set[int]:
 
 
 def _faces_in_regions(mesh: trimesh.Trimesh, regions: list, eps: float = 0.15) -> set[int]:
-    """Faces whose centroid sits in a feature cylinder and whose normal is radial."""
+    """Faces whose centroid sits in a feature cylinder and whose normal is radial.
+
+    A thread also drops the collar around an external crest and the cylindrical
+    wall around an internal crest. Those faces are the flange washer and the
+    cap skirt, not a separate thin wall. A wide thin disk past that collar
+    stays in the sample.
+    """
     if len(mesh.faces) == 0 or not regions:
         return set()
     centers = np.asarray(mesh.triangles_center, dtype=float)
@@ -205,15 +219,50 @@ def _faces_in_regions(mesh: trimesh.Trimesh, regions: list, eps: float = 0.15) -
         radial_dir[usable] = radial_vec[usable] / radius[usable, None]
         radial_n = np.abs(np.einsum("ij,ij->i", normals, radial_dir))
         try:
-            r_min = float(region.get("r_min")) - eps
-            r_max = float(region.get("r_max")) + eps
-            z0 = float(region.get("z0")) - eps
-            z1 = float(region.get("z1")) + eps
+            r_min = float(region.get("r_min"))
+            r_max = float(region.get("r_max"))
+            z0 = float(region.get("z0"))
+            z1 = float(region.get("z1"))
         except (TypeError, ValueError):
             continue
-        mask = (radius >= r_min) & (radius <= r_max) & (height >= z0) & (height <= z1) & (radial_n > 0.3)
+        if region.get("kind") == "thread":
+            mask = _thread_collar_mask(mesh, origin, axis, radius, height, r_min, r_max, z0, z1)
+        else:
+            mask = (
+                (radius >= r_min - eps)
+                & (radius <= r_max + eps)
+                & (height >= z0 - eps)
+                & (height <= z1 + eps)
+                & (radial_n > 0.3)
+            )
         found.update(int(slot) for slot in np.flatnonzero(mask))
     return found
+
+
+def _thread_collar_mask(mesh, origin, axis, radius, height, r_min, r_max, z0, z1) -> np.ndarray:
+    """External washer next to a crest, or the wall around an internal thread."""
+    internal = _thread_is_internal(mesh, origin, axis, z0, z1, r_min)
+    if internal:
+        outer = float(np.nanmax(radius)) if len(radius) else r_max
+        reach = max(2.5, outer - r_max)
+        return (radius >= r_min - 0.4) & (radius <= r_max + reach) & (height >= z0 - 2.0) & (height <= z1 + 2.0)
+    return (radius >= r_min - 0.15) & (radius <= r_max + 2.2) & (height >= z0 - 1.5) & (height <= z1 + 1.5)
+
+
+def _thread_is_internal(mesh, origin, axis, z0, z1, r_min) -> bool:
+    """True when the thread axis is hollow, as in a cap. A screw core is solid."""
+    mid = np.asarray(origin, dtype=float) + np.asarray(axis, dtype=float) * ((float(z0) + float(z1)) / 2.0)
+    try:
+        inside = mesh.contains(mid.reshape(1, 3))
+        if len(inside):
+            return not bool(inside[0])
+    except Exception:
+        pass
+    extents = np.asarray(getattr(mesh, "extents", [0.0, 0.0, 0.0]), dtype=float)
+    max_r = 0.5 * float(np.max(extents)) if len(extents) else 0.0
+    if max_r <= 1e-6:
+        return False
+    return (float(r_min) / max_r) > 0.55
 
 
 def _sdf_wall(
@@ -416,10 +465,11 @@ def _distance_to_triangles(points: np.ndarray, triangles: np.ndarray) -> float |
 def detect_periodic_regions(mesh: trimesh.Trimesh) -> list[dict]:
     """Find a thread or knurl from radius samples when face tags were lost.
 
-    A thread is a radius that repeats along z with a pitch in 0.35–3 mm and
-    shifts phase with angle. A knurl repeats around the axis at least 12
-    times. The naked M3 helper crests about 0.16 mm, but an M3 thread unioned
-    with a hex head measures under 0.15 mm, so the gate stays 0.12 mm.
+    A thread is a radius that repeats along an axis with a pitch in 0.35–3 mm.
+    Crest amplitude is 0.12–2.2 mm so a coarse bottle thread still counts and a
+    flat head does not. A knurl repeats around the axis at least 12 times.
+    The naked M3 helper crests about 0.16 mm, but an M3 thread unioned with a
+    hex head measures under 0.15 mm, so the floor stays 0.12 mm.
     """
     if mesh is None or len(getattr(mesh, "faces", [])) < 16:
         return []
@@ -512,59 +562,55 @@ def _thread_on_axis(mesh: trimesh.Trimesh, axis: int) -> dict | None:
         return None
     grid, zs, mid = sampled
     dz = float(zs[1] - zs[0])
-    with np.errstate(all="ignore"):
-        median = np.nanmedian(grid, axis=1)
-    runs: list[tuple[int, int]] = []
-    start = None
-    anchor = None
-    series = list(median) + [np.nan]
-    for index, value in enumerate(series):
-        finite = np.isfinite(value)
-        if not finite or (anchor is not None and abs(float(value) - float(anchor)) > 0.35):
-            if start is not None and index - 1 - start >= 12:
-                runs.append((start, index - 1))
-            start = index if finite else None
-            anchor = float(value) if finite else None
-            continue
-        if start is None:
-            start = index
-            anchor = float(value)
+    cleaned = _blank_radius_outliers(grid)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        median = np.nanmedian(cleaned, axis=1)
+    runs = _candidate_runs(median)
     best = None
+    columns = int(grid.shape[1])
     for begin, end in runs:
-        window = grid[begin : end + 1]
+        window = cleaned[begin : end + 1]
         votes = []
-        for column in range(grid.shape[1]):
+        strong = []
+        for column in range(columns):
             filled = _fill_column(window[:, column])
             if filled is None:
                 continue
             result = _best_period(filled, dz)
-            if result and 0.12 <= result[2] <= 1.3 and result[0] >= 1.15 * max(result[3], 1e-9):
-                votes.append(result)
-        if len(votes) < grid.shape[1] * 0.45:
+            if result is None or not (0.12 <= result[2] <= 2.2):
+                continue
+            votes.append(result)
+            if result[0] >= 1.15 * max(result[3], 1e-9):
+                strong.append(result)
+        if len(votes) < columns * 0.50:
             continue
         pitch = float(np.median([item[1] for item in votes]))
         agree = sum(1 for item in votes if abs(item[1] - pitch) <= max(0.08, 0.18 * pitch))
-        if agree < len(votes) * 0.6:
+        helical = _helical_agreement(window, pitch, dz)
+        # A real helix with a dominant spectral peak is a thread. A coarse
+        # bottle crest has a strong second harmonic, so pitch agreement across
+        # columns is enough when the helix test is weak.
+        peak_helix = helical and len(strong) >= columns * 0.45 and agree >= len(votes) * 0.6
+        agreed = agree >= columns * 0.65
+        if not peak_helix and not agreed:
             continue
-        base = _fill_column(window[:, 0])
-        if base is None:
+        span_mm = float(zs[end] - zs[begin])
+        # A knuckle barrel repeats along a long flat hinge without a helix.
+        # A bottle crest often fails the helix test, but it is not that shape:
+        # at least one and a half pitches, on an axis that is not the long
+        # direction of a plate, and a crest that is shallow relative to the radius.
+        if span_mm < 1.5 * pitch:
             continue
-        ok = 0
-        checked = 0
-        for column in range(0, grid.shape[1], 2):
-            filled = _fill_column(window[:, column])
-            if filled is None:
+        if not helical:
+            cross = min(float(mesh.extents[slot]) for slot in range(3) if slot != axis)
+            if cross <= 0 or span_mm > 2.5 * cross:
                 continue
-            checked += 1
-            theta = 2.0 * math.pi * column / grid.shape[1]
-            shift = int(round((pitch * theta / (2.0 * math.pi)) / dz))
-            rolled = np.roll(base, shift)
-            if float(np.std(rolled)) < 1e-6 or float(np.std(filled)) < 1e-6:
-                continue
-            corr = float(np.corrcoef(rolled, filled)[0, 1])
-            if np.isfinite(corr) and corr > 0.4:
-                ok += 1
-        if checked == 0 or ok < checked * 0.5:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            radius_typical = float(np.nanmedian(window))
+        crest = float(np.median([item[2] for item in votes]))
+        if not np.isfinite(radius_typical) or radius_typical <= 0.2 or crest > 0.35 * radius_typical:
             continue
         with np.errstate(all="ignore"):
             r_low = float(np.nanpercentile(window, 5))
@@ -588,6 +634,129 @@ def _thread_on_axis(mesh: trimesh.Trimesh, axis: int) -> dict | None:
         if best is None or span > best["z1"] - best["z0"]:
             best = region
     return best
+
+
+def _candidate_runs(median) -> list[tuple[int, int]]:
+    """Loose, tight, and anchor-limited runs. The longest real crest wins.
+
+    1.5 mm separates a screw head from the thread. 0.9 mm and a 0.45 mm drift
+    from the run's first sample separate a knurl from a bottle crest that sits
+    about 1 mm inward. A run that fails the pitch test is ignored.
+    """
+    found: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for run in (
+        *_adjacent_runs(median, jump=1.5),
+        *_adjacent_runs(median, jump=0.9),
+        *_anchor_runs(median, drift=0.45),
+    ):
+        if run in seen:
+            continue
+        seen.add(run)
+        found.append(run)
+    return found
+
+
+def _anchor_runs(median, min_len: int = 12, drift: float = 0.45) -> list[tuple[int, int]]:
+    """Contiguous stations that stay within ``drift`` of the run's first sample."""
+    runs: list[tuple[int, int]] = []
+    start = None
+    anchor = None
+    series = list(median) + [np.nan]
+    for index, value in enumerate(series):
+        finite = bool(np.isfinite(value))
+        drifted = finite and anchor is not None and abs(float(value) - float(anchor)) > drift
+        if not finite or drifted:
+            if start is not None and index - 1 - start >= min_len:
+                runs.append((start, index - 1))
+            if drifted:
+                start = index
+                anchor = float(value)
+            else:
+                start = None
+                anchor = None
+            continue
+        if start is None:
+            start = index
+            anchor = float(value)
+    return runs
+
+
+def _blank_radius_outliers(grid: np.ndarray, limit: float = 1.2) -> np.ndarray:
+    """Drop samples far from the station median before the pitch FFT.
+
+    A knurl rib or a dome spike next to a thread otherwise splits the run or
+    invents a second period. An M3 crest is about 0.16 mm, so 1.2 mm leaves it.
+    """
+    cleaned = np.array(grid, dtype=float, copy=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        station = np.nanmedian(cleaned, axis=1)
+    for index, med in enumerate(station):
+        if not np.isfinite(med):
+            continue
+        row = cleaned[index]
+        far = np.isfinite(row) & (np.abs(row - float(med)) > limit)
+        row[far] = np.nan
+    return cleaned
+
+
+def _adjacent_runs(median, min_len: int = 12, jump: float = 1.5) -> list[tuple[int, int]]:
+    """Contiguous stations whose radius changes by at most ``jump`` from the neighbour.
+
+    The head-to-thread step on an M3 screw is about 1.9 mm, so 1.5 mm keeps the
+    thread and leaves the head out. A first-sample anchor of 0.35 mm splits a
+    bottle thread whose median drifts by less than a millimetre.
+    """
+    runs: list[tuple[int, int]] = []
+    start = None
+    prev = None
+    series = list(median) + [np.nan]
+    for index, value in enumerate(series):
+        finite = bool(np.isfinite(value))
+        jumped = finite and prev is not None and abs(float(value) - float(prev)) > jump
+        if not finite or jumped:
+            if start is not None and index - 1 - start >= min_len:
+                runs.append((start, index - 1))
+            if jumped:
+                start = index
+                prev = float(value)
+            else:
+                start = None
+                prev = None
+            continue
+        if start is None:
+            start = index
+        prev = float(value)
+    return runs
+
+
+def _helical_agreement(window: np.ndarray, pitch: float, dz: float) -> bool:
+    """True when shifting each column by the pitch matches the first column."""
+    base = _fill_column(window[:, 0])
+    if base is None or dz <= 0:
+        return False
+    ok = 0
+    checked = 0
+    for column in range(0, window.shape[1], 2):
+        filled = _fill_column(window[:, column])
+        if filled is None:
+            continue
+        checked += 1
+        theta = 2.0 * math.pi * column / window.shape[1]
+        matched = False
+        for sign in (1.0, -1.0):
+            shift = int(round(sign * (pitch * theta / (2.0 * math.pi)) / dz))
+            rolled = np.roll(base, shift)
+            if float(np.std(rolled)) < 1e-6 or float(np.std(filled)) < 1e-6:
+                continue
+            corr = float(np.corrcoef(rolled, filled)[0, 1])
+            if np.isfinite(corr) and corr > 0.4:
+                matched = True
+                break
+        if matched:
+            ok += 1
+    return checked > 0 and ok >= checked * 0.5
 
 
 def _knurl_on_axis(mesh: trimesh.Trimesh) -> dict | None:

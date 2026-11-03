@@ -1,0 +1,37 @@
+{
+  "part": "m3_flange_hex_screw",
+  "units": "mm",
+  "scale": "1:1",
+  "x": 6.8,
+  "y": 6.8,
+  "z": 8.95,
+  "shells": 1,
+  "hole_count": 0,
+  "source": {
+    "photo": "M3_screw_and_6-32_UTS_screw_with_ruler_thread_pitch.png",
+    "px_per_mm": 36.4,
+    "ruler_points_px": [[206, 600], [570, 600]],
+    "ruler_mm": 10.0
+  },
+  "dimensions_mm": {
+    "across_flats": 5.5,
+    "flange_diameter": 6.8,
+    "head_height": 3.0,
+    "thread_length": 6.0,
+    "thread_major_diameter": 2.9,
+    "thread_pitch": 0.5,
+    "overall_length": 8.95
+  },
+  "features": {
+    "hexagon head": "yes",
+    "flange under head": "yes",
+    "external thread": "yes",
+    "single body": "yes"
+  },
+  "assumptions": [
+    "flange diameter 6.8 mm from the M3 flange-bolt standard; the flange is foreshortened in the photo (silhouette lower bound 5.6 mm)",
+    "thread length 6.0 mm under the bearing face; photo measures 6.2 +/- 0.3 mm including runout thread",
+    "thread major diameter 2.9 mm for 0.1 mm radial FDM clearance",
+    "head top chamfered 0.3 mm, flange outer edge chamfered 0.35 mm"
+  ]
+}

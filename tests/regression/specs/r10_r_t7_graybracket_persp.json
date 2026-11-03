@@ -1,0 +1,35 @@
+{
+  "part": "angle_bracket_125",
+  "x": 125.0,
+  "y": 25.0,
+  "z": 125.0,
+  "shells": 1,
+  "hole_count": 6,
+  "holes": [],
+  "units": "mm",
+  "source": {
+    "given": {
+      "leg_length_mm": 125.0,
+      "thickness_mm": 1.5
+    },
+    "estimated_from_photo": {
+      "strip_width_mm": 25.0,
+      "hole_diameter_mm": 8.0,
+      "hole_pattern_mm_from_outside_corner": [25.0, 62.5, 100.0],
+      "holes_per_leg": 3,
+      "holes_centred_on_strip": true
+    },
+    "assumed": [
+      "90 degree bend, sharp outside corner, 1.5 mm inside bend radius",
+      "both legs identical and symmetric",
+      "holes plain through-holes, no countersink, no dimple"
+    ]
+  },
+  "features": [
+    "6 holes",
+    "3 holes per leg",
+    "holes centred across 25 mm strip",
+    "1.5 mm sheet",
+    "90 degree bend"
+  ]
+}

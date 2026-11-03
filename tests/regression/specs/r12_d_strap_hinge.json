@@ -1,0 +1,30 @@
+{
+  "part": "strap_hinge",
+  "units": "mm",
+  "bbox": {"x": 400.0, "y": 70.0, "z": 4.0},
+  "shells": 1,
+  "hole_count": 6,
+  "holes": [
+    {"x": -75.31, "y": -0.22, "diameter": 4.99, "axis": "z"},
+    {"x": 75.31, "y": -0.22, "diameter": 4.99, "axis": "z"},
+    {"x": -181.27, "y": 21.03, "diameter": 4.39, "axis": "z"},
+    {"x": 181.27, "y": 21.03, "diameter": 4.39, "axis": "z"},
+    {"x": -160.83, "y": -4.40, "diameter": 4.19, "axis": "z"},
+    {"x": 160.83, "y": -4.40, "diameter": 4.19, "axis": "z"}
+  ],
+  "features": [
+    "scroll end at each end, 70 mm outside diameter",
+    "single flat piece, no pivot",
+    "4 mm plate through the whole part",
+    "6 through holes",
+    "knuckle plate 30 mm wide at centre"
+  ],
+  "assumptions": [
+    "overall length 400 mm is measured scroll outside edge to outside edge",
+    "scroll outer envelope 70 x 70 mm at both ends; the photo's two scrolls differ (about 35 mm and 60 mm at photo scale)",
+    "thickness 4 mm uniform and flat: the photo's raised knuckle barrel is drawn as a 45 x 30 plate with two 1.6 x 1.4 mm engraved seam grooves, no pivot",
+    "scroll band 11.5 mm at the strap junction tapering to 8 mm at the eye, 1.6 turns, coil gap >= 3 mm",
+    "strap tapers 27 mm at the knuckle plate to 24 mm at mid-span",
+    "ballast hole positions scaled from the photo: 2 strap nails, 2 scroll-band nails, 2 eye holes"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "part": "l_plate",
+  "units": "mm",
+  "note": "Flat 90-degree corner plate (L in plan). Legs 125 mm measured from the outside corner along the outer edges, strip 12.7 mm wide, 1.5 mm sheet, 6 plain through holes d5.5.",
+  "x": 125.0,
+  "y": 125.0,
+  "z": 1.5,
+  "shells": 1,
+  "hole_count": 6,
+  "holes": [
+    {"x": 30.0,  "y": 6.35, "diameter": 5.5},
+    {"x": 62.5,  "y": 6.35, "diameter": 5.5},
+    {"x": 95.0,  "y": 6.35, "diameter": 5.5},
+    {"x": 6.35, "y": 30.0,  "diameter": 5.5},
+    {"x": 6.35, "y": 62.5,  "diameter": 5.5},
+    {"x": 6.35, "y": 95.0,  "diameter": 5.5}
+  ],
+  "assumed": [
+    "coplanar flat L (no 90-degree bend) - read from the photo, legs equal width and circular holes",
+    "strip width 12.7 mm - measured 12.2-12.5 mm after perspective check, snapped to 1/2 inch",
+    "hole diameter 5.5 mm bore - estimated from the rim/bore ratio, not measured",
+    "hole positions 30 / 62.5 / 95 mm from the outside corner - estimated from the photo",
+    "square cut ends"
+  ]
+}

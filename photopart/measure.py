@@ -760,6 +760,14 @@ def _part_mask(image, seed, roi, circle):
         cut = grabcut_mask(image, roi=roi, seed=seed)
         if cut is not None:
             component = np.asarray(cut, dtype=bool)
+            # A seed a few pixels off the part marks that background pixel as
+            # foreground, and GrabCut grows a halo. The border-color mask drops
+            # the halo; the seed then snaps onto the part.
+            colors = color_mask(image)
+            if colors is not None:
+                narrowed = component & np.asarray(colors, dtype=bool)
+                if int(np.count_nonzero(narrowed)) >= 16:
+                    component = narrowed
             if seed is not None:
                 component = _component_at(component, seed)
     if component is None or int(np.count_nonzero(component)) < 16:
