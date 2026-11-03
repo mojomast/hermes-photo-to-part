@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.8 — 2026-11-02
+
+- Template output defaults to `<shape>_v1.stl`, or the `part` slug from spec.json. `plate_clip.stl` is unchanged. The placeholder `name_v1.stl` is not written.
+- `best_version` is the highest-scoring passing sibling, including the file just checked. `revert_to` is set only when that sibling scores higher. A run with no passing file sets `best_version_reason` to `no passing version`. Detailed results include `versions`.
+- Checklist booleans count as yes/no. `photo_part_validate --answer item=yes` is repeatable, stored on the sidecar, and is not a spec edit. Count items such as `5 knuckles` are filled from the matching check.
+- The score is out of 100: watertight 30, spec 40, checklist 20, printability 10 minus 5 per warning. A mesh that is not ok loses 20.
+- A passing validate that was given a spec also renders `sheet.png`. `photo_part_render` remains for an extra or final render.
+- Every tool result includes `budget` (`plugin_calls`, `soft_limit` 20, `phase`). At 14 calls, `next_step` leads with a deliver hint. Template and build results include `bodies`, `bores`, and `sections_mm2`.
+- Overlay pose search uses a truncated chamfer on Canny edges and keeps a fixed pixels-per-millimetre scale. `roi` and `px_per_mm` default from `last_measure.json`. Segmentation stability gates the IoU: low confidence reports a null IoU.
+- `hole_count` is the circular bore count. Genus is reported separately. Wall thickness uses a 7-ray median, ignores thread, knurl, and tooth faces as ray sources, and warns on the area-weighted 5th percentile or a thin-area fraction over 1%.
+- Evals stage one task outside the plugin tree, count wrong skill ids only from `skill_view` arguments, flag a transcript that reads `evals/` or `runner.py`, and hold out three tasks unless `--include-holdout`.
+
 ## 0.1.7 — 2026-11-02
 
 - `ctx.register_tool` receives `output_schema` only when that Hermes build accepts it. Hermes v0.21.7 (`PluginContext.register_tool` has no `output_schema` parameter and no `**kwargs`) no longer fails `hermes plugins doctor` with `unexpected keyword argument 'output_schema'`, so all six tools register. Any other keyword the live signature does not accept is skipped the same way. A `TypeError` that names an unexpected keyword retries without it. A schema that cannot be passed is appended to the tool description and included on `response_format=detailed` results.

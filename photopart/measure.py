@@ -318,7 +318,51 @@ def measure(payload: dict) -> dict:
         "angled": bool(payload.get("angled", False)),
         "note": _PLANE_NOTE,
     }
+    _write_last_measure(report, payload)
     return attach_flow(report, step_measure())
+
+
+def _write_last_measure(report: dict, payload: dict) -> None:
+    """Remember px/mm and an optional part roi for the next overlay."""
+    image = payload.get("image")
+    out = payload.get("out")
+    if image:
+        directory = Path(str(image)).expanduser().resolve().parent
+    elif out:
+        directory = Path(str(out)).expanduser().resolve().parent
+    else:
+        directory = Path.cwd()
+    body = {
+        "px_per_mm": report.get("px_per_mm"),
+        "roi": payload.get("roi"),
+        "reference_bbox": report.get("reference_bbox"),
+        "image": None if not image else str(Path(str(image)).expanduser().resolve()),
+        "angled": bool(report.get("angled")),
+    }
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "last_measure.json").write_text(
+            json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except OSError:
+        return
+
+
+def load_last_measure(*dirs) -> dict | None:
+    """Newest-looking measure hint. Callers pass the photo directory first."""
+    for directory in dirs:
+        if not directory:
+            continue
+        path = Path(directory) / "last_measure.json"
+        if not path.is_file():
+            continue
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeError):
+            continue
+        if isinstance(loaded, dict) and loaded.get("px_per_mm"):
+            return loaded
+    return None
 
 
 def _marker_scale(image_path: str, marker_mm: float) -> dict:

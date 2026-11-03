@@ -23,15 +23,29 @@ def check_printability(
     min_bed_mm2: float = 1.0,
     min_gap_mm: float = 0.3,
     samples: int = 48,
+    face_tags: dict | None = None,
 ) -> dict:
-    """Return measurements and warnings. Warnings do not change ``ok`` by themselves."""
+    """Return measurements and warnings. Warnings do not change ``ok`` by themselves.
+
+    Wall thickness is an SDF-lite median of 7 rays in a 60° cone. Thread, knurl,
+    and tooth faces are not ray sources (they stay valid targets). The warning
+    uses the 5th percentile and the thin-area fraction. ``min_wall_raw_mm`` is
+    the old single-ray minimum, including those crests.
+    """
     warnings: list[str] = []
-    wall = _min_wall(mesh, samples)
+    raw = _min_wall(mesh, samples)
+    p5, thin_fraction = _sdf_wall(mesh, samples, min_wall_mm, _excluded_sources(mesh, face_tags))
+    wall = p5 if p5 is not None else raw
     overhang_area, overhang_fraction, bed_area = _faces(mesh, overhang_deg)
     gap = _min_gap(mesh, samples)
-    if wall is not None and wall < min_wall_mm:
+    if p5 is not None and p5 < min_wall_mm:
         warnings.append(
-            f"min wall {wall:.3f} mm is under {min_wall_mm:g} mm. "
+            f"min wall {p5:.3f} mm is under {min_wall_mm:g} mm. "
+            "Thicken the wall or raise min_wall_mm."
+        )
+    elif thin_fraction is not None and thin_fraction > 0.01:
+        warnings.append(
+            f"thin area fraction {thin_fraction:.3f} is over 1% under {min_wall_mm:g} mm. "
             "Thicken the wall or raise min_wall_mm."
         )
     if overhang_fraction is not None and overhang_fraction > max_overhang_fraction:
@@ -51,6 +65,9 @@ def check_printability(
         )
     return {
         "min_wall_mm": None if wall is None else round(wall, 4),
+        "min_wall_p5_mm": None if p5 is None else round(p5, 4),
+        "min_wall_raw_mm": None if raw is None else round(raw, 4),
+        "thin_area_fraction": None if thin_fraction is None else round(thin_fraction, 4),
         "overhang_area_mm2": None if overhang_area is None else round(overhang_area, 3),
         "overhang_fraction": None if overhang_fraction is None else round(overhang_fraction, 4),
         "bed_contact_area_mm2": None if bed_area is None else round(bed_area, 3),
@@ -64,6 +81,124 @@ def check_printability(
         },
         "warnings": warnings,
     }
+
+
+def _excluded_sources(mesh: trimesh.Trimesh, face_tags: dict | None) -> set[int]:
+    tags = face_tags
+    if tags is None:
+        meta = getattr(mesh, "metadata", None)
+        if isinstance(meta, dict):
+            tags = meta.get("face_tags")
+    if not isinstance(tags, dict):
+        return set()
+    found: set[int] = set()
+    for key in ("thread", "knurl", "teeth"):
+        for item in tags.get(key) or []:
+            try:
+                found.add(int(item))
+            except (TypeError, ValueError):
+                continue
+    return found
+
+
+def _sdf_wall(
+    mesh: trimesh.Trimesh,
+    samples: int,
+    min_wall_mm: float,
+    excluded: set[int],
+) -> tuple[float | None, float | None]:
+    """Area-weighted p5 of per-face median thickness, and the thin-area fraction.
+
+    Seven rays leave each sampled face: one along the inward normal and six
+    on a 60° cone (30° off the normal). A hit whose normal faces the same way
+    as the source is ignored (Shapira, Gal, and Cohen-Or, 2008).
+    """
+    faces = len(mesh.faces)
+    if faces == 0:
+        return None, None
+    normals = np.asarray(mesh.face_normals, dtype=float)
+    centers = np.asarray(mesh.triangles_center, dtype=float)
+    areas = np.asarray(mesh.area_faces, dtype=float)
+    allowed = [slot for slot in range(faces) if slot not in excluded]
+    if not allowed:
+        return None, None
+    step = max(1, len(allowed) // max(samples, 1))
+    index = allowed[::step][:samples]
+    index_arr = np.asarray(index, dtype=int)
+    inward = -normals[index_arr]
+    norms = np.linalg.norm(inward, axis=1)
+    valid = norms > 1e-8
+    if not np.any(valid):
+        return None, None
+    index_arr = index_arr[valid]
+    inward = inward[valid] / norms[valid][:, None]
+    origins = centers[index_arr] + inward * 1e-3
+    directions = _cone_directions(inward)
+    ray_origins = np.repeat(origins, directions.shape[1], axis=0)
+    ray_dirs = directions.reshape(-1, 3)
+    face_of_ray = np.repeat(index_arr, directions.shape[1])
+    try:
+        locations, ray_index, tri_index = mesh.ray.intersects_location(ray_origins, ray_dirs)
+    except Exception:
+        return None, None
+    if len(locations) == 0:
+        return None, None
+    distance = np.linalg.norm(locations - ray_origins[ray_index], axis=1)
+    hit_normals = normals[tri_index]
+    source_normals = normals[face_of_ray[ray_index]]
+    same_way = np.einsum("ij,ij->i", hit_normals, source_normals) > 0.0
+    keep = (distance > 1e-3) & ~same_way
+    per_face: dict[int, list[float]] = {int(slot): [] for slot in index_arr.tolist()}
+    order = np.argsort(distance)
+    seen_ray: set[int] = set()
+    for slot in order:
+        if not keep[slot]:
+            continue
+        ray = int(ray_index[slot])
+        if ray in seen_ray:
+            continue
+        seen_ray.add(ray)
+        per_face[int(face_of_ray[ray])].append(float(distance[slot]))
+    medians = []
+    weights = []
+    for slot, lengths in per_face.items():
+        if not lengths:
+            continue
+        medians.append(float(np.median(lengths)))
+        weights.append(float(areas[slot]))
+    if not medians:
+        return None, None
+    medians_arr = np.asarray(medians, dtype=float)
+    weights_arr = np.asarray(weights, dtype=float)
+    total = float(weights_arr.sum())
+    if total <= 0:
+        return None, None
+    order = np.argsort(medians_arr)
+    cumulative = np.cumsum(weights_arr[order]) / total
+    p5_index = int(np.searchsorted(cumulative, 0.05, side="left"))
+    p5_index = min(p5_index, len(order) - 1)
+    p5 = float(medians_arr[order[p5_index]])
+    thin = float(weights_arr[medians_arr < min_wall_mm].sum() / total)
+    return p5, thin
+
+
+def _cone_directions(inward: np.ndarray) -> np.ndarray:
+    """Seven unit directions per face: inward, plus a 60° cone. Shape (n, 7, 3)."""
+    helper = np.tile(np.array([1.0, 0.0, 0.0]), (len(inward), 1))
+    helper[np.abs(inward[:, 0]) > 0.9] = np.array([0.0, 1.0, 0.0])
+    tangent = np.cross(inward, helper)
+    tangent /= np.linalg.norm(tangent, axis=1)[:, None]
+    bitangent = np.cross(inward, tangent)
+    cos_a = math.cos(math.radians(30.0))
+    sin_a = math.sin(math.radians(30.0))
+    directions = [inward]
+    for step in range(6):
+        angle = step * math.pi / 3.0
+        offset = math.cos(angle) * tangent + math.sin(angle) * bitangent
+        directions.append(cos_a * inward + sin_a * offset)
+    stacked = np.stack(directions, axis=1)
+    stacked /= np.linalg.norm(stacked, axis=2)[:, :, None]
+    return stacked
 
 
 def _min_wall(mesh: trimesh.Trimesh, samples: int) -> float | None:

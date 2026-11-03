@@ -35,7 +35,7 @@ def absolute_path(path: str | Path) -> Path:
     if under_cache(resolved):
         raise ValueError(
             f"refusing to write {resolved} under HERMES_HOME/cache. "
-            "Pass an absolute path in the user project, such as name_v1.stl. "
+            "Pass an absolute path in the user project, such as spur_gear_v1.stl. "
             f"Skill id: {SKILL_ID}."
         )
     return resolved

@@ -1,6 +1,8 @@
 # Evals
 
-Sixteen tasks from the photo-to-part test rounds. Inputs are synthetic meshes and generated images. `photos.json` names openly licensed photos for an optional Hermes session. Those files are not downloaded and their bytes are not in this repo.
+Twenty-five tasks from the photo-to-part test rounds. Inputs are synthetic meshes and one self-made CC0 washer photo in `fixtures/`. `photos.json` names openly licensed photos for an optional Hermes session. Those files are not downloaded and their bytes are not in this repo.
+
+`worse_version_reverts`, `frozen_edit_needs_reason`, and `real_photo_overlay` are held out of `results` unless `--include-holdout`. They still run, and a failure fails the suite. `--stage DIR --task ID` copies that task's prompt and fixtures to a directory outside this repo. A transcript that reads `evals/` or `runner.py` is marked `leak`. `wrong_skill_ids` counts only `skill_view` arguments.
 
 ## In-process suite
 

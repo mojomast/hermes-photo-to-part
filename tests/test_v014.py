@@ -187,7 +187,7 @@ class HistoryTests(unittest.TestCase):
             self.assertTrue(second["ok"], second)
             history = out / ".p2p_history"
             self.assertTrue(history.is_dir())
-            self.assertTrue(any(path.name.startswith("plate.stl.") for path in history.iterdir()))
+            self.assertTrue(any(path.name.startswith("plate_v1.stl.") for path in history.iterdir()))
             from photopart.heal import run_heal
 
             src = root / "scan.stl"

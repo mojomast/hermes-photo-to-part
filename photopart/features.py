@@ -16,7 +16,9 @@ ridges on the outside wall, also one shell.
 
 from __future__ import annotations
 
+import json
 import math
+from pathlib import Path
 
 import numpy as np
 import trimesh
@@ -44,7 +46,9 @@ def external_thread(
 ) -> trimesh.Trimesh:
     """One external ISO metric thread. ``length`` is the cylinder length."""
     nominal, step = _thread_size(designation, diameter, pitch)
-    return _external_mesh(nominal, step, length, segments_per_turn)
+    mesh = _external_mesh(nominal, step, length, segments_per_turn)
+    _tag_thread_crest(mesh, nominal, step, z_max=length + 0.1)
+    return mesh
 
 
 def internal_thread(
@@ -96,12 +100,15 @@ def knurl(
     core = _cylinder(length, radius, segments=48)
     if kind == "straight":
         ribs = _straight_ribs(radius, length, count, tooth=max(0.35, radius * 0.08), thickness=max(0.4, radius * 0.12))
-        return _as_one(_union([core, *ribs]))
-    tooth = max(0.3, radius * 0.07)
-    step = max(length * 0.55, radius * 1.4)
-    left = _ridge_solid(radius * 0.94, radius + tooth, step, length, segments_per_turn=10, hand=1)
-    right = _ridge_solid(radius * 0.94, radius + tooth, step, length, segments_per_turn=10, hand=-1)
-    return _as_one(_union([core, left, right]))
+        mesh = _as_one(_union([core, *ribs]))
+    else:
+        tooth = max(0.3, radius * 0.07)
+        step = max(length * 0.55, radius * 1.4)
+        left = _ridge_solid(radius * 0.94, radius + tooth, step, length, segments_per_turn=10, hand=1)
+        right = _ridge_solid(radius * 0.94, radius + tooth, step, length, segments_per_turn=10, hand=-1)
+        mesh = _as_one(_union([core, left, right]))
+    _tag_knurl(mesh, radius)
+    return mesh
 
 
 def revolve_profile(points, *, segments: int = 48) -> trimesh.Trimesh:
@@ -180,7 +187,9 @@ def hex_screw(
     length = _positive("length", length)
     thread = _external_solid(nominal, step, length + 0.45, segments_per_turn=12).translate((0.0, 0.0, -0.15))
     cap = _hex_prism(flats, head + 0.35).translate((0.0, 0.0, length - 0.3))
-    return _as_one(_union([thread, cap]))
+    mesh = _as_one(_union([thread, cap]))
+    _tag_thread_crest(mesh, nominal, step, z_max=length - 0.15)
+    return mesh
 
 
 def hex_standoff(
@@ -242,7 +251,11 @@ def bottle_cap(
     )
     # Drop the ribs onto the cap wall. internal_thread starts at z=0.
     shifted = [rib.translate((0.0, 0.0, length * 0.09)) for rib in ribs]
-    return _as_one(_union([_ingest(cap), *shifted]))
+    mesh = _as_one(_union([_ingest(cap), *shifted]))
+    # Include the thread runout at both ends. Those crests are not a wall.
+    _tag_thread_crest(mesh, diameter, pitch, z_max=length + 1.0, internal=True)
+    _tag_knurl(mesh, outer_diameter / 2.0)
+    return mesh
 
 
 def spur_gear(
@@ -300,7 +313,9 @@ def spur_gear(
         blank = _difference(blank, [_bore_cutter(hole, z0, z1, keyway_width, keyway_depth, d_flat, dims["root_diameter"])])
     elif any(value is not None for value in (keyway_width, keyway_depth, d_flat)):
         raise ValueError("a keyway or D-flat needs a bore")
-    return _as_one(blank)
+    mesh = _as_one(blank)
+    _tag_teeth(mesh, float(dims["root_diameter"]) / 2.0)
+    return mesh
 
 
 def spiral_centerline(
@@ -918,3 +933,75 @@ def _as_one(body) -> trimesh.Trimesh:
     if not mesh.is_watertight or shells != 1 or mesh.volume <= 0:
         raise ValueError(f"feature helper produced {shells} shells, watertight={bool(mesh.is_watertight)}")
     return mesh
+
+
+def _tag_thread_crest(mesh: trimesh.Trimesh, diameter: float, pitch: float, *, z_max: float, internal: bool = False) -> None:
+    """Mark helical crest faces so thickness rays do not start on a thread."""
+    major = float(diameter) / 2.0
+    tooth = _TOOTH * float(pitch)
+    centers = np.asarray(mesh.triangles_center, dtype=float)
+    radius = np.hypot(centers[:, 0], centers[:, 1])
+    # The whole tooth, from the root out to the crest. The core under the
+    # root stays a ray source so a real thin wall is still measured.
+    if internal:
+        band = (radius < major + tooth * 0.35) & (radius > max(0.15, major - tooth * 1.05))
+    else:
+        band = radius > max(0.2, major - tooth * 1.05)
+    mask = band & (centers[:, 2] < z_max) & (centers[:, 2] > -0.5)
+    _store_tags(mesh, thread=np.flatnonzero(mask))
+
+
+def _tag_knurl(mesh: trimesh.Trimesh, core_radius: float) -> None:
+    centers = np.asarray(mesh.triangles_center, dtype=float)
+    radius = np.hypot(centers[:, 0], centers[:, 1])
+    # Ribs stand off the core. Keep the core wall as a ray source and drop the tips.
+    mask = radius > float(core_radius) * 0.88
+    _store_tags(mesh, knurl=np.flatnonzero(mask))
+
+
+def _tag_teeth(mesh: trimesh.Trimesh, root_radius: float) -> None:
+    centers = np.asarray(mesh.triangles_center, dtype=float)
+    radius = np.hypot(centers[:, 0], centers[:, 1])
+    mask = radius > float(root_radius) * 1.02
+    _store_tags(mesh, teeth=np.flatnonzero(mask))
+
+
+def write_face_tags(mesh: trimesh.Trimesh, stl_path) -> None:
+    """Store thread, knurl, and tooth face indices beside an STL. STL itself drops them."""
+    tags = mesh.metadata.get("face_tags") if isinstance(getattr(mesh, "metadata", None), dict) else None
+    if not isinstance(tags, dict):
+        return
+    payload = {}
+    for key in ("thread", "knurl", "teeth"):
+        payload[key] = [int(item) for item in (tags.get(key) or [])]
+    if not any(payload.values()):
+        return
+    path = Path(str(stl_path) + ".faces.json")
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def load_face_tags(stl_path) -> dict | None:
+    path = Path(str(stl_path) + ".faces.json")
+    if not path.is_file():
+        return None
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    return {
+        key: [int(item) for item in (loaded.get(key) or [])]
+        for key in ("thread", "knurl", "teeth")
+    }
+
+
+def _store_tags(mesh: trimesh.Trimesh, **kinds) -> None:
+    tags = {"thread": [], "knurl": [], "teeth": []}
+    existing = mesh.metadata.get("face_tags") if isinstance(mesh.metadata, dict) else None
+    if isinstance(existing, dict):
+        for key in tags:
+            tags[key] = [int(item) for item in (existing.get(key) or [])]
+    for key, value in kinds.items():
+        tags[key] = [int(item) for item in np.asarray(value, dtype=int).tolist()]
+    mesh.metadata["face_tags"] = tags

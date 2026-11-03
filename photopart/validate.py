@@ -177,6 +177,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Ignored unless it is the canonical <file>.validate.json. That sidecar is the only validation file.",
     )
     parser.add_argument("--reason", help="Why a frozen spec.json changed. Required after the first validate.")
+    parser.add_argument(
+        "--answer",
+        action="append",
+        default=[],
+        help="Checklist answer item=yes or item=no. Repeatable. Recorded on the sidecar, not a spec edit.",
+    )
     parser.add_argument("--min-wall-mm", type=float, default=0.8)
     parser.add_argument("--overhang-deg", type=float, default=45.0)
     parser.add_argument("--max-overhang-fraction", type=float, default=0.35)
@@ -207,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
         dims=args.dim,
         max_bytes=args.max_bytes,
         spec_reason=args.reason,
+        answers=args.answer,
         min_wall_mm=args.min_wall_mm,
         overhang_deg=args.overhang_deg,
         max_overhang_fraction=args.max_overhang_fraction,
@@ -250,6 +257,7 @@ def run_validate(
     min_bed_mm2: float = 1.0,
     min_gap_mm: float = 0.3,
     print_strict: bool = False,
+    answers: list | None = None,
 ) -> tuple[int, dict]:
     """Load, scale, and check a mesh. The report is the stdout document."""
     if tolerance < 0:
@@ -284,17 +292,30 @@ def run_validate(
             report["failures"].extend(dropped)
             report["template_checks_missing"] = True
             report["ok"] = False
-        from photopart.freeze import apply_freeze
+        from photopart.freeze import apply_answers, apply_freeze
         from photopart.spec import load_spec
+        from photopart.stamp import read_sidecar
 
         raw_spec = load_spec(spec) if spec else {}
         freeze_failures, freeze_info = apply_freeze(spec, raw_spec, spec_reason)
-        report["checklist"] = freeze_info["checklist"]
+        prior_side = read_sidecar(Path(mesh_path).expanduser())
+        prior_answers = prior_side.get("answers") if isinstance(prior_side, dict) else None
+        checklist_rows = apply_answers(
+            list(freeze_info["checklist"]),
+            report.get("spec"),
+            prior_answers if isinstance(prior_answers, dict) else None,
+            answers,
+        )
+        report["checklist"] = checklist_rows
+        report["answers"] = {
+            row["item"]: row["answer"] for row in checklist_rows if row.get("answered") and row.get("item")
+        }
         report["frozen_sha256"] = freeze_info["frozen_sha256"]
         report["spec_edits"] = freeze_info["spec_edits"]
         if freeze_failures:
             report["failures"].extend(freeze_failures)
             report["ok"] = False
+        from photopart.features import load_face_tags
         from photopart.printability import check_printability
 
         printable = check_printability(
@@ -304,6 +325,7 @@ def run_validate(
             max_overhang_fraction=max_overhang_fraction,
             min_bed_mm2=min_bed_mm2,
             min_gap_mm=min_gap_mm,
+            face_tags=load_face_tags(mesh_path),
         )
         report["printability"] = printable
         if print_strict and printable["warnings"]:
@@ -320,14 +342,20 @@ def run_validate(
     report["allow_size"] = bool(allow_size)
     try:
         prior = stamp_status(resolved)
-        from photopart.score import best_sibling, compute_score
+        from photopart.score import compute_score, version_report
 
         report.update(compute_score(report))
-        best = best_sibling(resolved)
-        report["best_version"] = None if best is None else best["name"]
-        report["revert_to"] = (
-            best["name"] if best is not None and best["score"] > float(report["score"]) + 1e-9 else None
-        )
+        picked = version_report(resolved, report)
+        report.update(picked)
+        best = None
+        if picked.get("revert_to"):
+            match = next(
+                (row for row in picked.get("versions") or [] if row.get("name") == picked["revert_to"]),
+                None,
+            )
+            if match is not None and isinstance(match.get("score"), (int, float)):
+                best = match
+        open_items = sum(1 for row in report.get("checklist") or [] if isinstance(row, dict) and not row.get("answered"))
         attach_flow(
             report,
             step_validate(
@@ -336,6 +364,8 @@ def run_validate(
                 was_stale=prior["stale_validation"],
                 score=float(report["score"]),
                 best=best,
+                failures=list(report.get("failures") or []),
+                open_items=open_items,
             ),
         )
         stamp = write_sidecar(resolved, report)

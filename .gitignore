@@ -7,3 +7,5 @@ dist/
 build/
 out/
 .ruff_cache/
+.p2p_state.json
+last_measure.json

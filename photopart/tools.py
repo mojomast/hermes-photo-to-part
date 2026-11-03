@@ -47,7 +47,7 @@ def _lead(text: str) -> str:
     return f"{SKILL_ID}. {text}"
 
 
-_CONCISE_DROP = {"history", "overlay_poses", "stdout", "stderr"}
+_CONCISE_DROP = {"history", "overlay_poses", "stdout", "stderr", "versions"}
 
 # PluginContext.register_tool on Hermes v0.21.7 (NousResearch/hermes-agent
 # hermes_cli/plugins.py, tag v0.21.7, commit 71d34bad). output_schema is not
@@ -112,6 +112,9 @@ def _emit(
             payload.pop(key, None)
         if isinstance(payload.get("failures"), list) and len(payload["failures"]) > 8:
             payload["failures"] = payload["failures"][:8]
+    from photopart.budget import attach_budget
+
+    attach_budget(payload, tool_name)
     return _dump(payload)
 
 
@@ -192,6 +195,7 @@ def _size(params: dict) -> tuple[float, float, float] | None:
 def validate_tool(params, **_kwargs) -> str:
     """Check watertightness and the bounding box. Size targets are millimetres."""
     mode = "concise"
+    args: dict = {}
     try:
         args = _params(params)
         mode = _format(args)
@@ -220,10 +224,12 @@ def validate_tool(params, **_kwargs) -> str:
             min_bed_mm2=float(args.get("min_bed_mm2", 1)),
             min_gap_mm=float(args.get("min_gap_mm", 0.3)),
             print_strict=_flag(args, "print_strict"),
+            answers=_answers(args),
         )
+        _maybe_render(args, report)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _emit(
-            {"ok": False, "error": str(exc)},
+            {"ok": False, "error": str(exc), "mesh": args.get("mesh") if isinstance(args.get("mesh"), str) else None},
             "Fix the arguments, then photo_part_validate the mesh.",
             response_format=mode,
             tool_name="photo_part_validate",
@@ -234,6 +240,69 @@ def validate_tool(params, **_kwargs) -> str:
         response_format=mode,
         tool_name="photo_part_validate",
     )
+
+
+def _answers(args: dict) -> list | None:
+    raw = args.get("answer")
+    if raw is None or raw == "":
+        raw = args.get("answers")
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    raise ValueError("answer must be item=yes or a list of those")
+
+
+def _maybe_render(args: dict, report: dict) -> None:
+    """Render in-process after a passing validate that was given a spec.
+
+    ``render`` defaults to that case. A failing validate does not render.
+    ``photo_part_render`` stays available for an extra sheet.
+    """
+    if not isinstance(report, dict) or report.get("error"):
+        return
+    flag = args.get("render", None)
+    if flag is None:
+        wanted = bool(report.get("ok") and args.get("spec"))
+    else:
+        wanted = bool(flag) and bool(report.get("ok"))
+    if not wanted:
+        return
+    mesh = report.get("file") or args.get("mesh")
+    if not mesh:
+        return
+    out = Path(str(mesh)).expanduser().resolve().parent / "renders"
+    argv = [str(mesh), "--out-dir", str(out), "--overwrite"]
+    photo = _optional_str(args, "photo")
+    if photo:
+        argv.extend(["--photo", photo])
+    scale = _optional_float(args, "photo_scale")
+    if scale is not None:
+        argv.extend(["--photo-scale", str(scale)])
+    fit = _optional_str(args, "overlay_fit") or _optional_str(args, "views")
+    overlay = args.get("overlay")
+    if fit in {"auto", "center"}:
+        argv.extend(["--overlay-fit", fit])
+    elif overlay in {True, "auto"}:
+        argv.extend(["--overlay-fit", "auto"])
+    roi = args.get("roi")
+    if isinstance(roi, str) and roi.strip():
+        argv.extend(["--roi", roi.strip()])
+    elif isinstance(roi, (list, tuple)) and len(roi) == 4:
+        argv.extend(["--roi", ",".join(str(float(item)) for item in roi)])
+    from photopart.render import run_render
+
+    _code, manifest = run_render(argv)
+    alignment = manifest.get("alignment") if isinstance(manifest, dict) else None
+    report["render"] = {
+        "sheet": None if not isinstance(manifest, dict) else manifest.get("sheet"),
+        "overlay": None if not isinstance(manifest, dict) else manifest.get("overlay"),
+        "alignment": alignment,
+        "ok": bool(isinstance(manifest, dict) and manifest.get("ok")),
+        "error": None if not isinstance(manifest, dict) else manifest.get("error"),
+    }
 
 
 def render_tool(params, **_kwargs) -> str:
@@ -374,7 +443,7 @@ def template_tool(params, **_kwargs) -> str:
     try:
         args = _params(params)
         mode = _format(args)
-        from photopart.parts import output_names, write_shape
+        from photopart.parts import default_stl_name, output_names, write_shape
 
         overrides = args.get("params") or None
         if overrides is not None and not isinstance(overrides, dict):
@@ -384,9 +453,14 @@ def template_tool(params, **_kwargs) -> str:
 
         raw_out = args.get("out_dir")
         out_dir = absolute_path(raw_out if raw_out else ".")
+        stl_name = default_stl_name(shape, out_dir, _optional_str(args, "stl"))
         write_3mf = not bool(args.get("no_3mf", False))
         if not (_flag(args, "force") or _flag(args, "overwrite")):
-            existing = [name for name in output_names(shape, write_3mf=write_3mf) if (out_dir / name).exists()]
+            existing = [
+                name
+                for name in output_names(shape, write_3mf=write_3mf, stl_name=stl_name)
+                if (out_dir / name).exists()
+            ]
             if existing:
                 joined = ", ".join(existing)
                 raise ValueError(f"refusing to overwrite {joined}. Pass --overwrite.")
@@ -396,6 +470,7 @@ def template_tool(params, **_kwargs) -> str:
             overrides,
             ascii_stl=bool(args.get("ascii", False)),
             write_3mf=write_3mf,
+            stl_name=stl_name,
         )
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
         return _emit(
@@ -429,13 +504,16 @@ def template_tool(params, **_kwargs) -> str:
         "watertight": bool(written["mesh"].is_watertight),
         "spec_checks": written.get("spec_checks"),
     }
+    from photopart.facts import mesh_facts
     from photopart.spec import note_missing_spec
 
-    attach_flow(summary, step_model(stl or "name_v1.stl"))
+    summary.update(mesh_facts(written["mesh"]))
+    named = stl or str((out_dir / (stl_name or f"{shape}_v1.stl")).resolve())
+    attach_flow(summary, step_model(named))
     note_missing_spec(summary, Path.cwd(), out_dir)
     return _emit(
         summary,
-        step_model(stl or "name_v1.stl"),
+        step_model(named),
         response_format=mode,
         tool_name="photo_part_template",
     )
@@ -459,7 +537,7 @@ def measure_tool(params, **_kwargs) -> str:
         )
     return _emit(
         report,
-        "Next: photo_part_template or photo_part_build, then validate name_v1.stl.",
+        "Next: photo_part_template or photo_part_build, then photo_part_validate the new STL.",
         response_format=mode,
         tool_name="photo_part_measure",
     )
@@ -484,6 +562,14 @@ def build_tool(params, **_kwargs) -> str:
             timeout=float(args.get("timeout", 60) if args.get("timeout") is not None else 60),
             args=list(extra),
         )
+        from photopart.facts import facts_for_stl
+
+        for output in report.get("outputs") or []:
+            if str(output).lower().endswith(".stl"):
+                facts = facts_for_stl(output)
+                if facts:
+                    report.update(facts)
+                break
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _emit(
             {"ok": False, "error": str(exc)},
@@ -582,6 +668,20 @@ def tool_specs() -> list[dict]:
                     "type": "string",
                     "description": "Why a frozen spec.json checklist or number changed. Required after the first validate of that file.",
                 },
+                "answer": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Checklist answers item=yes or item=no. Repeatable. Not a spec edit and does not need reason.",
+                },
+                "render": {
+                    "type": "boolean",
+                    "description": "Render sheet.png in this call. Default true when the check passes and spec was given. A failure does not render.",
+                },
+                "photo": {"type": "string", "description": "Photo passed through to the automatic render."},
+                "photo_scale": {"type": "number", "description": "Pixels per millimetre for the automatic overlay."},
+                "views": {"type": "string", "description": "Overlay fit passed through: auto or center."},
+                "overlay": {"type": "boolean", "description": "When true, the automatic render uses overlay_fit auto."},
+                "roi": {"type": "array", "items": {"type": "number"}, "description": "Part region passed through to the overlay."},
                 "min_wall_mm": {"type": "number", "description": "Warn when the thinnest inward ray is under this. Default 0.8."},
                 "overhang_deg": {"type": "number", "description": "Overhang starts past this angle from vertical. Default 45."},
                 "max_overhang_fraction": {"type": "number", "description": "Warn when overhang area exceeds this fraction. Default 0.35."},
@@ -744,6 +844,10 @@ def tool_specs() -> list[dict]:
                 "ascii": {"type": "boolean", "description": "Write an ASCII STL."},
                 "no_3mf": {"type": "boolean", "description": "Skip 3MF. 3MF needs lxml."},
                 "force": {"type": "boolean", "description": "Alias of overwrite."},
+                "stl": {
+                    "type": "string",
+                    "description": "STL filename. Default is <shape>_v1.stl, or the spec.json part slug. plate_clip stays plate_clip.stl.",
+                },
                 "overwrite": {"type": "boolean", "description": "Replace files already in out_dir. Default is to refuse."},
             },
             [],
