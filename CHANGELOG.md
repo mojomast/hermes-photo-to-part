@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.15 — 2026-11-03
 
-- `photo_part_build` asks for Hermes approval before it runs a script. The callback is a second `pre_tool_call` hook, so the skill-id rewrite, the session call budget, and the probe note stay. `help` and `describe` do not run a script and are not prompted. `PHOTOPART_BUILD_APPROVAL=allow` skips the prompt for a test or a sealed eval. The default is to ask.
-- Output paths that Hermes's write denylist refuses are rejected, including `<file>.validate.json`. A rectified measure PNG must end in `.png` and is not replaced unless `overwrite` (or `force`) is set.
+- From @teknium1: `photo_part_build` asks for Hermes approval before it runs a script. The callback is a second `pre_tool_call` hook, so the skill-id rewrite, the session call budget, and the probe note stay. `help` and `describe` do not run a script and are not prompted. `PHOTOPART_BUILD_APPROVAL=allow` skips the prompt for a test or a sealed eval. The default is to ask.
+- From @teknium1: output paths that Hermes's write denylist refuses are rejected, including `<file>.validate.json`. A rectified measure PNG must end in `.png` and is not replaced unless `overwrite` (or `force`) is set.
 
 ## 0.1.14 — 2026-11-03
 
