@@ -55,7 +55,8 @@ def _lead(text: str) -> str:
     return (
         f"{SKILL_ID}. "
         f'skill_view("{SKILL_ID}") is the only skill id. '
-        "Copy that id exactly. It has no plugin: prefix. "
+        "Copy that id exactly. It has no plugin: prefix and no slash. "
+        "Do not pass it to skills_list. "
         f"{text}"
     )
 
@@ -666,10 +667,8 @@ def template_tool(params, **_kwargs) -> str:
             )
         from photopart.parts import default_stl_name, output_names, write_shape
 
-        overrides = args.get("params") or None
-        if overrides is not None and not isinstance(overrides, dict):
-            raise ValueError("params must be an object of millimetre values")
         shape = str(args.get("shape") or "plate_clip")
+        overrides = _template_params(args, shape)
         from photopart.paths import absolute_path
 
         raw_out = args.get("out_dir")
@@ -1103,7 +1102,15 @@ def tool_specs() -> list[dict]:
                     "type": "string",
                     "description": "plate_clip, plate, countersink, revolve, ribs, l_bracket, hinge, thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, spur_gear, scroll, or strap_hinge.",
                 },
-                "params": {"type": "object", "description": "Millimetre overrides. plate holes is a list of {x, y, diameter}."},
+                "params": {
+                    "type": "object",
+                    "description": (
+                        "Shape values, in millimetres. Put knuckles and the other overrides here, "
+                        "for example params={knuckles: 5}. A known shape value passed next to shape "
+                        "is moved into params. An unknown name is an error that names params. "
+                        "plate holes is a list of {x, y, diameter}."
+                    ),
+                },
                 "ascii": {"type": "boolean", "description": "Write an ASCII STL."},
                 "no_3mf": {"type": "boolean", "description": "Skip 3MF. 3MF needs lxml."},
                 "force": {"type": "boolean", "description": "Alias of overwrite."},
@@ -1236,6 +1243,77 @@ def tool_specs() -> list[dict]:
         "handler": build_tool,
     }
     return [validate, render, heal, template, measure, build]
+
+
+_TEMPLATE_KEYS = frozenset(
+    {
+        "out_dir",
+        "shape",
+        "params",
+        "ascii",
+        "no_3mf",
+        "force",
+        "stl",
+        "overwrite",
+        "help",
+        "describe",
+        "mode",
+        "response_format",
+        "calls_used",
+    }
+)
+
+
+def _template_params(args: dict, shape: str) -> dict | None:
+    """Shape values live in ``params``. Known top-level ones are moved there.
+
+    An unknown name is an error. A value that disagrees with the same key
+    inside ``params`` is an error. Nothing is dropped silently.
+    """
+    from photopart.catalog import SHAPES
+
+    known = set()
+    spec = SHAPES.get(shape)
+    if spec is not None:
+        known = set(spec["params"])
+    overrides = args.get("params")
+    if isinstance(overrides, str) and overrides.strip():
+        loaded = json.loads(overrides)
+        if not isinstance(loaded, dict):
+            raise ValueError("params must be an object of millimetre values")
+        overrides = loaded
+    if overrides is None:
+        overrides = {}
+    elif not isinstance(overrides, dict):
+        raise ValueError("params must be an object of millimetre values")
+    else:
+        overrides = dict(overrides)
+    unknown = []
+    for key, value in args.items():
+        if key in _TEMPLATE_KEYS:
+            continue
+        if key in known:
+            if key in overrides and overrides[key] != value:
+                raise ValueError(
+                    f"{key} was passed both at the top level ({value!r}) and inside params "
+                    f"({overrides[key]!r}). Put shape values only in params."
+                )
+            overrides.setdefault(key, value)
+            continue
+        unknown.append(str(key))
+    if unknown:
+        listed = ", ".join(sorted(unknown))
+        if known:
+            names = ", ".join(sorted(known))
+            raise ValueError(
+                f"unknown argument {listed} for shape {shape!r}. "
+                f"Shape values belong in params, not next to shape. "
+                f"Known params for {shape}: {names}."
+            )
+        raise ValueError(
+            f"unknown argument {listed}. Shape values belong in params, not next to shape."
+        )
+    return overrides or None
 
 
 def _signature_parameters(func):

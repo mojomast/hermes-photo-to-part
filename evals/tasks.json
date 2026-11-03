@@ -181,7 +181,7 @@
     },
     {
       "id": "coin_scale_sealed",
-      "prompt": "Measure the part next to the coin with photo_part_measure (seed or roi). Do not open the photo with cv2 or PIL. US quarter 24.26 mm, CAD loonie 26.5 mm, and euro 1 coin 23.25 mm. The part box must be within 5 percent, or within 8 percent when the photo is tilted about 20 degrees. This in-process task uses a synthetic photo, not a caliper shot.",
+      "prompt": "Measure the staged photos us_quarter.png, cad_loonie.png, and euro_1.png with photo_part_measure. Use auto plus a seed or roi on the dark part, not on the coin. Do not draw a replacement fixture and do not open the photos with cv2 or PIL. US quarter is 24.26 mm, CAD loonie is 26.5 mm, and the euro 1 coin is 23.25 mm. euro_1.png is tilted about 20 degrees. The part box must be within 5 percent, or within 8 percent on the tilted photo. These are synthetic coin photos, not a caliper shot.",
       "budget_calls": 40,
       "budget_minutes": 5,
       "holdout": true,

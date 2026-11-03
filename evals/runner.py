@@ -353,18 +353,17 @@ def score_transcript(text: str, calls=None) -> dict:
 
     ``tool_calls`` counts session records (JSON tool calls and timestamped
     calls), not mentions in prose. ``plugin_calls`` is the photo_part_* subset.
-    ``wrong_skill_ids`` counts arguments of ``skill_view(...)`` that were not
-    rewritten. ``calls`` is a ``calls.jsonl`` path or a list of rewrite rows.
-    A ``rewrite_from`` row is ``skill_id_rewritten`` and is left out of
-    ``wrong_skill_ids``. A sentence that mentions the plugin: form is not a
-    call. ``leak`` is true when the transcript reads this repo's ``evals/``
-    files or their absolute paths.
+    ``wrong_skill_ids`` counts ``skill_view`` and ``skills_list`` arguments
+    that were not rewritten, including ids inside a ``tool_call`` ``calls``
+    list. A slash or ``plugin:`` form of this skill counts. ``calls`` is a
+    ``calls.jsonl`` path or a list of rewrite rows. A ``rewrite_from`` row is
+    ``skill_id_rewritten`` and is left out of ``wrong_skill_ids``. A sentence
+    that mentions the plugin: form is not a call. ``leak`` is true when the
+    transcript reads this repo's ``evals/`` files or their absolute paths.
     """
-    views = []
-    for match in _SKILL_VIEW.finditer(text):
-        skill = match.group(2)
-        if skill == _WRONG_SKILL or skill.startswith("plugin:"):
-            views.append(skill)
+    from photopart.skillref import misspelled_skill_arguments
+
+    views = misspelled_skill_arguments(text)
     rewrites = _rewrite_rows(calls)
     if views and rewrites:
         paired = min(len(views), len(rewrites))
@@ -471,6 +470,8 @@ def stage_task(task_id: str, dest: Path) -> dict:
             target = destination / name
             target.write_bytes(source.read_bytes())
             copied.append(name)
+    if task_id == "coin_scale_sealed":
+        copied.extend(_stage_coin_photos(destination))
     return {
         "ok": True,
         "task": task_id,
@@ -1473,6 +1474,29 @@ def _coin_scene(diameter_mm: float, length_mm: float, width_mm: float, tilt_deg:
     noise = np.random.default_rng(11).normal(0, 2.5, canvas.shape)
     canvas = np.clip(canvas.astype(np.float32) + noise, 0, 255).astype(np.uint8)
     return canvas, (int(round(pcx)), int(round(pcy)))
+
+
+def _stage_coin_photos(destination: Path) -> list[str]:
+    """Write the three synthetic coin scenes the sealed task measures.
+
+    Real caliper photos are not in this repo. Staging used to copy nothing,
+    so a Hermes session drew its own fixture and never called measure on a
+    known image. These are the same scenes the in-process check renders.
+    """
+    from PIL import Image
+
+    names = []
+    cases = (
+        ("us_quarter", 24.26, 18.0, 10.0, 0.0),
+        ("cad_loonie", 26.5, 22.0, 12.0, 0.0),
+        ("euro_1", 23.25, 16.0, 8.0, 20.0),
+    )
+    for coin, diameter, length, width, tilt in cases:
+        image, _seed = _coin_scene(diameter, length, width, tilt)
+        name = f"{coin}.png"
+        Image.fromarray(image, mode="RGB").save(destination / name)
+        names.append(name)
+    return names
 
 
 def _coin_scale_sealed() -> dict:
