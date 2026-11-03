@@ -100,19 +100,19 @@ Do not write probe scripts. Read `bodies`, `bores`, and `sections_mm2` on the te
 
 1. Write `spec.json` from the user's numbers before any modelling or measuring: bbox (`x`, `y`, `z`) and the key features (shells, hole count, knuckle count, diameters). Check dimensions. Reject impossible geometry, such as a countersink deeper than the sheet. A single flat photo cannot show thickness or depth. Say which of those are unobserved. Ask the user or mark them assumed. Do not copy an in-plane width into thickness.
 2. `photo_part_measure` only when the photo has a coin or ruler. Keep its JSON. Pass it to render so the coin is excluded. Skip this call when there is no reference. Get every size from photo_part_measure (seed or roi). Do not open the photo with cv2/PIL.
-3. `photo_part_template` first. If you must script, one `photo_part_build` with an absolute project `cwd`. The template names the file `<shape>_v1.stl` (or the `part` slug from spec.json). plate_clip stays `plate_clip.stl`. If the script fails, fix it once and build again, then stop editing.
+3. `photo_part_template` first. If you must script, one `photo_part_build` with an absolute project `cwd`. Hermes asks for approval before that script runs. `help` and `describe` do not run a script. The template names the file `<shape>_v1.stl` (or the `part` slug from spec.json). plate_clip stays `plate_clip.stl`. If the script fails, fix it once and build again, then stop editing.
 4. One `photo_part_validate` of that file, passing `spec.json`. Keep every check the template emitted. Use one photo_part_validate and one photo_part_render per version.
 5. One `photo_part_render` of that same file, and only after that validate. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`). Look at `contact.png` once. The deliver render sets `final` true.
 6. Deliver the best validated `name_vN` only when validate `ok` is true and `stale_validation` is not true. `next_step` says stop when every check passed. If a later version scores worse, it says revert to the better `name_vK`. Stop.
 
-Write `name_vN.stl`. Never overwrite a file. Never `rm`, unlink, or otherwise delete an STL or 3MF, including one you just wrote. The next edit is a new version. Template and heal refuse to replace an existing file unless `--overwrite`. When a tool does replace a file, it keeps the previous bytes in `.p2p_history/` next to it. If `name_vN` is written and `name_v(N-1)` is missing, the JSON lists it under `missing_earlier`. Do not delete that older file to hide the gap.
+Write `name_vN.stl`. Never overwrite a file. Never `rm`, unlink, or otherwise delete an STL or 3MF, including one you just wrote. The next edit is a new version. Template and heal refuse to replace an existing file unless `--overwrite`. A rectified measure PNG must end in `.png` and is not replaced unless `overwrite` is set. When a tool does replace a file, it keeps the previous bytes in `.p2p_history/` next to it. If `name_vN` is written and `name_v(N-1)` is missing, the JSON lists it under `missing_earlier`. Do not delete that older file to hide the gap.
 
 ## Tools
 
 | Tool | Job |
 | --- | --- |
 | `photo_part_template` | Shapes above, including thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, spur_gear, scroll, and strap_hinge. Absolute `out_dir`. Returns `interpreter`. |
-| `photo_part_build` | One local `.py` with the plugin interpreter. Unions overlapping shells. Timeout, no shell. |
+| `photo_part_build` | One local `.py` with the plugin interpreter. Hermes asks for approval before the script runs. Unions overlapping shells. Timeout, no shell. |
 | `photo_part_validate` | Watertight, shells, box, holes, printability, and `spec.json` or `--dim`. Writes a `score`. The only sidecar is `<file>.validate.json`. A new run appends the previous record to `history`. |
 | `photo_part_render` | Fitted views, an eight-view `sheet.png` (previous in red, new in green), and a silhouette overlay. `overlay_fit auto` tries front, side, and top at 15° then 1°, plus a mirror, and reports rotation, mirror, view, `overlay_poses`, and the top 3 poses. GrabCut uses `--roi` or `--seed`. An angled photo is still scored with `overlay_iou_label` `guide_only`. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`). `final` delivers the best validated version. `stale_validation` when the hash differs. |
 | `photo_part_heal` | Weld and fill. `--union` merges overlapping shells. `--engine meshfix` tries PyMeshFix when it is installed. |

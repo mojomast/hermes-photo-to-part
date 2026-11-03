@@ -1176,8 +1176,10 @@ def tool_specs() -> list[dict]:
                 "height_mm": {"type": "number"},
                 "out": {
                     "type": "string",
-                    "description": "Absolute rectified PNG path. Default: the working directory, never HERMES_HOME/cache.",
+                    "description": "Absolute rectified .png path. Default: the working directory, never HERMES_HOME/cache. Refuses an existing file unless overwrite is set.",
                 },
+                "force": {"type": "boolean", "description": "Alias of overwrite."},
+                "overwrite": {"type": "boolean", "description": "Replace an existing out file. Default is to refuse."},
                 "angled": {"type": "boolean", "description": "True when the photo is not straight-on."},
                 "auto": {"type": "boolean", "description": "Detect the coin and the part in image. Do not open the photo with cv2 or PIL."},
                 "part_seed": {"type": "array", "description": "One [x, y] pixel on the part, not on the coin."},

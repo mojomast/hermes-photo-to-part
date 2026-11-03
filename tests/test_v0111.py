@@ -167,8 +167,10 @@ class HookTests(unittest.TestCase):
         load_plugin_register()(ctx)
         self.assertEqual(
             [name for name, _callback in ctx.hooks],
-            ["pre_tool_call", "post_tool_call", "transform_tool_result"],
+            ["pre_tool_call", "post_tool_call", "transform_tool_result", "pre_tool_call"],
         )
+        self.assertEqual(ctx.hooks[0][1].__name__, "on_pre_tool_call")
+        self.assertEqual(ctx.hooks[-1][1].__name__, "approve_build")
         self.assertEqual(len(ctx.tools), 6)
 
 

@@ -214,10 +214,14 @@ class PluginTests(unittest.TestCase):
         spec.loader.exec_module(module)
         found = []
         tools = []
+        hooks = []
 
         class Ctx:
             def register_skill(self, name, path):
                 found.append((name, Path(path)))
+
+            def register_hook(self, name, callback):
+                hooks.append(name)
 
             def register_tool(self, name, toolset, schema, handler, description="", **kwargs):
                 tools.append(
@@ -232,6 +236,10 @@ class PluginTests(unittest.TestCase):
 
         module.register(Ctx())
         self.assertEqual(found, [("photo-to-printable-part", SKILL / "SKILL.md")])
+        self.assertEqual(
+            hooks,
+            ["pre_tool_call", "post_tool_call", "transform_tool_result", "pre_tool_call"],
+        )
         names = [item["name"] for item in tools]
         self.assertEqual(names, [
             "photo_part_validate",
