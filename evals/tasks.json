@@ -1,4 +1,5 @@
 {
+  "canary": "p2p-canary-7f3a9c2e-6b14-4d88-a1e0-9c5d2f8b4a17",
   "tasks": [
     {
       "id": "box_matches_spec",
@@ -170,6 +171,21 @@
         "washer_photo.jpg",
         "fixture.json"
       ]
+    },
+    {
+      "id": "thread_from_script_no_thin_wall",
+      "prompt": "Build an M3x0.5 external thread, union a hex head, and export it. Validation must not warn on wall thickness, and min_wall_raw_mm stays under 0.3. The same mesh with no face tags must still pass by detecting the helix. A 0.3 mm flange next to that thread must still warn.",
+      "budget_calls": 40,
+      "budget_minutes": 5,
+      "scripted": true
+    },
+    {
+      "id": "coin_scale_sealed",
+      "prompt": "Measure the part next to the coin with photo_part_measure (seed or roi). Do not open the photo with cv2 or PIL. US quarter 24.26 mm, CAD loonie 26.5 mm, and euro 1 coin 23.25 mm. The part box must be within 5 percent, or within 8 percent when the photo is tilted about 20 degrees. This in-process task uses a synthetic photo, not a caliper shot.",
+      "budget_calls": 40,
+      "budget_minutes": 5,
+      "holdout": true,
+      "scripted": true
     }
   ]
 }

@@ -38,6 +38,7 @@ Call `photo_part_measure`. Do not write perspective code. Nominal diameters, mil
 | us_half | 30.61 |
 | gbp_1 | 23.43 |
 | cad_quarter | 23.88 |
+| cad_loonie | 26.5 |
 
 Pass `coin` plus `diameter_px` or two `points` across the coin. A ruler is `ruler_mm` plus two points. The scale is for features in that same plane. A straight-on photo is required unless you pass `quad` (TL, TR, BR, BL) with `width_mm`, `height_mm`, and `image`. That writes a rectified PNG. Then measure on the rectified image.
 

@@ -26,3 +26,12 @@ def register(ctx) -> None:
     from photopart.tools import register_tools
 
     register_tools(ctx)
+    if hasattr(ctx, "register_hook"):
+        try:
+            from photopart.hooks import HOOKS
+
+            for hook_name, callback in HOOKS:
+                ctx.register_hook(hook_name, callback)
+        except Exception:
+            # A Hermes build without these hooks still gets the six tools.
+            return

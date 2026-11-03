@@ -1130,20 +1130,23 @@ def tool_specs() -> list[dict]:
     measure = {
         "name": "photo_part_measure",
         "description": _lead(
-            "Pixel-to-millimetre scale from a coin or a ruler. Returns reference_bbox so render can exclude that object, and absolute paths."
+            "Pixel-to-millimetre scale from a coin or a ruler. Returns reference_bbox so render can exclude that object, and absolute paths. "
+            "Pass auto, part_seed, or part_roi to size the part. Do not open the photo with cv2 or PIL."
         ),
         "schema": _schema(
             "photo_part_measure",
             _lead(
-                "Measure px_per_mm from a coin (coin id or diameter_mm, plus diameter_px or two points) "
+                "Measure px_per_mm from a coin (coin id or diameter_mm, plus diameter_px or two points, "
+                "or image alone to detect the circle) "
                 "or a ruler (ruler_mm plus two points). "
+                "auto, part_seed [x, y], or part_roi [x0, y0, x1, y1] also returns part_bbox_mm. "
                 "Optional quad of four pixels TL, TR, BR, BL plus width_mm, height_mm, and image "
                 "writes a rectified PNG in the working directory, never HERMES_HOME/cache. "
                 "Returns reference_bbox and absolute paths. Same-plane, straight-on, unless a quad was given. "
-                "Do not write a perspective script. Returns JSON."
+                "Do not open the photo with cv2 or PIL. Do not write a perspective script. Returns JSON."
             ),
             {
-                "coin": {"type": "string", "description": "euro_1, euro_2, euro_50c, us_quarter, us_penny, us_nickel, us_dime, us_half, gbp_1, cad_quarter."},
+                "coin": {"type": "string", "description": "euro_1, euro_2, euro_50c, us_quarter, us_penny, us_nickel, us_dime, us_half, gbp_1, cad_quarter, cad_loonie."},
                 "diameter_mm": {"type": "number", "description": "Reference diameter when it is not a known coin."},
                 "diameter_px": {"type": "number", "description": "That diameter in source-image pixels."},
                 "points": {
@@ -1169,6 +1172,9 @@ def tool_specs() -> list[dict]:
                     "description": "Absolute rectified PNG path. Default: the working directory, never HERMES_HOME/cache.",
                 },
                 "angled": {"type": "boolean", "description": "True when the photo is not straight-on."},
+                "auto": {"type": "boolean", "description": "Detect the coin and the part in image. Do not open the photo with cv2 or PIL."},
+                "part_seed": {"type": "array", "description": "One [x, y] pixel on the part, not on the coin."},
+                "part_roi": {"type": "array", "description": "Part box [x0, y0, x1, y1]. {x, y, w, h} is also accepted."},
             },
             [],
         ),

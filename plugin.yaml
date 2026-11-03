@@ -1,5 +1,5 @@
 name: photo-to-part
-version: "0.1.10"
+version: "0.1.11"
 description: >-
   Skill id photo-to-part:photo-to-printable-part. Turn photos, a few
   measurements, or a messy scan into a parametric printable part and check
@@ -26,13 +26,18 @@ provides_tools:
   - photo_part_template
   - photo_part_measure
   - photo_part_build
-provides_hooks: []
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call
+  - transform_tool_result
 provides_middleware: []
 requires_env: []
 # Kept in step with pyproject.toml. pyproject.toml is what Hermes installs.
 # Hermes copies this git tree on install, so evals/ and tests/ stay on disk.
 # They are not part of the Python package (pyproject.toml, MANIFEST.in).
-# Agents must not read them. Use the tool help/describe output instead.
+# The plugin stays at the repository root. A plugin/ subdirectory would
+# change the install string `hermes plugins install mojomast/hermes-photo-to-part`.
+# Eval files carry a canary instead. Agents must not read them.
 python_dependencies:
   - "trimesh>=4.6.0,<5.3"
   - "manifold3d>=3.2,<3.6"

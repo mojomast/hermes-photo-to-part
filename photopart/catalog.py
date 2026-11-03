@@ -179,6 +179,7 @@ mesh.export("/absolute/project/strap_hinge_v1.stl")
 gear = spur_gear(module=1.0, teeth=20, face_width=6, bore=5)
 gear.export("/absolute/project/spur_gear_v1.stl")
 
+# Tag after the final boolean. Indices do not survive a union.
 # tag_faces(mesh, thread=[0, 1], path="/absolute/project/part_v1.stl")
 """
 

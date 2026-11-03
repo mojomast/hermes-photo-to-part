@@ -9,7 +9,7 @@ description: >-
   STL, a 2 mm grid-paper photo, or a scan cleaned into CAD. Call the
   photo_part_* tools. Read next_step. About 40 tool calls in total. Deliver
   as soon as validate passes.
-version: "0.1.10"
+version: "0.1.11"
 author: mojomast
 license: MIT
 compatibility: >-
@@ -60,9 +60,10 @@ from photopart.features import external_thread, internal_thread, knurl, revolve_
 ```
 
 `tag_faces(mesh, thread=indices, knurl=indices, path=stl)` writes
-`<stl>.faces.json` so the wall check skips those faces. `external_thread`,
-`knurl`, and the other helpers tag their own faces, and exporting the mesh
-to a path writes that sidecar. Do not leave a script-built thread untagged.
+`<stl>.faces.json` so the wall check skips those faces. Call it after the
+final boolean. `external_thread`, `knurl`, and the other helpers also store
+a geometric region, and exporting the mesh to a path writes that sidecar.
+Do not leave a script-built thread untagged.
 
 Each call returns one watertight trimesh, in millimetres. `spur_gear(module, teeth, pressure_angle=20, face_width, bore=None)` is an involute gear: tip diameter `module * (teeth + 2)`, root diameter `module * (teeth - 2.5)`, optional keyway or D-flat, optional hub. `spiral_scroll(width, thickness, turns, end_radius, kind="archimedean")` is a spiral strip (`kind` `log` is the other). `strap_hinge` attaches one or two of those scrolls to a strap. `photo_part_build`
 unions overlapping shells and reports `shells_before` and `shells_after`.
@@ -83,7 +84,7 @@ The whole job is one measure only if the photo has a coin or ruler, one template
 Do not write probe scripts. Read `bodies`, `bores`, and `sections_mm2` on the template or build result. A passing `photo_part_validate` that was given a spec writes the sheet and, when the last measure step recorded a photo, the overlay, in that same call. Do not re-render just to draw the overlay. `photo_part_render` is for an extra or final render. Every result includes `budget`.
 
 1. Write `spec.json` from the user's numbers before any modelling or measuring: bbox (`x`, `y`, `z`) and the key features (shells, hole count, knuckle count, diameters). Check dimensions. Reject impossible geometry, such as a countersink deeper than the sheet. A single flat photo cannot show thickness or depth. Say which of those are unobserved. Ask the user or mark them assumed. Do not copy an in-plane width into thickness.
-2. `photo_part_measure` only when the photo has a coin or ruler. Keep its JSON. Pass it to render so the coin is excluded. Skip this call when there is no reference.
+2. `photo_part_measure` only when the photo has a coin or ruler. Keep its JSON. Pass it to render so the coin is excluded. Skip this call when there is no reference. Get every size from photo_part_measure (seed or roi). Do not open the photo with cv2/PIL.
 3. `photo_part_template` first. If you must script, one `photo_part_build` with an absolute project `cwd`. The template names the file `<shape>_v1.stl` (or the `part` slug from spec.json). plate_clip stays `plate_clip.stl`. If the script fails, fix it once and build again, then stop editing.
 4. One `photo_part_validate` of that file, passing `spec.json`. Keep every check the template emitted. Use one photo_part_validate and one photo_part_render per version.
 5. One `photo_part_render` of that same file, and only after that validate. A render of `name_vN` with no fresh sidecar is refused (`unvalidated: true`). Look at `contact.png` once. The deliver render sets `final` true.

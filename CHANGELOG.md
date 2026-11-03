@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.11 — 2026-11-03
+
+- `post_tool_call` counts every tool call in a session that has already used this plugin, and `transform_tool_result` adds one budget line at 60%, 80%, and 95% of the cap. The budget uses the larger of that hook count, the Hermes session record, `calls_used`, and this plugin's own counter. A session that has not used the plugin is unchanged. A hook error does not block the other tool.
+- Opening a photo already passed to `photo_part_measure` with cv2 or PIL adds a note that names `part_seed` or `part_roi`. `PHOTOPART_BLOCK_PROBES=1` blocks that probe after three tries. The default is the note only.
+- `pre_tool_call` rewrites this skill's own misspellings (`plugin:`, `plugins:`, a slash, or the bare name) to `photo-to-part:photo-to-printable-part`. Other skills are not rewritten. The original id is logged under `.photopart/calls.jsonl`.
+- `photo_part_measure` can detect a coin (Hough circle refined by a round contour) and return `part_bbox_mm` from `auto`, `part_seed`, or `part_roi`, with `scale_uncertainty_pct`. `cad_loonie` is 26.5 mm. The sealed coin check is a synthetic stand-in: caliper photos are not in this repo.
+- Thread, knurl, and tooth regions are stored as a cylinder (axis, radius, height, pitch) and re-resolved after a boolean. If a script exports none, a periodic crest is detected and written to `<stl>.faces.json`. A 0.3 mm flange beside a thread still warns.
+- `python -m evals.runner --hermes-session` reads a Hermes `tool_call` wrapper (`calls: [...]`), minutes from `state.db` timestamps, and leak paths inside tool arguments, including the eval canary.
+- Overlay JSON names `segmentation_confidence`. Fit adds IoU, boundary IoU, chamfer, and HD95. `overall_confidence` is the lower of segmentation and fit. `confidence` is still the segmentation value.
+- `photopart/standards.py` warns when a named fastener or a 608 bearing disagrees with a cited size (ISO 261/262, ISO 4017, ISO 4762, ISO 4032, ISO 4162 M5–M8 flange diameter, ASME B1.1 UNC, ISO 15 / SKF 608). It never edits the spec. ISO 273 clearance holes and catalogue M3 flange diameters are omitted.
+- Evals stay in this repository rather than a `plugin/` subdirectory, because that move would break `hermes plugins install mojomast/hermes-photo-to-part`. Eval text files carry a canary string so a session that reads them is scored as a leak.
+
 ## 0.1.10 — 2026-11-03
 
 - A per-hole probe that disagrees with the bore detector, or whose votes are split, is a warning. The row keeps both the probe and the bore. The warning does not fail validation and does not block delivery.

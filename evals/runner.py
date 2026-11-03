@@ -1,5 +1,8 @@
 """Run the scripted photo-to-part tasks and score an optional Hermes transcript.
 
+Eval marker p2p-canary-7f3a9c2e-6b14-4d88-a1e0-9c5d2f8b4a17
+
+
 The default path calls the plugin tools in-process. It does not start Hermes,
 open a socket, or read a credential. ``--transcript`` scores a saved session
 for tool calls, minutes, a mistaken skill id, and deleted meshes.
@@ -65,6 +68,10 @@ class HermesV0217Context:
     def __init__(self) -> None:
         self.tools: list[dict] = []
         self.skills: list[tuple] = []
+        self.hooks: list[tuple] = []
+
+    def register_hook(self, name, callback) -> None:
+        self.hooks.append((str(name), callback))
 
     def register_skill(self, name, path) -> None:
         self.skills.append((name, path))
@@ -271,6 +278,10 @@ def _call_records(text: str) -> list[str]:
 
 def _text_leaks(text: str) -> bool:
     """True when the transcript reads this plugin's eval tree, not a lookalike path."""
+    from photopart.canary import EVAL_CANARY
+
+    if EVAL_CANARY and EVAL_CANARY in text:
+        return True
     if _REL_LEAK.search(text):
         return True
     folded = text.replace("\\", "/")
@@ -297,7 +308,7 @@ def score_hermes_session(source: str, *, home: Path | None = None) -> dict:
     ``sessions/*.json`` / ``*.jsonl``) or a path to an export. Tool calls are
     the records in that file, including ``<timestamp> TOOLCALL name {args}``.
     """
-    from photopart.sessions import load_session_calls, session_text
+    from photopart.sessions import load_session_calls, session_span_minutes, session_text
 
     text = session_text(source, home=home)
     loaded = load_session_calls(source, home=home)
@@ -328,6 +339,9 @@ def score_hermes_session(source: str, *, home: Path | None = None) -> dict:
         scored["calls_source"] = label
     else:
         scored["calls_source"] = "transcript"
+    span = session_span_minutes(source, home=home)
+    if span is not None:
+        scored["minutes"] = span
     scored["ok"] = True
     return scored
 
@@ -486,6 +500,8 @@ def _checks() -> list[tuple[str, object]]:
         ("budget_hint", _budget_hint),
         ("real_photo_overlay", _real_photo),
         ("overlay_low_confidence", _overlay_low),
+        ("thread_from_script_no_thin_wall", _thread_from_script),
+        ("coin_scale_sealed", _coin_scale_sealed),
     ]
 
 
@@ -1285,6 +1301,131 @@ def _overlay_low() -> dict:
             "deleted_files": [],
             "detail": None if passed else {"alignment": alignment, "next": manifest.get("next_step")},
         }
+
+
+def _thread_from_script() -> dict:
+    """An exported thread keeps its crest out of the wall check after the tags are gone."""
+    import numpy as np
+    import trimesh
+
+    from photopart.features import external_thread
+    from photopart.manifold_util import union_components
+    from photopart.printability import check_printability
+
+    def naked(mesh):
+        return trimesh.Trimesh(
+            vertices=np.asarray(mesh.vertices, dtype=float),
+            faces=np.asarray(mesh.faces),
+            process=True,
+        )
+
+    def wall_warning(report):
+        return any("wall" in item or "thin area" in item for item in report.get("warnings") or [])
+
+    thread = external_thread(designation="M3", length=8)
+    head = trimesh.creation.cylinder(radius=2.8, height=3.0, sections=6)
+    head.apply_translation((0.0, 0.0, 9.5))
+    merged, _did = union_components(trimesh.util.concatenate([thread, head]))
+    union_report = check_printability(naked(merged))
+    raw_report = check_printability(naked(thread))
+    flange = trimesh.creation.cylinder(radius=6.0, height=0.3, sections=48)
+    flange.apply_translation((0.0, 0.0, 4.0))
+    flanged, _did = union_components(trimesh.util.concatenate([external_thread(designation="M3", length=8), flange]))
+    flange_report = check_printability(naked(flanged))
+    passed = (
+        not wall_warning(union_report)
+        and isinstance(union_report.get("min_wall_raw_mm"), (int, float))
+        and union_report["min_wall_raw_mm"] < 0.3
+        and not wall_warning(raw_report)
+        and bool(raw_report.get("auto_feature"))
+        and wall_warning(flange_report)
+    )
+    return {
+        "passed": passed,
+        "tool_calls": 3,
+        "wrong_skill_ids": 0,
+        "deleted_files": [],
+        "detail": None
+        if passed
+        else {"union": union_report, "raw": raw_report, "flange": flange_report},
+    }
+
+
+def _coin_scene(diameter_mm: float, length_mm: float, width_mm: float, tilt_deg: float = 0.0):
+    """Synthetic coin and peg. Straight pegs are exact pixel rectangles."""
+    import math
+
+    import numpy as np
+
+    scale = 4.0
+    coin_px = float(diameter_mm) * scale
+    height, width = 560, 720
+    canvas = np.full((height, width, 3), 245, dtype=np.uint8)
+    yy, xx = np.ogrid[:height, :width]
+    cx, cy, radius = 200.0, 270.0, coin_px / 2.0
+    canvas[((xx - cx) ** 2 + (yy - cy) ** 2) <= radius ** 2] = (70, 74, 78)
+    length = length_mm * scale
+    wide = width_mm * scale
+    pcx, pcy = 480.0, 280.0
+    if tilt_deg:
+        angle = math.radians(tilt_deg)
+        cos, sin = math.cos(angle), math.sin(angle)
+        x0 = np.arange(width)[None, :] - pcx
+        y0 = np.arange(height)[:, None] - pcy
+        xr = cos * x0 + sin * y0
+        yr = -sin * x0 + cos * y0
+        canvas[(np.abs(xr) <= length / 2.0) & (np.abs(yr) <= wide / 2.0)] = (18, 18, 18)
+    else:
+        x0 = int(round(pcx - length / 2.0))
+        y0 = int(round(pcy - wide / 2.0))
+        canvas[y0 : y0 + int(round(wide)), x0 : x0 + int(round(length))] = (18, 18, 18)
+    noise = np.random.default_rng(11).normal(0, 2.5, canvas.shape)
+    canvas = np.clip(canvas.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+    return canvas, (int(round(pcx)), int(round(pcy)))
+
+
+def _coin_scale_sealed() -> dict:
+    """Synthetic stand-in for the sealed coin task. Real caliper photos are not in the repo."""
+    from PIL import Image
+
+    from photopart.measure import measure
+
+    cases = (
+        ("us_quarter", 24.26, 18.0, 10.0, 0.0, 0.05),
+        ("cad_loonie", 26.5, 22.0, 12.0, 0.0, 0.05),
+        ("euro_1", 23.25, 16.0, 8.0, 20.0, 0.08),
+    )
+    details = []
+    passed = True
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for coin, _diameter, length, width, tilt, tolerance in cases:
+            image, seed = _coin_scene(_diameter, length, width, tilt)
+            path = root / f"{coin}.png"
+            Image.fromarray(image, mode="RGB").save(path)
+            report = measure(
+                {
+                    "coin": coin,
+                    "image": str(path),
+                    "auto": True,
+                    "part_seed": [seed[0], seed[1]],
+                    "out_dir": str(root / coin),
+                }
+            )
+            got = report.get("part_bbox_mm") or [0.0, 0.0]
+            truth = sorted((length, width), reverse=True)
+            errors = [abs(float(got[index]) - truth[index]) / truth[index] for index in range(2)]
+            ok = max(errors) <= tolerance
+            passed = passed and ok
+            if not ok:
+                details.append({"coin": coin, "got": got, "truth": truth, "errors": errors})
+    return {
+        "passed": passed,
+        "tool_calls": 3,
+        "wrong_skill_ids": 0,
+        "deleted_files": [],
+        "detail": None if passed else details,
+    }
 
 
 _CHECKS = _checks()
