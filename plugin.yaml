@@ -1,5 +1,5 @@
 name: photo-to-part
-version: "0.1.8"
+version: "0.1.9"
 description: >-
   Skill id photo-to-part:photo-to-printable-part. Turn photos, a few
   measurements, or a messy scan into a parametric printable part and check
@@ -30,6 +30,9 @@ provides_hooks: []
 provides_middleware: []
 requires_env: []
 # Kept in step with pyproject.toml. pyproject.toml is what Hermes installs.
+# Hermes copies this git tree on install, so evals/ and tests/ stay on disk.
+# They are not part of the Python package (pyproject.toml, MANIFEST.in).
+# Agents must not read them. Use the tool help/describe output instead.
 python_dependencies:
   - "trimesh>=4.6.0,<5.3"
   - "manifold3d>=3.2,<3.6"

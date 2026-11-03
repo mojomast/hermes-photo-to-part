@@ -44,7 +44,12 @@ def _dump(payload: dict) -> str:
 
 def _lead(text: str) -> str:
     """Tool text Hermes shows. The exact skill id stays in front if it is cut."""
-    return f"{SKILL_ID}. {text}"
+    return (
+        f"{SKILL_ID}. "
+        f'skill_view("{SKILL_ID}") is the skill id. '
+        "Do not pass plugin:photo-to-part:photo-to-printable-part. "
+        f"{text}"
+    )
 
 
 _CONCISE_DROP = {"history", "overlay_poses", "stdout", "stderr", "versions"}
@@ -92,6 +97,7 @@ def _emit(
     plain_error: bool = False,
     response_format: str = "concise",
     tool_name: str = "photo_part",
+    calls_used=None,
 ) -> str:
     if payload.get("error") and not plain_error and SKILL_ID not in str(payload["error"]):
         payload["error"] = f"{payload['error']} Skill id: {SKILL_ID}."
@@ -114,8 +120,25 @@ def _emit(
             payload["failures"] = payload["failures"][:8]
     from photopart.budget import attach_budget
 
-    attach_budget(payload, tool_name)
+    attach_budget(payload, tool_name, calls_used=calls_used)
     return _dump(payload)
+
+
+def _calls_used(args: dict):
+    if not isinstance(args, dict) or "calls_used" not in args:
+        return None
+    value = args.get("calls_used")
+    if value is None or value == "":
+        return None
+    return value
+
+
+def _wants_help(args: dict) -> bool:
+    if not isinstance(args, dict):
+        return False
+    if args.get("help") or args.get("describe"):
+        return True
+    return str(args.get("mode") or "").strip().lower() in {"help", "describe"}
 
 
 def _format(args: dict) -> str:
@@ -233,12 +256,14 @@ def validate_tool(params, **_kwargs) -> str:
             "Fix the arguments, then photo_part_validate the mesh.",
             response_format=mode,
             tool_name="photo_part_validate",
+            calls_used=_calls_used(args),
         )
     return _emit(
         report,
         "Next: photo_part_render the same file, then deliver it.",
         response_format=mode,
         tool_name="photo_part_validate",
+            calls_used=_calls_used(args),
     )
 
 
@@ -255,10 +280,39 @@ def _answers(args: dict) -> list | None:
     raise ValueError("answer must be item=yes or a list of those")
 
 
+def _num(value) -> str:
+    number = float(value)
+    if number.is_integer():
+        return str(int(number))
+    return str(number)
+
+
+def _roi_arg(roi) -> str | None:
+    if isinstance(roi, str) and roi.strip():
+        return roi.strip()
+    if isinstance(roi, dict) and {"x", "y", "w", "h"} <= set(roi):
+        return ",".join(_num(roi[key]) for key in ("x", "y", "w", "h"))
+    if isinstance(roi, (list, tuple)) and len(roi) == 4:
+        return ",".join(_num(item) for item in roi)
+    return None
+
+
+def _seed_arg(seed) -> str | None:
+    if isinstance(seed, str) and seed.strip():
+        return seed.strip()
+    if isinstance(seed, dict) and "x" in seed and "y" in seed:
+        return f"{_num(seed['x'])},{_num(seed['y'])}"
+    if isinstance(seed, (list, tuple)) and len(seed) == 2:
+        return f"{_num(seed[0])},{_num(seed[1])}"
+    return None
+
+
 def _maybe_render(args: dict, report: dict) -> None:
     """Render in-process after a passing validate that was given a spec.
 
     ``render`` defaults to that case. A failing validate does not render.
+    The sheet includes the photo overlay from the last measure step (photo,
+    pixels per millimetre, and region) so a later render is not required.
     ``photo_part_render`` stays available for an extra sheet.
     """
     if not isinstance(report, dict) or report.get("error"):
@@ -273,25 +327,53 @@ def _maybe_render(args: dict, report: dict) -> None:
     mesh = report.get("file") or args.get("mesh")
     if not mesh:
         return
-    out = Path(str(mesh)).expanduser().resolve().parent / "renders"
+    project = Path(str(mesh)).expanduser().resolve().parent
+    out = project / "renders"
     argv = [str(mesh), "--out-dir", str(out), "--overwrite"]
+    from photopart.measure import load_last_measure
+    from photopart.paths import plugin_root
+
+    dirs = [project]
+    cwd = Path.cwd().resolve()
+    root = plugin_root()
+    if root is None or cwd != root:
+        dirs.append(cwd)
+    hint = load_last_measure(*dirs) or {}
     photo = _optional_str(args, "photo")
+    if not photo and isinstance(hint.get("image"), str):
+        candidate = Path(hint["image"])
+        if candidate.is_file():
+            photo = str(candidate)
     if photo:
         argv.extend(["--photo", photo])
     scale = _optional_float(args, "photo_scale")
+    if scale is None and hint.get("px_per_mm") not in {None, ""}:
+        try:
+            scale = float(hint["px_per_mm"])
+        except (TypeError, ValueError):
+            scale = None
     if scale is not None:
         argv.extend(["--photo-scale", str(scale)])
     fit = _optional_str(args, "overlay_fit") or _optional_str(args, "views")
     overlay = args.get("overlay")
     if fit in {"auto", "center"}:
         argv.extend(["--overlay-fit", fit])
+    elif photo and scale is not None:
+        argv.extend(["--overlay-fit", "auto"])
     elif overlay in {True, "auto"}:
         argv.extend(["--overlay-fit", "auto"])
     roi = args.get("roi")
-    if isinstance(roi, str) and roi.strip():
-        argv.extend(["--roi", roi.strip()])
-    elif isinstance(roi, (list, tuple)) and len(roi) == 4:
-        argv.extend(["--roi", ",".join(str(float(item)) for item in roi)])
+    if roi is None or roi == "":
+        roi = hint.get("roi")
+    roi_text = _roi_arg(roi)
+    if roi_text:
+        argv.extend(["--roi", roi_text])
+    seed = args.get("seed")
+    if seed is None or seed == "":
+        seed = hint.get("seed")
+    seed_text = _seed_arg(seed)
+    if seed_text:
+        argv.extend(["--seed", seed_text])
     from photopart.render import run_render
 
     _code, manifest = run_render(argv)
@@ -300,6 +382,9 @@ def _maybe_render(args: dict, report: dict) -> None:
         "sheet": None if not isinstance(manifest, dict) else manifest.get("sheet"),
         "overlay": None if not isinstance(manifest, dict) else manifest.get("overlay"),
         "alignment": alignment,
+        "photo": photo,
+        "photo_scale": scale,
+        "roi": roi_text,
         "ok": bool(isinstance(manifest, dict) and manifest.get("ok")),
         "error": None if not isinstance(manifest, dict) else manifest.get("error"),
     }
@@ -308,6 +393,7 @@ def _maybe_render(args: dict, report: dict) -> None:
 def render_tool(params, **_kwargs) -> str:
     """Render fitted views and, with photo_scale, an outline overlay on the photo."""
     mode = "concise"
+    args: dict = {}
     try:
         args = _params(params)
         mode = _format(args)
@@ -380,18 +466,21 @@ def render_tool(params, **_kwargs) -> str:
             "Fix the render arguments, then photo_part_render the validated file.",
             response_format=mode,
             tool_name="photo_part_render",
+            calls_used=_calls_used(args),
         )
     return _emit(
         report,
         "Read stale_validation. Deliver the file only when it is false and validation_ok is true.",
         response_format=mode,
         tool_name="photo_part_render",
+            calls_used=_calls_used(args),
     )
 
 
 def heal_tool(params, **_kwargs) -> str:
     """Heal a scan into a new STL. Report fan fallback and shell counts separately."""
     mode = "concise"
+    args: dict = {}
     try:
         args = _params(params)
         mode = _format(args)
@@ -428,21 +517,37 @@ def heal_tool(params, **_kwargs) -> str:
             "Fix the heal arguments. Write a new name_vN.stl. Do not overwrite a validated mesh.",
             response_format=mode,
             tool_name="photo_part_heal",
+            calls_used=_calls_used(args),
         )
     return _emit(
         report,
         "Next: photo_part_validate the healed STL, then render it.",
         response_format=mode,
         tool_name="photo_part_heal",
+            calls_used=_calls_used(args),
     )
 
 
 def template_tool(params, **_kwargs) -> str:
     """Write a building block. The default shape is still the sample plate."""
     mode = "concise"
+    args: dict = {}
     try:
         args = _params(params)
         mode = _format(args)
+        if _wants_help(args):
+            from photopart.catalog import describe_shapes
+            from photopart.flow import step_model
+
+            described = describe_shapes(_optional_str(args, "shape"))
+            attach_flow(described, step_model("the STL from this template"))
+            return _emit(
+                described,
+                step_model("the STL from this template"),
+                response_format=mode,
+                tool_name="photo_part_template",
+                calls_used=_calls_used(args),
+            )
         from photopart.parts import default_stl_name, output_names, write_shape
 
         overrides = args.get("params") or None
@@ -478,6 +583,7 @@ def template_tool(params, **_kwargs) -> str:
             "Try a photo_part_template shape before a custom script. Pass an absolute project out_dir.",
             response_format=mode,
             tool_name="photo_part_template",
+            calls_used=_calls_used(args),
         )
     from photopart.flow import step_model
     from photopart.history import missing_versions
@@ -516,12 +622,14 @@ def template_tool(params, **_kwargs) -> str:
         step_model(named),
         response_format=mode,
         tool_name="photo_part_template",
+            calls_used=_calls_used(args),
     )
 
 
 def measure_tool(params, **_kwargs) -> str:
     """Pixel scale from a coin or a ruler, plus an optional rectified image."""
     mode = "concise"
+    args: dict = {}
     try:
         args = _params(params)
         mode = _format(args)
@@ -534,21 +642,39 @@ def measure_tool(params, **_kwargs) -> str:
             "Fix the measure arguments. Pass an absolute project path for out.",
             response_format=mode,
             tool_name="photo_part_measure",
+            calls_used=_calls_used(args),
         )
     return _emit(
         report,
         "Next: photo_part_template or photo_part_build, then photo_part_validate the new STL.",
         response_format=mode,
         tool_name="photo_part_measure",
+            calls_used=_calls_used(args),
     )
 
 
 def build_tool(params, **_kwargs) -> str:
     """Run a local Python build script with the plugin interpreter."""
     mode = "concise"
+    args: dict = {}
     try:
         args = _params(params)
         mode = _format(args)
+        if _wants_help(args):
+            from photopart.catalog import describe_features
+            from photopart.flow import step_build
+
+            described = describe_features()
+            attach_flow(described, step_build([], ok=True))
+            return _emit(
+                described,
+                step_build([], ok=True),
+                response_format=mode,
+                tool_name="photo_part_build",
+                calls_used=_calls_used(args),
+            )
+        if not args.get("script"):
+            raise ValueError("script is required unless help or describe is true")
         from photopart.build_run import run_build
 
         extra = args.get("args") or []
@@ -576,6 +702,7 @@ def build_tool(params, **_kwargs) -> str:
             "Try photo_part_template shapes such as l_bracket before a custom script.",
             response_format=mode,
             tool_name="photo_part_build",
+            calls_used=_calls_used(args),
         )
     return _emit(
         report,
@@ -583,6 +710,7 @@ def build_tool(params, **_kwargs) -> str:
         plain_error=bool(report.get("error")),
         response_format=mode,
         tool_name="photo_part_build",
+            calls_used=_calls_used(args),
     )
 
 
@@ -592,6 +720,14 @@ def _schema(name: str, description: str, properties: dict, required: list[str]) 
         "type": "string",
         "enum": ["concise", "detailed"],
         "description": "concise drops history, full pose lists, and build logs. Default concise.",
+    }
+    fields["calls_used"] = {
+        "type": "integer",
+        "description": (
+            "Tool calls already used in this Hermes session, including skill_view and other tools. "
+            "The cap is about 40 (PHOTO_PART_MAX_CALLS). Pass it so budget.remaining is exact. "
+            "Omit it and remaining is estimated high."
+        ),
     }
     return {
         "name": name,
@@ -675,7 +811,10 @@ def tool_specs() -> list[dict]:
                 },
                 "render": {
                     "type": "boolean",
-                    "description": "Render sheet.png in this call. Default true when the check passes and spec was given. A failure does not render.",
+                    "description": (
+                        "Render sheet.png in this call. Default true when the check passes and spec was given. "
+                        "A failure does not render. The photo overlay uses the region and scale from the last measure step."
+                    ),
                 },
                 "photo": {"type": "string", "description": "Photo passed through to the automatic render."},
                 "photo_scale": {"type": "number", "description": "Pixels per millimetre for the automatic overlay."},
@@ -816,6 +955,9 @@ def tool_specs() -> list[dict]:
         "name": "photo_part_template",
         "description": _lead(
             "Write a building block such as l_bracket before any custom script. "
+            "Pass help or describe true for shape parameters and a minimal example script. "
+            "Do not open parts.py, features.py, or launcher.py. "
+            "About 40 tool calls in total. "
             "out_dir defaults to the working directory and must not be HERMES_HOME/cache. "
             "Returns the absolute STL path and the plugin interpreter."
         ),
@@ -826,6 +968,8 @@ def tool_specs() -> list[dict]:
                 "Other shapes: plate, countersink, revolve, ribs, l_bracket, hinge, "
                 "thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, "
                 "spur_gear, scroll, strap_hinge. "
+                "Pass help or describe true (or mode help) for every parameter and an example script. "
+                "Do not open parts.py. "
                 "Try these before photo_part_build. "
                 "hinge is a print-in-place part with two shells. "
                 "Reject a countersink deeper than the sheet before calling this. "
@@ -849,6 +993,16 @@ def tool_specs() -> list[dict]:
                     "description": "STL filename. Default is <shape>_v1.stl, or the spec.json part slug. plate_clip stays plate_clip.stl.",
                 },
                 "overwrite": {"type": "boolean", "description": "Replace files already in out_dir. Default is to refuse."},
+                "help": {
+                    "type": "boolean",
+                    "description": "Return shape parameters and a minimal example script. Does not write an STL.",
+                },
+                "describe": {"type": "boolean", "description": "Same as help."},
+                "mode": {
+                    "type": "string",
+                    "enum": ["help", "describe"],
+                    "description": "help or describe returns parameters and an example script instead of writing files.",
+                },
             },
             [],
         ),
@@ -905,6 +1059,9 @@ def tool_specs() -> list[dict]:
         "name": "photo_part_build",
         "description": _lead(
             "Run one local .py build script with the plugin interpreter. "
+            "Pass help or describe true for feature signatures and a minimal example script. "
+            "Do not open features.py or launcher.py. "
+            "About 40 tool calls in total. "
             "Import photopart.features for a thread, knurl, revolve, sweep, hex screw, standoff, spur gear, or spiral scroll. "
             "Overlapping shells are unioned. The error field is the exception, not a status line. "
             "No shell. Try photo_part_template first."
@@ -920,7 +1077,20 @@ def tool_specs() -> list[dict]:
                 "Do not delete an STL or 3MF. The interpreter path is in the JSON."
             ),
             {
-                "script": {"type": "string", "description": "Path to a .py file in the project."},
+                "script": {
+                    "type": "string",
+                    "description": "Path to a .py file in the project. Omit when help or describe is true.",
+                },
+                "help": {
+                    "type": "boolean",
+                    "description": "Return feature signatures and a minimal example script. Does not run a script.",
+                },
+                "describe": {"type": "boolean", "description": "Same as help."},
+                "mode": {
+                    "type": "string",
+                    "enum": ["help", "describe"],
+                    "description": "help or describe returns signatures and an example script. script is not required.",
+                },
                 "cwd": {
                     "type": "string",
                     "description": "Absolute project directory. Default: the working directory, refused when that is HERMES_HOME/cache.",
@@ -932,7 +1102,7 @@ def tool_specs() -> list[dict]:
                     "description": "Extra arguments after the script path. Not a shell string.",
                 },
             },
-            ["script"],
+            [],
         ),
         "handler": build_tool,
     }

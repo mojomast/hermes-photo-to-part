@@ -301,7 +301,7 @@ class FlowTextTests(unittest.TestCase):
             "name_vN.stl",
             "photo_part_build",
             "thickness or depth",
-            "25 tool calls",
+            "40 tool calls",
             "l_bracket",
             "stale_validation",
             "--roi",

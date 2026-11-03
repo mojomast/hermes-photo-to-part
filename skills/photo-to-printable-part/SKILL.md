@@ -5,8 +5,9 @@ description: >-
   Rebuild a physical part as a printable STL or 3MF from photos and a few
   measurements, or turn a messy scan into a clean solid. Use for a replacement
   part, a fit-test print, an STL, a 2 mm grid-paper photo, or a scan cleaned
-  into CAD. Call the photo_part_* tools. Read next_step. Stay under 25 calls.
-version: "0.1.8"
+  into CAD. Call the photo_part_* tools. Read next_step. About 40 tool calls
+  in total. Deliver as soon as validate passes.
+version: "0.1.9"
 author: mojomast
 license: MIT
 compatibility: >-
@@ -61,9 +62,11 @@ installed plugin.
 
 ## Order
 
-Stay under 25 tool calls. The whole job is one measure only if the photo has a coin or ruler, one template or one build, one validate, one render, then stop. A failed build may be fixed once. Read each JSON `next_step` and do that. Do not spend the whole 40 turns. Do not explore, install, or re-render.
+About 40 tool calls in total. Don't read the plugin's source or evals. Use the tools' help/params outputs. Batch independent calls. Deliver as soon as validate passes. Pass `calls_used` (tool calls already used in the session, including `skill_view`) on every photo_part_* call. `PHOTO_PART_MAX_CALLS` overrides the default cap of 40. When `calls_used` is omitted, `budget.remaining` is estimated high. At about 60% and about 80% of the cap, `next_step` starts with `Budget: deliver now.`
 
-Do not write probe scripts. Read `bodies`, `bores`, and `sections_mm2` on the template or build result. Batch independent plugin calls in one tool_call. Target ≤ 20 plugin calls and ≤ 30 total. A passing `photo_part_validate` that was given a spec writes the sheet in that same call. `photo_part_render` is for an extra or final render. Every result includes `budget`. At 14 calls, deliver the best validated file instead of exploring.
+The whole job is one measure only if the photo has a coin or ruler, one template or one build, one validate, then stop. A failed build may be fixed once. Read each JSON `next_step` and do that. Do not spend the whole 40 turns. Do not explore, install, or re-render. Do not open `features.py`, `parts.py`, `launcher.py`, `evals/`, or `tests/`. `photo_part_template` and `photo_part_build` with `help` or `describe` true return the shape parameters and a minimal example script.
+
+Do not write probe scripts. Read `bodies`, `bores`, and `sections_mm2` on the template or build result. A passing `photo_part_validate` that was given a spec writes the sheet and, when the last measure step recorded a photo, the overlay, in that same call. Do not re-render just to draw the overlay. `photo_part_render` is for an extra or final render. Every result includes `budget`.
 
 1. Write `spec.json` from the user's numbers before any modelling or measuring: bbox (`x`, `y`, `z`) and the key features (shells, hole count, knuckle count, diameters). Check dimensions. Reject impossible geometry, such as a countersink deeper than the sheet. A single flat photo cannot show thickness or depth. Say which of those are unobserved. Ask the user or mark them assumed. Do not copy an in-plane width into thickness.
 2. `photo_part_measure` only when the photo has a coin or ruler. Keep its JSON. Pass it to render so the coin is excluded. Skip this call when there is no reference.

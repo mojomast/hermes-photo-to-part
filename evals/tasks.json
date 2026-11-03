@@ -123,6 +123,12 @@
       "budget_minutes": 5
     },
     {
+      "id": "thin_l_bracket",
+      "prompt": "A 1.5 mm L-bracket has six through holes: three along X in the upright and three along Z in the foot. hole_count is 6. Do not stop at the genus.",
+      "budget_calls": 40,
+      "budget_minutes": 5
+    },
+    {
       "id": "thread_no_thin_wall",
       "prompt": "An M3 hex_screw and a bottle_cap do not warn on minimum wall. A 0.4 mm plate does. Raw wall is still reported.",
       "budget_calls": 40,
@@ -136,8 +142,8 @@
     },
     {
       "id": "budget_hint",
-      "prompt": "After 14 plugin calls, next_step starts with Budget: deliver the best validated version now.",
-      "budget_calls": 20,
+      "prompt": "Pass calls_used. At 16 of 40 there is no deliver hint. At 24 of 40 next_step starts with Budget: deliver now. At 32 of 40 it also says Stop exploring.",
+      "budget_calls": 40,
       "budget_minutes": 5
     },
     {
@@ -146,18 +152,21 @@
       "budget_calls": 25,
       "budget_minutes": 5,
       "holdout": true,
-      "fixtures": [
-        "washer_photo.jpg",
+      "inputs": [
+        "washer_photo.jpg"
+      ],
+      "answers": [
         "washer_mask.png",
         "fixture.json"
       ]
     },
     {
       "id": "overlay_low_confidence",
-      "prompt": "Render the washer photo with an roi that crops the part out. Confidence is low and overlay_iou is null. Do not change the mesh because of that overlay.",
+      "prompt": "This task is a scripted render with a fixed roi. Confidence is low and overlay_iou is null. next_step names a seed point or a region box. Do not change the mesh because of that overlay.",
       "budget_calls": 40,
       "budget_minutes": 5,
-      "fixtures": [
+      "scripted": true,
+      "answers": [
         "washer_photo.jpg",
         "fixture.json"
       ]

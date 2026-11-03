@@ -195,6 +195,7 @@ class EvalTests(unittest.TestCase):
                 [
                     "2026-11-02T22:00:00 skill_view(\"plugin:photo-to-part:photo-to-printable-part\")",
                     "2026-11-02T22:04:00 photo_part_validate part_v1.stl",
+                    "mention photo_part_validate in prose does not count",
                     "rm part_v1.stl",
                     "`plugin:photo-to-part:photo-to-printable-part` is not a skill name",
                 ]
@@ -202,7 +203,8 @@ class EvalTests(unittest.TestCase):
         )
         self.assertEqual(scored["wrong_skill_ids"], 1)
         self.assertFalse(scored["leak"])
-        self.assertEqual(scored["tool_calls"], 1)
+        self.assertEqual(scored["tool_calls"], 2)
+        self.assertEqual(scored["plugin_calls"], 1)
         self.assertEqual(len(scored["deleted_files"]), 1)
         self.assertAlmostEqual(scored["minutes"], 4.0)
 

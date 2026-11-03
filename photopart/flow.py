@@ -5,6 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 SKILL_ID = "photo-to-part:photo-to-printable-part"
+OVERLAY_LOW_STEP = (
+    "overlay unreliable: pass a seed point (seed=x,y on the part) "
+    "or a region box (roi=x,y,w,h). Do not iterate geometry on it."
+)
 
 _ERROR_STEP = (
     "Read the error, then continue the flow: photo_part_measure, "

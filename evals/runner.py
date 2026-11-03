@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
 import sys
 import tempfile
@@ -26,7 +27,7 @@ import numpy as np
 import trimesh
 from PIL import Image
 
-from photopart.flow import SKILL_ID
+from photopart.flow import OVERLAY_LOW_STEP, SKILL_ID
 from photopart.tools import TOOL_NAMES
 from photopart.heal import run_heal
 from photopart.measure import measure
@@ -42,7 +43,9 @@ REPO = ROOT.parent
 TASKS_PATH = ROOT / "tasks.json"
 _EXPECTED_TOOLS = 6
 _WRONG_SKILL = "plugin:photo-to-part:photo-to-printable-part"
-_TOOL_CALL = re.compile(r"photo_part_(?:validate|render|heal|template|measure|build)")
+_PLUGIN_CALL = re.compile(r"^photo_part_(?:validate|render|heal|template|measure|build)$")
+_STAMP_LINE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:Z)?\s+(\S+)")
+_NAME_ARG = re.compile(r'"name"\s*:\s*"([^"]+)"')
 _DELETE = re.compile(
     r"(?:\brm\b|\bunlink\b|\bos\.remove\b|\bshutil\.rmtree\b).{0,120}?\.(?:stl|3mf)\b",
     re.IGNORECASE,
@@ -222,15 +225,103 @@ def _apply_budget(outcome: dict, spec: dict) -> None:
 
 
 _SKILL_VIEW = re.compile(r"skill_view\(\s*([\"'])(.*?)\1")
-_LEAK = re.compile(r"(?:evals/|runner\.py)")
+_REL_LEAK = re.compile(
+    r"(?<![A-Za-z0-9_])evals/(?:runner\.py|tasks\.json|meshes\.py|photos\.json|fixtures(?:/|$)|__init__\.py|README\.md)"
+)
+_CALL_TOKEN = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
+
+
+def _remember_call(names: list[str], raw) -> None:
+    if not isinstance(raw, str):
+        return
+    token = raw.strip().split("(")[0].strip("`\"'")
+    if _CALL_TOKEN.fullmatch(token) and "_" in token:
+        names.append(token)
+
+
+def _collect_calls(obj, names: list[str]) -> None:
+    """Tool-call records: tool_calls, function_call, or a name plus arguments."""
+    if isinstance(obj, list):
+        for item in obj:
+            _collect_calls(item, names)
+        return
+    if not isinstance(obj, dict):
+        return
+    function = obj.get("function")
+    if isinstance(function, dict):
+        _remember_call(names, function.get("name"))
+    call = obj.get("function_call")
+    if isinstance(call, dict):
+        _remember_call(names, call.get("name"))
+    if "arguments" in obj and not isinstance(function, dict):
+        _remember_call(names, obj.get("name"))
+    for key, value in obj.items():
+        if key in {"function", "function_call"}:
+            continue
+        if isinstance(value, (dict, list)):
+            _collect_calls(value, names)
+
+
+def _call_records(text: str) -> list[str]:
+    """Session records only. A prose mention of a tool name is not a call."""
+    names: list[str] = []
+    used: set[int] = set()
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                obj = json.loads(stripped)
+            except json.JSONDecodeError:
+                obj = None
+            if obj is not None:
+                found: list[str] = []
+                _collect_calls(obj, found)
+                if found:
+                    names.extend(found)
+                    used.add(index)
+                    continue
+        stamp = _STAMP_LINE.match(stripped)
+        if stamp:
+            _remember_call(names, stamp.group(2).split("(")[0])
+            used.add(index)
+    for index, line in enumerate(lines):
+        if index in used or "arguments" not in line or "name" not in line:
+            continue
+        for match in _NAME_ARG.finditer(line):
+            _remember_call(names, match.group(1))
+    return names
+
+
+def _text_leaks(text: str) -> bool:
+    """True when the transcript reads this plugin's eval tree, not a lookalike path."""
+    if _REL_LEAK.search(text):
+        return True
+    folded = text.replace("\\", "/")
+    anchors = (
+        ROOT,
+        ROOT / "runner.py",
+        ROOT / "tasks.json",
+        ROOT / "meshes.py",
+        ROOT / "photos.json",
+        ROOT / "fixtures",
+        ROOT / "__init__.py",
+        ROOT / "README.md",
+    )
+    for path in anchors:
+        if str(path).replace("\\", "/") in folded:
+            return True
+    return False
 
 
 def score_transcript(text: str) -> dict:
-    """Count tool calls, mistaken skill_view ids, deletions, leaks, and minutes.
+    """Count tool-call records, mistaken skill_view ids, deletions, leaks, and minutes.
 
+    ``tool_calls`` counts session records (JSON tool calls and timestamped
+    calls), not mentions in prose. ``plugin_calls`` is the photo_part_* subset.
     ``wrong_skill_ids`` counts only arguments of ``skill_view(...)``. A sentence
     that mentions the plugin: form is not a call. ``leak`` is true when the
-    transcript reads ``evals/`` or ``runner.py``.
+    transcript reads this repo's ``evals/`` files or their absolute paths.
     """
     wrong = 0
     for match in _SKILL_VIEW.finditer(text):
@@ -243,17 +334,40 @@ def score_transcript(text: str) -> dict:
         first = datetime.strptime(stamps[0], "%Y-%m-%dT%H:%M:%S")
         last = datetime.strptime(stamps[-1], "%Y-%m-%dT%H:%M:%S")
         minutes = max(0.0, (last - first).total_seconds() / 60.0)
+    records = _call_records(text)
+    plugin = [name for name in records if _PLUGIN_CALL.fullmatch(name)]
     return {
-        "tool_calls": len(_TOOL_CALL.findall(text)),
+        "tool_calls": len(records),
+        "plugin_calls": len(plugin),
         "wrong_skill_ids": wrong,
         "deleted_files": _DELETE.findall(text),
         "minutes": minutes,
-        "leak": bool(_LEAK.search(text)),
+        "leak": _text_leaks(text),
     }
 
 
+def _answer_name(name: str) -> bool:
+    """Answer files stay with the scorer. The staged directory never receives them."""
+    base = Path(name).name.lower()
+    return base == "fixture.json" or base.startswith("truth") or "mask" in base
+
+
+def _stage_lists(spec: dict) -> tuple[list[str], list[str]]:
+    inputs = [str(name) for name in (spec.get("inputs") or [])]
+    answers = [str(name) for name in (spec.get("answers") or [])]
+    if inputs or answers:
+        return inputs, answers
+    for name in spec.get("fixtures") or []:
+        text = str(name)
+        if _answer_name(text):
+            answers.append(text)
+        else:
+            inputs.append(text)
+    return inputs, answers
+
+
 def stage_task(task_id: str, dest: Path) -> dict:
-    """Copy one task prompt and its fixtures outside the plugin tree."""
+    """Copy one task prompt and its inputs. Answer files stay in the scorer."""
     destination = Path(dest).expanduser().resolve()
     repo = REPO.resolve()
     if destination == repo or repo in destination.parents:
@@ -263,15 +377,30 @@ def stage_task(task_id: str, dest: Path) -> dict:
         raise ValueError(f"unknown task {task_id}")
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "prompt.txt").write_text(str(spec.get("prompt") or "") + "\n", encoding="utf-8")
+    inputs, answers = _stage_lists(spec)
     copied = []
-    for name in spec.get("fixtures") or []:
-        source = ROOT / "fixtures" / name
-        if not source.is_file():
-            raise ValueError(f"fixture not found: {source}")
-        target = destination / name
-        target.write_bytes(source.read_bytes())
-        copied.append(name)
-    return {"ok": True, "task": task_id, "dir": str(destination), "fixtures": copied, "leak": False}
+    withheld = list(answers)
+    if not spec.get("scripted"):
+        for name in inputs:
+            if _answer_name(name):
+                withheld.append(name)
+                continue
+            source = ROOT / "fixtures" / name
+            if not source.is_file():
+                raise ValueError(f"fixture not found: {source}")
+            target = destination / name
+            target.write_bytes(source.read_bytes())
+            copied.append(name)
+    return {
+        "ok": True,
+        "task": task_id,
+        "dir": str(destination),
+        "fixtures": copied,
+        "inputs": copied,
+        "answers_withheld": withheld,
+        "scripted": bool(spec.get("scripted")),
+        "leak": False,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -325,6 +454,7 @@ def _checks() -> list[tuple[str, object]]:
         ("best_version_filled", _best_version_filled),
         ("checklist_bool_answered", _checklist_bool),
         ("bores_not_genus", _bores_not_genus),
+        ("thin_l_bracket", _thin_l_bracket),
         ("thread_no_thin_wall", _thread_wall),
         ("validate_renders_on_pass", _validate_renders),
         ("budget_hint", _budget_hint),
@@ -849,6 +979,38 @@ def _bores_not_genus() -> dict:
         }
 
 
+def _thin_l_bracket() -> dict:
+    """1.5 mm L with three holes in each leg. Whole-part stations miss both legs."""
+    from evals.meshes import thin_l_bracket
+
+    mesh = thin_l_bracket()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "thin_l_v1.stl"
+        mesh.export(path)
+        code, report = run_validate(str(path), spec={"hole_count": 6, "shells": 1})
+    row = next(item for item in report.get("spec") or [] if item.get("name") == "hole_count")
+    bores = row.get("bores") or []
+    axes: dict[str, int] = {}
+    for bore in bores:
+        axis = str(bore.get("axis"))
+        axes[axis] = axes.get(axis, 0) + 1
+    passed = (
+        code == 0
+        and report.get("ok") is True
+        and row.get("actual") == 6
+        and axes.get("x") == 3
+        and axes.get("z") == 3
+        and all(bore.get("through") is True for bore in bores)
+    )
+    return {
+        "passed": passed,
+        "tool_calls": 1,
+        "wrong_skill_ids": _skill_misses(report),
+        "deleted_files": [],
+        "detail": None if passed else {"row": row, "axes": axes},
+    }
+
+
 def _thread_wall() -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -915,28 +1077,46 @@ def _validate_renders() -> dict:
 def _budget_hint() -> dict:
     from photopart.tools import measure_tool
 
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        image = root / "photo.png"
-        Image.new("RGB", (32, 32), (255, 255, 255)).save(image)
-        last = {}
-        for _index in range(14):
-            last = json.loads(
-                measure_tool({"image": str(image), "diameter_mm": 20, "diameter_px": 80})
+    saved = os.environ.pop("PHOTO_PART_MAX_CALLS", None)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = root / "photo.png"
+            Image.new("RGB", (32, 32), (255, 255, 255)).save(image)
+            payload = {"image": str(image), "diameter_mm": 20, "diameter_px": 80}
+            quiet = json.loads(measure_tool({**payload, "calls_used": 16}))
+            mid = json.loads(measure_tool({**payload, "calls_used": 24}))
+            late = json.loads(measure_tool({**payload, "calls_used": 32}))
+            quiet_budget = quiet.get("budget") or {}
+            mid_budget = mid.get("budget") or {}
+            late_budget = late.get("budget") or {}
+            passed = (
+                int(quiet_budget.get("max_calls") or 0) == 40
+                and int(quiet_budget.get("remaining") or 0) == 24
+                and not str(quiet.get("next_step") or "").startswith("Budget:")
+                and str(mid.get("next_step") or "").startswith("Budget: deliver now.")
+                and int(mid_budget.get("remaining") or 0) == 16
+                and str(late.get("next_step") or "").startswith("Budget: deliver now.")
+                and "Stop exploring." in str(late.get("next_step") or "")
+                and int(late_budget.get("remaining") or 0) <= 8
             )
-        budget = last.get("budget") or {}
-        passed = (
-            int(budget.get("plugin_calls") or 0) >= 14
-            and int(budget.get("soft_limit") or 0) == 20
-            and str(last.get("next_step") or "").startswith("Budget: deliver the best validated version now")
-        )
-        return {
-            "passed": passed,
-            "tool_calls": 14,
-            "wrong_skill_ids": _skill_misses(last),
-            "deleted_files": [],
-            "detail": None if passed else last.get("next_step"),
-        }
+            return {
+                "passed": passed,
+                "tool_calls": 3,
+                "wrong_skill_ids": _skill_misses(quiet, mid, late),
+                "deleted_files": [],
+                "detail": None
+                if passed
+                else {
+                    "quiet": quiet.get("next_step"),
+                    "mid": mid.get("next_step"),
+                    "late": late.get("next_step"),
+                    "budgets": [quiet_budget, mid_budget, late_budget],
+                },
+            }
+    finally:
+        if saved is not None:
+            os.environ["PHOTO_PART_MAX_CALLS"] = saved
 
 
 def _angle_distance(found: float, target: float) -> float:
@@ -1070,7 +1250,7 @@ def _overlay_low() -> dict:
             alignment.get("confidence") == "low"
             and manifest.get("overlay_iou") is None
             and alignment.get("iou") is None
-            and "overlay unreliable: pass roi= or a seed; do not iterate geometry on it" in str(manifest.get("next_step"))
+            and OVERLAY_LOW_STEP in str(manifest.get("next_step"))
         )
         return {
             "passed": passed,

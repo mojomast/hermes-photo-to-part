@@ -1,0 +1,6 @@
+prune evals
+prune tests
+recursive-exclude evals *
+recursive-exclude tests *
+global-exclude __pycache__
+global-exclude *.py[cod]

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.9 — 2026-11-03
+
+- The tool budget is the whole Hermes session, default 40 calls (`PHOTO_PART_MAX_CALLS`). Pass `calls_used`. When it is omitted, `remaining` is estimated high. `next_step` starts with `Budget: deliver now.` at about 60% and again at about 80%, and adds `Stop exploring.` at 80%.
+- `photo_part_template` and `photo_part_build` take `help` or `describe` and return shape parameters and a minimal example script. Do not open `features.py`, `parts.py`, or `launcher.py`.
+- `evals/` and `tests/` are excluded from the Python package. A Hermes git install still copies them onto disk; the skill says not to read them.
+- Bore counting slices every planar leg on all three axes and ray-casts through-holes. A 1.5 mm six-hole L-bracket counts as six through holes. When no circular bore is found but genus is positive or unreliable, `hole_count` is `undetected` and does not fail the check.
+- Eval staging copies the prompt and inputs only. `fixture.json` and truth masks stay with the scorer. Leak detection is anchored to this repo's `evals/` paths. Transcript tool counts come from session records. The low-confidence overlay task is a scripted render.
+- A passing validate that was given a spec draws the photo overlay from the last measure step (photo, scale, and region) in the same call.
+- `last_measure.json` is written in the project or output directory, scoped by project, and is not written into the plugin install directory.
+- A low-confidence overlay tells the agent to pass a seed point or a region box.
+- Tool descriptions lead with the skill id `photo-to-part:photo-to-printable-part`. `plugin:photo-to-part:photo-to-printable-part` is not a skill name.
+
 ## 0.1.8 — 2026-11-02
 
 - Template output defaults to `<shape>_v1.stl`, or the `part` slug from spec.json. `plate_clip.stl` is unchanged. The placeholder `name_v1.stl` is not written.

@@ -1,4 +1,4 @@
-"""Meshes shared by the v0.1.8 checks and the fixture generator.
+"""Meshes shared by the v0.1.9 checks and the fixture generator.
 
 These are built here, not taken from the hinge template. The template hinge
 bridges intrude into the bore, so that bore is not a circle and its genus is
@@ -10,6 +10,21 @@ from __future__ import annotations
 import manifold3d
 
 from photopart.parts import _as_mesh, _cube, _cylinder_x, _cylinder_z, _difference, _union_many
+
+
+def thin_l_bracket():
+    """1.5 mm L-bracket with six Ø5 holes through the legs.
+
+    Three holes pass through the horizontal leg along Z and three through the
+    vertical leg along X. Stations at 25/50/75 percent of the whole part miss
+    both legs, which is the T7 failure.
+    """
+    length, width, height, thickness = 80.0, 24.0, 60.0, 1.5
+    horiz = _cube(length, width, thickness)
+    vert = _cube(thickness, width, height)
+    holes = [_cylinder_z(2.5, thickness + 0.8, x, width / 2.0, -0.4) for x in (30.0, 50.0, 68.0)]
+    holes.extend(_cylinder_x(2.5, thickness + 0.8, -0.4, width / 2.0, z) for z in (16.0, 32.0, 48.0))
+    return _as_mesh(_difference(_union_many([horiz, vert]), holes))
 
 
 def six_hole_bracket():

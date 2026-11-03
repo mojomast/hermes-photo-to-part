@@ -17,7 +17,7 @@ import numpy as np
 import trimesh
 from PIL import Image, ImageDraw, ImageFont
 
-from photopart.flow import attach_flow, failed, step_render
+from photopart.flow import OVERLAY_LOW_STEP, attach_flow, failed, step_render
 from photopart.io import DEFAULT_MAX_BYTES, load_mesh, resolve_file
 from photopart.paths import absolute_path
 from photopart.stamp import stamp_status
@@ -807,16 +807,23 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         if args.photo:
             photo = resolve_file(args.photo, max_bytes=args.max_bytes, label="photo")
         origin = None if args.overlay_origin is None else _parse_origin(args.overlay_origin)
-        if args.photo and (args.photo_scale is None or args.roi is None):
+        if args.photo and (args.photo_scale is None or args.roi is None or args.seed is None):
             from photopart.measure import load_last_measure
+            from photopart.paths import plugin_root
 
             photo_path = Path(args.photo).expanduser()
-            hint = load_last_measure(photo_path.resolve().parent, out_dir, Path.cwd())
+            root = plugin_root()
+            candidates = [photo_path.resolve().parent, out_dir, Path.cwd()]
+            if root is not None:
+                candidates = [item for item in candidates if Path(item).expanduser().resolve() != root]
+            hint = load_last_measure(*candidates)
             if hint:
                 if args.photo_scale is None and hint.get("px_per_mm"):
                     args.photo_scale = float(hint["px_per_mm"])
                 if args.roi is None and hint.get("roi"):
                     args.roi = _roi_text(hint["roi"])
+                if args.seed is None and hint.get("seed"):
+                    args.seed = _pair_text(hint["seed"])
         roi = None if args.roi is None else _parse_rect(args.roi)
         seed = None if args.seed is None else _parse_pair(args.seed, "--seed")
         exclude = [_parse_rect(item) for item in args.exclude_roi]
@@ -872,9 +879,17 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     )
     alignment = manifest.get("alignment") or {}
     if isinstance(alignment, dict) and alignment.get("confidence") == "low":
-        step = "overlay unreliable: pass roi= or a seed; do not iterate geometry on it"
+        step = OVERLAY_LOW_STEP
     attach_flow(manifest, step)
     return 0, manifest
+
+
+def _pair_text(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return f"{float(value['x'])},{float(value['y'])}"
+    return f"{float(value[0])},{float(value[1])}"
 
 
 def _roi_text(value) -> str:
