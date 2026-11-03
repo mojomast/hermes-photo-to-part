@@ -1,6 +1,9 @@
 # Evals
 
-Twenty-six tasks from the photo-to-part test rounds. Inputs are synthetic meshes and one self-made CC0 washer photo in `fixtures/`. `photos.json` names openly licensed photos for an optional Hermes session. Those files are not downloaded and their bytes are not in this repo.
+Twenty-eight tasks from the photo-to-part test rounds. Inputs are synthetic meshes and one self-made CC0 washer photo in `fixtures/`. `photos.json` names openly licensed photos for an optional Hermes session. Those files are not downloaded and their bytes are not in this repo. `coin_scale_sealed` renders three synthetic coins in-process (US quarter 24.26 mm, CAD loonie 26.5 mm, €1 23.25 mm). It is a stand-in: real caliper photos are not in this repo. Pass is the part box within ±5%, or ±8% when the peg is tilted about 20°.
+
+Eval marker p2p-canary-7f3a9c2e-6b14-4d88-a1e0-9c5d2f8b4a17
+
 
 `worse_version_reverts`, `frozen_edit_needs_reason`, and `real_photo_overlay` are held out of `results` unless `--include-holdout`. They still run, and a failure fails the suite. `--stage DIR --task ID` copies that task's prompt and its `inputs` to a directory outside this repo. Answer files (`fixture.json`, truth masks, and anything listed under `answers`) stay here for the scorer. `overlay_low_confidence` is `scripted`, so staging writes the prompt only. A transcript leaks when it reads this repo's `evals/` files (`tasks.json`, `runner.py`, `fixtures/`, and the other eval modules) or their absolute paths. A lookalike directory such as `hevals/` does not count. `tool_calls` counts session records, not prose mentions. `wrong_skill_ids` counts only `skill_view` arguments.
 

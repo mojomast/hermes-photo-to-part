@@ -78,7 +78,9 @@ def internal_thread(
     )
     cutter = cutter.translate((0.0, 0.0, -step))
     outer_body = _cylinder(length, outer / 2.0, segments=48)
-    return _as_one(_difference(outer_body, [cutter]))
+    mesh = _as_one(_difference(outer_body, [cutter]))
+    _tag_thread_crest(mesh, nominal, step, z_max=length + step, internal=True)
+    return mesh
 
 
 def knurl(
@@ -949,6 +951,25 @@ def _tag_thread_crest(mesh: trimesh.Trimesh, diameter: float, pitch: float, *, z
         band = radius > max(0.2, major - tooth * 1.05)
     mask = band & (centers[:, 2] < z_max) & (centers[:, 2] > -0.5)
     _store_tags(mesh, thread=np.flatnonzero(mask))
+    if internal:
+        r_min = max(0.15, major - tooth * 1.05)
+        r_max = major + tooth * 0.35
+    else:
+        r_min = max(0.2, major - tooth * 1.05)
+        r_max = major + tooth * 0.25
+    _remember_region(
+        mesh,
+        {
+            "kind": "thread",
+            "axis": [0.0, 0.0, 1.0],
+            "origin": [0.0, 0.0, 0.0],
+            "r_min": float(r_min),
+            "r_max": float(r_max),
+            "z0": -0.5,
+            "z1": float(z_max),
+            "pitch": float(pitch),
+        },
+    )
 
 
 def _tag_knurl(mesh: trimesh.Trimesh, core_radius: float) -> None:
@@ -957,6 +978,20 @@ def _tag_knurl(mesh: trimesh.Trimesh, core_radius: float) -> None:
     # Ribs stand off the core. Keep the core wall as a ray source and drop the tips.
     mask = radius > float(core_radius) * 0.88
     _store_tags(mesh, knurl=np.flatnonzero(mask))
+    bounds = np.asarray(mesh.bounds, dtype=float)
+    _remember_region(
+        mesh,
+        {
+            "kind": "knurl",
+            "axis": [0.0, 0.0, 1.0],
+            "origin": [0.0, 0.0, 0.0],
+            "r_min": float(core_radius) * 0.88,
+            "r_max": float(radius.max()) + 0.05 if radius.size else float(core_radius) * 1.3,
+            "z0": float(bounds[0, 2]) - 0.05,
+            "z1": float(bounds[1, 2]) + 0.05,
+            "pitch": None,
+        },
+    )
 
 
 def _tag_teeth(mesh: trimesh.Trimesh, root_radius: float) -> None:
@@ -964,16 +999,33 @@ def _tag_teeth(mesh: trimesh.Trimesh, root_radius: float) -> None:
     radius = np.hypot(centers[:, 0], centers[:, 1])
     mask = radius > float(root_radius) * 1.02
     _store_tags(mesh, teeth=np.flatnonzero(mask))
+    bounds = np.asarray(mesh.bounds, dtype=float)
+    _remember_region(
+        mesh,
+        {
+            "kind": "teeth",
+            "axis": [0.0, 0.0, 1.0],
+            "origin": [0.0, 0.0, 0.0],
+            "r_min": float(root_radius) * 1.02,
+            "r_max": float(radius.max()) + 0.05 if radius.size else float(root_radius) * 1.4,
+            "z0": float(bounds[0, 2]) - 0.05,
+            "z1": float(bounds[1, 2]) + 0.05,
+            "pitch": None,
+        },
+    )
 
 
 def tag_faces(mesh: trimesh.Trimesh, *, thread=None, knurl=None, teeth=None, path=None) -> dict:
     """Mark faces the wall check should skip, and write ``<path>.faces.json``.
 
-    ``thread``, ``knurl``, and ``teeth`` are face indices into ``mesh.faces``.
-    Omit a kind to leave tags already stored on the mesh. STL export drops
-    metadata, so pass ``path`` or export to a filesystem path after importing
-    this module. The export hook writes the sidecar for helpers such as
-    ``external_thread`` and ``knurl``, which tag their own faces.
+    Call this after the final boolean. ``thread``, ``knurl``, and ``teeth``
+    are face indices into ``mesh.faces``. Omit a kind to leave tags already
+    stored on the mesh. Helpers also store a geometric region (axis, origin,
+    radius range, z range, pitch) on ``mesh.metadata["feature_regions"]`` so
+    the wall check can find the feature again after a union renumbers faces.
+    STL export drops metadata, so pass ``path`` or export to a filesystem
+    path after importing this module. The export hook writes the sidecar,
+    including those regions.
     """
     kinds = {}
     if thread is not None:
@@ -992,14 +1044,20 @@ def tag_faces(mesh: trimesh.Trimesh, *, thread=None, knurl=None, teeth=None, pat
 
 
 def write_face_tags(mesh: trimesh.Trimesh, stl_path) -> None:
-    """Store thread, knurl, and tooth face indices beside an STL. STL itself drops them."""
-    tags = mesh.metadata.get("face_tags") if isinstance(getattr(mesh, "metadata", None), dict) else None
-    if not isinstance(tags, dict):
-        return
+    """Store face indices and geometric regions beside an STL. STL itself drops them."""
+    meta = mesh.metadata if isinstance(getattr(mesh, "metadata", None), dict) else {}
+    tags = meta.get("face_tags")
     payload = {}
-    for key in ("thread", "knurl", "teeth"):
-        payload[key] = [int(item) for item in (tags.get(key) or [])]
-    if not any(payload.values()):
+    if isinstance(tags, dict):
+        for key in ("thread", "knurl", "teeth"):
+            payload[key] = [int(item) for item in (tags.get(key) or [])]
+    else:
+        for key in ("thread", "knurl", "teeth"):
+            payload[key] = []
+    regions = meta.get("feature_regions")
+    if isinstance(regions, list) and regions:
+        payload["regions"] = regions
+    if not any(payload.get(key) for key in ("thread", "knurl", "teeth")) and not payload.get("regions"):
         return
     path = Path(str(stl_path) + ".faces.json")
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1015,10 +1073,13 @@ def load_face_tags(stl_path) -> dict | None:
         return None
     if not isinstance(loaded, dict):
         return None
-    return {
+    found = {
         key: [int(item) for item in (loaded.get(key) or [])]
         for key in ("thread", "knurl", "teeth")
     }
+    regions = loaded.get("regions")
+    found["regions"] = list(regions) if isinstance(regions, list) else []
+    return found
 
 
 def _install_tag_export() -> None:
@@ -1038,6 +1099,14 @@ def _install_tag_export() -> None:
 
     export._p2p_wrapped = True
     trimesh.Trimesh.export = export
+
+
+def _remember_region(mesh: trimesh.Trimesh, region: dict) -> None:
+    """Append one geometric feature. A later boolean drops this; the sidecar keeps a copy."""
+    existing = mesh.metadata.get("feature_regions") if isinstance(mesh.metadata, dict) else None
+    regions = list(existing) if isinstance(existing, list) else []
+    regions.append(region)
+    mesh.metadata["feature_regions"] = regions
 
 
 def _store_tags(mesh: trimesh.Trimesh, **kinds) -> None:

@@ -1,5 +1,8 @@
 """Meshes shared by the v0.1.9 checks and the fixture generator.
 
+Eval marker p2p-canary-7f3a9c2e-6b14-4d88-a1e0-9c5d2f8b4a17
+
+
 These are built here, not taken from the hinge template. The template hinge
 bridges intrude into the bore, so that bore is not a circle and its genus is
 not 4.

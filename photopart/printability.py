@@ -35,8 +35,18 @@ def check_printability(
     ``min_wall_raw_mm`` is the old single-ray minimum, including those crests.
     """
     warnings: list[str] = []
+    info: list[str] = []
     raw = _min_wall(mesh, samples)
-    p5, thin_fraction = _sdf_wall(mesh, samples, min_wall_mm, _excluded_sources(mesh, face_tags))
+    excluded = _excluded_sources(mesh, face_tags)
+    auto_regions: list[dict] = []
+    if not excluded and raw is not None and raw < min_wall_mm:
+        try:
+            auto_regions = detect_periodic_regions(mesh)
+        except Exception:
+            auto_regions = []
+        if auto_regions:
+            excluded = _faces_in_regions(mesh, auto_regions)
+    p5, thin_fraction = _sdf_wall(mesh, samples, min_wall_mm, excluded)
     wall = p5 if p5 is not None else raw
     overhang_area, overhang_fraction, bed_area = _faces(mesh, overhang_deg)
     gap = _min_gap(mesh, samples)
@@ -65,6 +75,10 @@ def check_printability(
             f"gap between bodies {gap:.3f} mm is under {min_gap_mm:g} mm per side. "
             "Open the clearance before a print-in-place part."
         )
+    auto_feature = _auto_feature_label(auto_regions)
+    wall_warned = any("wall" in item or "thin area" in item for item in warnings)
+    if auto_feature and raw is not None and raw < min_wall_mm and not wall_warned:
+        info.append(f"auto_feature: {auto_feature}; min_wall_raw_mm={raw:.3f}")
     return {
         "min_wall_mm": None if wall is None else round(wall, 4),
         "min_wall_p5_mm": None if p5 is None else round(p5, 4),
@@ -82,10 +96,46 @@ def check_printability(
             "min_gap_mm": min_gap_mm,
         },
         "warnings": warnings,
+        "info": info,
+        "auto_feature": auto_feature,
+        "regions": auto_regions,
     }
 
 
+def _auto_feature_label(regions: list[dict]) -> str | None:
+    for region in regions:
+        if not isinstance(region, dict):
+            continue
+        if region.get("kind") == "thread" and region.get("pitch"):
+            return f"thread pitch={float(region['pitch']):.2f}"
+        if region.get("kind") == "knurl":
+            periods = region.get("periods")
+            if periods:
+                return f"knurl periods={int(periods)}"
+            return "knurl"
+    return None
+
+
 def _excluded_sources(mesh: trimesh.Trimesh, face_tags: dict | None) -> set[int]:
+    """Skip thread, knurl, and tooth faces. Regions are re-resolved; indices are the fallback."""
+    regions = _regions_of(mesh, face_tags)
+    if regions:
+        geometric = _faces_in_regions(mesh, regions)
+        if geometric:
+            return geometric
+    return _index_sources(mesh, face_tags)
+
+
+def _regions_of(mesh: trimesh.Trimesh, face_tags: dict | None) -> list:
+    if isinstance(face_tags, dict) and isinstance(face_tags.get("regions"), list) and face_tags["regions"]:
+        return list(face_tags["regions"])
+    meta = getattr(mesh, "metadata", None)
+    if isinstance(meta, dict) and isinstance(meta.get("feature_regions"), list):
+        return list(meta["feature_regions"])
+    return []
+
+
+def _index_sources(mesh: trimesh.Trimesh, face_tags: dict | None) -> set[int]:
     tags = face_tags
     if tags is None:
         meta = getattr(mesh, "metadata", None)
@@ -93,13 +143,52 @@ def _excluded_sources(mesh: trimesh.Trimesh, face_tags: dict | None) -> set[int]
             tags = meta.get("face_tags")
     if not isinstance(tags, dict):
         return set()
+    limit = len(mesh.faces)
     found: set[int] = set()
     for key in ("thread", "knurl", "teeth"):
         for item in tags.get(key) or []:
             try:
-                found.add(int(item))
+                slot = int(item)
             except (TypeError, ValueError):
                 continue
+            if 0 <= slot < limit:
+                found.add(slot)
+    return found
+
+
+def _faces_in_regions(mesh: trimesh.Trimesh, regions: list, eps: float = 0.15) -> set[int]:
+    """Faces whose centroid sits in a feature cylinder and whose normal is radial."""
+    if len(mesh.faces) == 0 or not regions:
+        return set()
+    centers = np.asarray(mesh.triangles_center, dtype=float)
+    normals = np.asarray(mesh.face_normals, dtype=float)
+    found: set[int] = set()
+    for region in regions:
+        if not isinstance(region, dict):
+            continue
+        axis = np.asarray(region.get("axis") or [0.0, 0.0, 1.0], dtype=float)
+        norm = float(np.linalg.norm(axis))
+        if norm < 1e-8:
+            continue
+        axis = axis / norm
+        origin = np.asarray(region.get("origin") or [0.0, 0.0, 0.0], dtype=float)
+        relative = centers - origin
+        height = relative @ axis
+        radial_vec = relative - height[:, None] * axis
+        radius = np.linalg.norm(radial_vec, axis=1)
+        radial_dir = np.zeros_like(radial_vec)
+        usable = radius > 1e-6
+        radial_dir[usable] = radial_vec[usable] / radius[usable, None]
+        radial_n = np.abs(np.einsum("ij,ij->i", normals, radial_dir))
+        try:
+            r_min = float(region.get("r_min")) - eps
+            r_max = float(region.get("r_max")) + eps
+            z0 = float(region.get("z0")) - eps
+            z1 = float(region.get("z1")) + eps
+        except (TypeError, ValueError):
+            continue
+        mask = (radius >= r_min) & (radius <= r_max) & (height >= z0) & (height <= z1) & (radial_n > 0.3)
+        found.update(int(slot) for slot in np.flatnonzero(mask))
     return found
 
 
@@ -298,3 +387,231 @@ def _distance_to_triangles(points: np.ndarray, triangles: np.ndarray) -> float |
     if not np.isfinite(best):
         return None
     return float(best)
+
+
+def detect_periodic_regions(mesh: trimesh.Trimesh) -> list[dict]:
+    """Find a thread or knurl from radius samples when face tags were lost.
+
+    A thread is a radius that repeats along z with a pitch in 0.35–3 mm and
+    shifts phase with angle. A knurl repeats around the axis at least 12
+    times. The crest-to-core step on the M3 helper is about 0.16 mm, so the
+    gate is a peak-to-peak change above 0.12 mm (an ISO M3 coarse tooth is
+    under the 0.2 mm figure measured on a sharp external crest).
+    """
+    if mesh is None or len(getattr(mesh, "faces", [])) < 16:
+        return []
+    found: list[dict] = []
+    for axis in _axis_order(mesh):
+        region = _thread_on_axis(mesh, axis)
+        if region is not None:
+            found.append(region)
+            break
+    if found:
+        return found
+    knurl = _knurl_on_axis(mesh)
+    if knurl is not None:
+        return [knurl]
+    return []
+
+
+def _axis_order(mesh: trimesh.Trimesh) -> list[int]:
+    extents = np.asarray(mesh.extents, dtype=float)
+    return [int(slot) for slot in np.argsort(-extents)]
+
+
+def _sample_axis(mesh: trimesh.Trimesh, axis: int, *, nz: int = 72, nt: int = 24, inset: float = 0.12):
+    bounds = np.asarray(mesh.bounds, dtype=float)
+    lo = float(bounds[0, axis])
+    hi = float(bounds[1, axis])
+    span = hi - lo
+    if span < 2.0:
+        return None
+    zs = np.linspace(lo + 0.04 * span, hi - 0.04 * span, nz)
+    mid = (bounds[0] + bounds[1]) / 2.0
+    eye = np.eye(3)
+    origins = []
+    directions = []
+    for z_value in zs:
+        center = mid.copy()
+        center[axis] = float(z_value)
+        for step in range(nt):
+            theta = 2.0 * math.pi * step / nt
+            radial = math.cos(theta) * eye[(axis + 1) % 3] + math.sin(theta) * eye[(axis + 2) % 3]
+            origins.append(center + inset * radial)
+            directions.append(radial)
+    origins_arr = np.asarray(origins, dtype=float)
+    directions_arr = np.asarray(directions, dtype=float)
+    try:
+        locations, index, _tri = mesh.ray.intersects_location(
+            origins_arr, directions_arr, multiple_hits=False
+        )
+    except Exception:
+        return None
+    radius = np.full(len(origins_arr), np.nan)
+    if len(index):
+        radius[index] = np.linalg.norm(locations - origins_arr[index], axis=1) + inset
+    return radius.reshape(len(zs), nt), zs, mid
+
+
+def _fill_column(column: np.ndarray):
+    good = np.flatnonzero(np.isfinite(column))
+    if len(good) < max(8, len(column) // 4):
+        return None
+    return np.interp(np.arange(len(column)), good, column[good])
+
+
+def _best_period(filled: np.ndarray, dz: float):
+    centered = filled - float(np.mean(filled))
+    spectrum = np.abs(np.fft.rfft(centered))
+    freqs = np.fft.rfftfreq(len(filled), d=dz)
+    candidates = []
+    for slot, (freq, amplitude) in enumerate(zip(freqs, spectrum)):
+        if freq <= 0:
+            continue
+        period = 1.0 / float(freq)
+        if 0.35 <= period <= 3.0:
+            candidates.append((float(amplitude), period, slot))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    top = candidates[0]
+    second = 0.0
+    for amplitude, _period, slot in candidates[1:]:
+        if abs(slot - top[2]) > 1:
+            second = amplitude
+            break
+    return top[0], top[1], float(filled.max() - filled.min()), second
+
+
+def _thread_on_axis(mesh: trimesh.Trimesh, axis: int) -> dict | None:
+    sampled = _sample_axis(mesh, axis)
+    if sampled is None:
+        return None
+    grid, zs, mid = sampled
+    dz = float(zs[1] - zs[0])
+    with np.errstate(all="ignore"):
+        median = np.nanmedian(grid, axis=1)
+    runs: list[tuple[int, int]] = []
+    start = None
+    anchor = None
+    series = list(median) + [np.nan]
+    for index, value in enumerate(series):
+        finite = np.isfinite(value)
+        if not finite or (anchor is not None and abs(float(value) - float(anchor)) > 0.35):
+            if start is not None and index - 1 - start >= 12:
+                runs.append((start, index - 1))
+            start = index if finite else None
+            anchor = float(value) if finite else None
+            continue
+        if start is None:
+            start = index
+            anchor = float(value)
+    best = None
+    for begin, end in runs:
+        window = grid[begin : end + 1]
+        votes = []
+        for column in range(grid.shape[1]):
+            filled = _fill_column(window[:, column])
+            if filled is None:
+                continue
+            result = _best_period(filled, dz)
+            if result and 0.12 <= result[2] <= 1.3 and result[0] >= 1.15 * max(result[3], 1e-9):
+                votes.append(result)
+        if len(votes) < grid.shape[1] * 0.45:
+            continue
+        pitch = float(np.median([item[1] for item in votes]))
+        agree = sum(1 for item in votes if abs(item[1] - pitch) <= max(0.08, 0.18 * pitch))
+        if agree < len(votes) * 0.6:
+            continue
+        base = _fill_column(window[:, 0])
+        if base is None:
+            continue
+        ok = 0
+        checked = 0
+        for column in range(0, grid.shape[1], 2):
+            filled = _fill_column(window[:, column])
+            if filled is None:
+                continue
+            checked += 1
+            theta = 2.0 * math.pi * column / grid.shape[1]
+            shift = int(round((pitch * theta / (2.0 * math.pi)) / dz))
+            rolled = np.roll(base, shift)
+            if float(np.std(rolled)) < 1e-6 or float(np.std(filled)) < 1e-6:
+                continue
+            corr = float(np.corrcoef(rolled, filled)[0, 1])
+            if np.isfinite(corr) and corr > 0.4:
+                ok += 1
+        if checked == 0 or ok < checked * 0.5:
+            continue
+        with np.errstate(all="ignore"):
+            r_low = float(np.nanpercentile(window, 5))
+            r_high = float(np.nanmax(window))
+        if not np.isfinite(r_low) or not np.isfinite(r_high):
+            continue
+        axis_vec = [0.0, 0.0, 0.0]
+        axis_vec[axis] = 1.0
+        origin_axis = float(mid[axis])
+        region = {
+            "kind": "thread",
+            "axis": axis_vec,
+            "origin": [float(item) for item in mid],
+            "r_min": r_low - 0.15,
+            "r_max": r_high + 0.15,
+            "z0": float(zs[begin]) - 0.3 - origin_axis,
+            "z1": float(zs[end]) + 0.3 - origin_axis,
+            "pitch": round(pitch, 3),
+        }
+        span = region["z1"] - region["z0"]
+        if best is None or span > best["z1"] - best["z0"]:
+            best = region
+    return best
+
+
+def _knurl_on_axis(mesh: trimesh.Trimesh) -> dict | None:
+    axis = _axis_order(mesh)[0]
+    sampled = _sample_axis(mesh, axis, nz=12, nt=72, inset=0.2)
+    if sampled is None:
+        return None
+    grid, zs, mid = sampled
+    finite_rows = [row for row in grid if np.isfinite(row).sum() > grid.shape[1] * 0.6]
+    if not finite_rows:
+        return None
+    best_cycles = 0
+    best_amp = 0.0
+    for row in finite_rows:
+        filled = _fill_column(row)
+        if filled is None:
+            continue
+        p2p = float(filled.max() - filled.min())
+        if p2p < 0.2:
+            continue
+        spectrum = np.abs(np.fft.rfft(filled - float(np.mean(filled))))
+        if len(spectrum) < 13:
+            continue
+        cycles = int(np.argmax(spectrum[1:]) + 1)
+        amplitude = float(spectrum[cycles])
+        low = float(spectrum[1:12].max()) if len(spectrum) > 12 else 0.0
+        if cycles >= 12 and amplitude > max(low * 1.5, 1e-6) and amplitude > best_amp:
+            best_cycles = cycles
+            best_amp = amplitude
+    if best_cycles < 12:
+        return None
+    with np.errstate(all="ignore"):
+        r_low = float(np.nanpercentile(grid, 20))
+        r_high = float(np.nanmax(grid))
+    if not np.isfinite(r_low) or not np.isfinite(r_high):
+        return None
+    axis_vec = [0.0, 0.0, 0.0]
+    axis_vec[axis] = 1.0
+    origin_axis = float(mid[axis])
+    return {
+        "kind": "knurl",
+        "axis": axis_vec,
+        "origin": [float(item) for item in mid],
+        "r_min": max(0.0, r_low - 0.1),
+        "r_max": r_high + 0.15,
+        "z0": float(zs[0]) - origin_axis,
+        "z1": float(zs[-1]) - origin_axis,
+        "pitch": None,
+        "periods": int(best_cycles),
+    }

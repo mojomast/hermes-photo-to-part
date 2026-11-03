@@ -62,7 +62,7 @@ def attach_budget(payload: dict, tool_name: str, calls_used=None, session_id=Non
     plugin_calls = int(state["plugin_calls"])
     if session_id is None:
         session_id = session_id_var.get()
-    used, source = _resolve_used(plugin_calls, calls_used, cap, session_id)
+    used, source = _resolve_used(plugin_calls, calls_used, cap, session_id, directory)
     remaining = max(0, cap - used)
     phase = _PHASE.get(tool_name, "build")
     payload["budget"] = {
@@ -112,7 +112,7 @@ def consumption(payload: dict, calls_used=None, session_id=None) -> dict:
     cap = max_calls()
     if session_id is None:
         session_id = session_id_var.get()
-    used, source = _resolve_used(plugin_calls, calls_used, cap, session_id)
+    used, source = _resolve_used(plugin_calls, calls_used, cap, session_id, directory)
     return {
         "max_calls": cap,
         "calls_used": used,
@@ -130,11 +130,19 @@ def past_soft_wall(info: dict) -> bool:
     return float(info.get("calls_used") or 0) / float(cap) >= 0.80 - 1e-9
 
 
-def _resolve_used(plugin_calls: int, provided, cap: int, session_id=None) -> tuple[int, str]:
-    """The larger of the session record, ``calls_used``, and this plugin's counter.
+def _resolve_used(
+    plugin_calls: int,
+    provided,
+    cap: int,
+    session_id=None,
+    directory: Path | None = None,
+) -> tuple[int, str]:
+    """The larger of the session record, ``calls_used``, the hook count, and this plugin's counter.
 
     A session count is not capped, so a run of 47 calls is reported as 47.
-    The estimate used when both are missing stays capped.
+    The estimate used when session, argument, and hook counts are all missing
+    stays capped. The hook count is every tool call seen by ``post_tool_call``
+    in a session that has used this plugin.
     """
     session_count = None
     if session_id:
@@ -149,22 +157,27 @@ def _resolve_used(plugin_calls: int, provided, cap: int, session_id=None) -> tup
             argument = None
         if argument is not None and argument < 0:
             argument = 0
-    if session_count is not None or argument is not None:
-        parts = [plugin_calls]
-        if session_count is not None:
-            parts.append(int(session_count))
-        if argument is not None:
-            parts.append(argument)
-        used = max(parts)
-        if session_count is not None and int(session_count) >= (argument if argument is not None else -1) and int(session_count) >= plugin_calls:
-            return used, "session"
-        if argument is not None and argument >= plugin_calls and (session_count is None or argument >= int(session_count)):
-            return used, "argument"
-        if session_count is not None:
-            return used, "session"
-        return used, "argument"
-    estimated = max(plugin_calls, plugin_calls * _ESTIMATE_PER_PLUGIN_CALL)
-    return min(cap, estimated), "estimate"
+    hook_count = None
+    if session_id and directory is not None:
+        try:
+            from photopart.hooks import hook_call_count
+
+            hook_count = hook_call_count(str(session_id), directory)
+        except Exception:
+            hook_count = None
+    if session_count is None and argument is None and hook_count is None:
+        estimated = max(plugin_calls, plugin_calls * _ESTIMATE_PER_PLUGIN_CALL)
+        return min(cap, estimated), "estimate"
+    ranked = [("plugin", int(plugin_calls))]
+    if session_count is not None:
+        ranked.append(("session", int(session_count)))
+    if argument is not None:
+        ranked.append(("argument", int(argument)))
+    if hook_count is not None:
+        ranked.append(("hook", int(hook_count)))
+    priority = {"session": 0, "argument": 1, "hook": 2, "plugin": 3}
+    source, used = min(ranked, key=lambda item: (-item[1], priority[item[0]]))
+    return used, source
 
 
 def _file_name(payload: dict) -> str | None:

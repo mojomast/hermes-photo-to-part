@@ -7,6 +7,7 @@ exceed 300. This module does not open a socket and does not add credentials.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -241,6 +242,7 @@ def _union_outputs(paths: list[str]) -> list[dict]:
                     path.write_bytes(payload)
         except Exception:
             note = None
+        _ensure_feature_sidecar(path)
         rows.append(
             {
                 "file": str(path),
@@ -251,6 +253,40 @@ def _union_outputs(paths: list[str]) -> list[dict]:
             }
         )
     return rows
+
+
+def _ensure_feature_sidecar(path: Path) -> None:
+    """Write geometric thread or knurl regions when a script export left none.
+
+    Face indices die in a boolean. Detection runs only when the mesh is already
+    thin and nothing was tagged, and a failure here does not fail the build.
+    """
+    try:
+        import trimesh
+
+        from photopart.features import load_face_tags
+        from photopart.printability import _min_wall, detect_periodic_regions
+
+        existing = load_face_tags(path)
+        if existing and (
+            existing.get("regions") or any(existing.get(key) for key in ("thread", "knurl", "teeth"))
+        ):
+            return
+        loaded = trimesh.load(path, force="mesh", process=True)
+        if not isinstance(loaded, trimesh.Trimesh) or len(loaded.faces) < 16:
+            return
+        raw = _min_wall(loaded, 24)
+        if raw is None or raw >= 0.8:
+            return
+        regions = detect_periodic_regions(loaded)
+        if not regions:
+            return
+        payload = {"knurl": [], "regions": regions, "teeth": [], "thread": []}
+        Path(str(path) + ".faces.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except Exception:
+        return
 
 
 def _failure_text(stderr, returncode: int, script: Path | None = None) -> str:

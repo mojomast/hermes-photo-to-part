@@ -86,7 +86,7 @@ def paint_overlay(
             image, roi=roi, seed=seed, exclude=exclude, hints=hints
         )
     iou = None if foreground is None else _iou(placed, foreground)
-    alignment = _alignment(image, placed, foreground, roi, seed, exclude)
+    alignment = _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=photo_scale)
     if alignment["confidence"] == "low":
         iou = None
         unreliable = OVERLAY_LOW_STEP
@@ -117,6 +117,7 @@ def paint_overlay(
             angled=angled,
             missed=foreground is None and (fit == "auto" or hints),
             extra=roi_warnings,
+            fit=alignment.get("fit"),
         ),
         rotation=rotation,
         mirror=mirror,
@@ -203,7 +204,7 @@ def paint_auto_views(
             }
             for row in (chosen, *rest)
         ]
-    alignment = _alignment(image, placed, foreground, roi, seed, exclude)
+    alignment = _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=photo_scale)
     if alignment["confidence"] == "low":
         iou = None
         for row in poses:
@@ -211,7 +212,7 @@ def paint_auto_views(
         unreliable = OVERLAY_LOW_STEP
         note = f"{note} {unreliable}".strip() if note else unreliable
     warnings = _overlay_warnings(
-        iou, blob, angled=angled, missed=foreground is None, extra=roi_warnings
+        iou, blob, angled=angled, missed=foreground is None, extra=roi_warnings, fit=alignment.get("fit")
     )
     return _write_overlay(
         image,
@@ -454,20 +455,141 @@ def _chamfer_of_placed(placed: np.ndarray, image: np.ndarray, roi) -> dict:
     return {"chamfer_px": round(chamfer_px, 4), "chamfer_norm": round(chamfer_px / diagonal, 4)}
 
 
-def _alignment(image, placed, foreground, roi, seed, exclude) -> dict:
+def _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=None) -> dict:
     gate = _segmentation_gate(image, foreground, roi, seed, exclude)
     metrics = _chamfer_of_placed(placed, image, roi) if placed is not None else {"chamfer_px": None, "chamfer_norm": None}
+    fit = None
+    if placed is not None and foreground is not None:
+        fit = fit_metrics(placed, foreground, px_per_mm)
+    segmentation = gate["segmentation_confidence"]
+    fit_confidence = None if fit is None else fit.get("fit_confidence")
+    overall = segmentation if fit_confidence is None else _lower_confidence(segmentation, fit_confidence)
     iou = None
-    if gate["confidence"] != "low" and foreground is not None and placed is not None:
+    if segmentation != "low" and foreground is not None and placed is not None:
         iou = round(float(_iou(placed, foreground)), 4)
     return {
         "chamfer_px": metrics.get("chamfer_px"),
         "chamfer_norm": metrics.get("chamfer_norm"),
         "iou": iou,
         "stability": gate["stability"],
-        "confidence": gate["confidence"],
+        "segmentation_confidence": segmentation,
+        "confidence": segmentation,
+        "fit": fit,
+        "fit_confidence": fit_confidence,
+        "overall_confidence": overall,
         "reason": gate["reason"],
     }
+
+
+def fit_metrics(placed: np.ndarray, foreground: np.ndarray, px_per_mm=None) -> dict:
+    """Region overlap plus boundary error between a placed silhouette and the photo mask.
+
+    ``chamfer_*`` is the symmetric mean distance between the two contour rings.
+    ``hd95_*`` is the 95th percentile of those distances. Boundary IoU uses a
+    band 2% of the mask diagonal wide (Cheng, Boundary IoU, 2021).
+    """
+    iou = float(_iou(placed, foreground))
+    boundary = _boundary_iou(placed, foreground)
+    chamfer_px, hd95_px = _symmetric_contour_distance(placed, foreground)
+    scale = None
+    try:
+        if px_per_mm is not None and float(px_per_mm) > 0:
+            scale = float(px_per_mm)
+    except (TypeError, ValueError):
+        scale = None
+    chamfer_mm = None if chamfer_px is None or scale is None else chamfer_px / scale
+    hd95_mm = None if hd95_px is None or scale is None else hd95_px / scale
+    metrics = {
+        "iou": round(iou, 4),
+        "boundary_iou": None if boundary is None else round(boundary, 4),
+        "chamfer_px": None if chamfer_px is None else round(chamfer_px, 4),
+        "chamfer_mm": None if chamfer_mm is None else round(chamfer_mm, 4),
+        "hd95_px": None if hd95_px is None else round(hd95_px, 4),
+        "hd95_mm": None if hd95_mm is None else round(hd95_mm, 4),
+    }
+    metrics["fit_confidence"] = _fit_confidence(metrics, placed, foreground)
+    return metrics
+
+
+def _lower_confidence(left: str, right: str) -> str:
+    rank = {"low": 0, "medium": 1, "high": 2}
+    if rank.get(left, 0) <= rank.get(right, 0):
+        return left
+    return right
+
+
+def _fit_confidence(metrics: dict, placed: np.ndarray, foreground: np.ndarray) -> str:
+    """High only when overlap and the boundary both agree. Thin parts ignore raw IoU."""
+    box = _bbox(np.logical_or(placed, foreground))
+    elongated = False
+    if box is not None:
+        width = max(1, box[2] - box[0])
+        height = max(1, box[3] - box[1])
+        elongated = _elongated(width, height)
+    iou = metrics.get("iou")
+    boundary = metrics.get("boundary_iou")
+    chamfer = metrics.get("chamfer_mm")
+    close = chamfer is None or chamfer <= 1.5
+    if elongated:
+        if boundary is None:
+            return "low"
+        if boundary >= 0.5 and close:
+            return "high"
+        if boundary >= 0.3 or (chamfer is not None and chamfer <= 3.0):
+            return "medium"
+        return "low"
+    if iou is None:
+        return "low"
+    if iou >= 0.75 and (boundary or 0.0) >= 0.5 and close:
+        return "high"
+    if iou >= 0.5:
+        return "medium"
+    return "low"
+
+
+def _boundary_iou(placed: np.ndarray, foreground: np.ndarray) -> float | None:
+    if placed.shape != foreground.shape or not np.any(placed) or not np.any(foreground):
+        return None
+    union = np.logical_or(placed, foreground)
+    box = _bbox(union)
+    if box is None:
+        return None
+    diagonal = math.hypot(max(1, box[2] - box[0]), max(1, box[3] - box[1]))
+    band = max(1, int(round(0.02 * diagonal)))
+    placed_band = placed & _dilate(contour_ring(placed), band)
+    photo_band = foreground & _dilate(contour_ring(foreground), band)
+    overlap = np.logical_and(placed_band, photo_band)
+    either = np.logical_or(placed_band, photo_band)
+    total = int(either.sum())
+    if total == 0:
+        return None
+    return float(overlap.sum()) / float(total)
+
+
+def _symmetric_contour_distance(placed: np.ndarray, foreground: np.ndarray):
+    try:
+        import cv2
+    except ImportError:
+        return None, None
+    left = contour_ring(placed)
+    right = contour_ring(foreground)
+    if int(left.sum()) < 4 or int(right.sum()) < 4:
+        return None, None
+    onto_right = _distance_to_ring(left, right, cv2)
+    onto_left = _distance_to_ring(right, left, cv2)
+    if onto_right is None or onto_left is None or onto_right.size == 0 or onto_left.size == 0:
+        return None, None
+    samples = np.concatenate([onto_right, onto_left])
+    return float(np.mean(samples)), float(np.percentile(samples, 95))
+
+
+def _distance_to_ring(source: np.ndarray, target: np.ndarray, cv2):
+    field = np.where(target, np.uint8(0), np.uint8(255))
+    distance = cv2.distanceTransform(field, cv2.DIST_L2, 3)
+    samples = distance[source]
+    if samples.size == 0:
+        return None
+    return samples.astype(float)
 
 
 def _segmentation_gate(image, foreground, roi, seed, exclude) -> dict:
@@ -522,7 +644,12 @@ def _segmentation_gate(image, foreground, roi, seed, exclude) -> dict:
     else:
         confidence = "medium"
     reason = "; ".join(reasons) if reasons else "segmentation stable"
-    return {"stability": round(float(stability), 4), "confidence": confidence, "reason": reason}
+    return {
+        "stability": round(float(stability), 4),
+        "segmentation_confidence": confidence,
+        "confidence": confidence,
+        "reason": reason,
+    }
 
 
 def _gate_mask(mask, roi, seed, exclude):
@@ -709,6 +836,10 @@ def _write_overlay(
         "overlay_top_poses": list(poses or [])[:3],
         "overlay_roi_expanded": bool(roi_expanded),
         "alignment": alignment,
+        "segmentation_confidence": None if not isinstance(alignment, dict) else alignment.get("segmentation_confidence"),
+        "fit_confidence": None if not isinstance(alignment, dict) else alignment.get("fit_confidence"),
+        "overall_confidence": None if not isinstance(alignment, dict) else alignment.get("overall_confidence"),
+        "confidence": None if not isinstance(alignment, dict) else alignment.get("confidence"),
     }
 
 
@@ -819,8 +950,14 @@ def _foreground_for_score(image, *, roi, seed, exclude, hints: bool):
     return mask, blob
 
 
-def _overlay_warnings(iou, blob, *, angled: bool, missed: bool, extra: list | None = None) -> list[str]:
+def _overlay_warnings(iou, blob, *, angled: bool, missed: bool, extra: list | None = None, fit=None) -> list[str]:
     warnings = list(extra or [])
+    if isinstance(fit, dict) and fit.get("fit_confidence") == "low":
+        fit_iou = fit.get("iou")
+        chamfer = fit.get("chamfer_mm")
+        iou_text = "n/a" if not isinstance(fit_iou, (int, float)) else f"{float(fit_iou):.2f}"
+        chamfer_text = "n/a" if not isinstance(chamfer, (int, float)) else f"{float(chamfer):.1f} mm"
+        warnings.append(f"fit low (IoU {iou_text}, chamfer {chamfer_text})")
     if iou is not None and iou < 0.5:
         where = ""
         if blob is not None and blob.get("source") == "largest":

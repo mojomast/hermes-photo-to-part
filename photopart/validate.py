@@ -337,6 +337,14 @@ def run_validate(
             face_tags=load_face_tags(mesh_path),
         )
         report["printability"] = printable
+        try:
+            from photopart.standards import check_standard
+
+            standards = check_standard(raw_spec if spec else {}, report)
+        except Exception:
+            standards = None
+        if isinstance(standards, dict) and standards.get("checked"):
+            report["standards"] = standards
         if print_strict and printable["warnings"]:
             report["failures"].extend(printable["warnings"])
             report["ok"] = False
