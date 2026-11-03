@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image
 
 from photopart.flow import attach_flow, failed, step_measure
-from photopart.paths import absolute_path, default_output
+from photopart.paths import default_output, new_output
 
 # Nominal diameters in millimetres.
 COIN_DIAMETERS_MM = {
@@ -296,6 +296,7 @@ def measure(payload: dict) -> dict:
             float(height_mm),
             px_per_mm,
             payload.get("out"),
+            overwrite=bool(payload.get("overwrite") or payload.get("force")),
         )
     bbox_pair = None
     if kind == "ruler" and points is not None:
@@ -893,7 +894,7 @@ def _reference_bbox(kind: str | None, pair, reference_px, coin_detect=None) -> d
     }
 
 
-def _rectify(image_path, quad, width_mm, height_mm, px_per_mm, out) -> tuple[str, float]:
+def _rectify(image_path, quad, width_mm, height_mm, px_per_mm, out, *, overwrite=False) -> tuple[str, float]:
     from PIL import Image
 
     path = Path(image_path).expanduser()
@@ -916,9 +917,9 @@ def _rectify(image_path, quad, width_mm, height_mm, px_per_mm, out) -> tuple[str
     warped = _warp(image, matrix, out_w, out_h)
     fallback = path.stem + "_rectified.png"
     if out:
-        destination = absolute_path(out)
+        destination = new_output(out, ".png", overwrite=overwrite)
     else:
-        destination = default_output(path.with_name(fallback), fallback)
+        destination = new_output(default_output(path.with_name(fallback), fallback), ".png", overwrite=overwrite)
     destination.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(warped, mode="RGB").save(destination, format="PNG")
     return str(destination.resolve()), float(scale)
@@ -938,6 +939,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--height-mm", type=float)
     parser.add_argument("--image", help="Photo to rectify when --quad is set.")
     parser.add_argument("--out", help="Rectified PNG path. Default: the working directory, never HERMES_HOME/cache.")
+    parser.add_argument("--overwrite", action="store_true", help="Replace an existing --out PNG.")
     parser.add_argument("--angled", action="store_true", help="Record that this photo is not straight-on.")
     parser.add_argument(
         "--measure",
@@ -967,6 +969,8 @@ def main(argv: list[str] | None = None) -> int:
             payload["image"] = args.image
         if args.out:
             payload["out"] = args.out
+        if args.overwrite:
+            payload["overwrite"] = True
         if args.angled:
             payload["angled"] = True
         if args.points:

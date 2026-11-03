@@ -386,7 +386,7 @@ def run_validate(
             ),
         )
         stamp = write_sidecar(resolved, report)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return 1, failed(str(exc))
     report["sha256"] = stamp["sha256"]
     report["stale_validation"] = stamp["stale_validation"]

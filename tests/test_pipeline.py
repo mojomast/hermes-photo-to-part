@@ -214,10 +214,14 @@ class PluginTests(unittest.TestCase):
         spec.loader.exec_module(module)
         found = []
         tools = []
+        hooks = []
 
         class Ctx:
             def register_skill(self, name, path):
                 found.append((name, Path(path)))
+
+            def register_hook(self, name, callback):
+                hooks.append(name)
 
             def register_tool(self, name, toolset, schema, handler, description="", **kwargs):
                 tools.append(
@@ -232,6 +236,10 @@ class PluginTests(unittest.TestCase):
 
         module.register(Ctx())
         self.assertEqual(found, [("photo-to-printable-part", SKILL / "SKILL.md")])
+        self.assertEqual(
+            hooks,
+            ["pre_tool_call", "post_tool_call", "transform_tool_result", "pre_tool_call"],
+        )
         names = [item["name"] for item in tools]
         self.assertEqual(names, [
             "photo_part_validate",
@@ -255,7 +263,7 @@ class PluginTests(unittest.TestCase):
         front = text.split("---", 2)[1]
         meta = yaml.safe_load(front)
         self.assertEqual(meta["name"], "photo-to-printable-part")
-        self.assertEqual(meta["version"], "0.1.14")
+        self.assertEqual(meta["version"], "0.1.15")
         description = meta["description"].strip()
         self.assertLessEqual(len(description), 1024)
         self.assertIn("STL", description)
@@ -276,8 +284,8 @@ class PluginTests(unittest.TestCase):
         manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
         project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "photo-to-part")
-        self.assertEqual(manifest["version"], "0.1.14")
-        self.assertEqual(project["project"]["version"], "0.1.14")
+        self.assertEqual(manifest["version"], "0.1.15")
+        self.assertEqual(project["project"]["version"], "0.1.15")
         self.assertEqual(manifest["python_dependencies"], project["project"]["dependencies"])
         from photopart.tools import TOOL_NAMES
 

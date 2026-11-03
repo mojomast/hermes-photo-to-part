@@ -7,6 +7,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from photopart.paths import refuse_protected
+
 _HISTORY_CAP = 20
 
 
@@ -64,7 +66,7 @@ def write_sidecar(mesh: Path, report: dict) -> dict:
     being dropped. The top-level `sha256` and `ok` stay the latest check.
     """
     status = stamp_status(mesh)
-    destination = sidecar_path(mesh)
+    destination = refuse_protected(sidecar_path(mesh).resolve())
     status["validation_sidecar"] = str(destination.resolve())
     prior = read_sidecar(mesh)
     history = _history_of(prior)
