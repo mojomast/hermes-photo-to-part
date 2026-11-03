@@ -966,6 +966,31 @@ def _tag_teeth(mesh: trimesh.Trimesh, root_radius: float) -> None:
     _store_tags(mesh, teeth=np.flatnonzero(mask))
 
 
+def tag_faces(mesh: trimesh.Trimesh, *, thread=None, knurl=None, teeth=None, path=None) -> dict:
+    """Mark faces the wall check should skip, and write ``<path>.faces.json``.
+
+    ``thread``, ``knurl``, and ``teeth`` are face indices into ``mesh.faces``.
+    Omit a kind to leave tags already stored on the mesh. STL export drops
+    metadata, so pass ``path`` or export to a filesystem path after importing
+    this module. The export hook writes the sidecar for helpers such as
+    ``external_thread`` and ``knurl``, which tag their own faces.
+    """
+    kinds = {}
+    if thread is not None:
+        kinds["thread"] = thread
+    if knurl is not None:
+        kinds["knurl"] = knurl
+    if teeth is not None:
+        kinds["teeth"] = teeth
+    if kinds:
+        _store_tags(mesh, **kinds)
+    if path is not None:
+        write_face_tags(mesh, path)
+    stored = mesh.metadata.get("face_tags") if isinstance(getattr(mesh, "metadata", None), dict) else None
+    tags = stored if isinstance(stored, dict) else {}
+    return {key: [int(item) for item in (tags.get(key) or [])] for key in ("thread", "knurl", "teeth")}
+
+
 def write_face_tags(mesh: trimesh.Trimesh, stl_path) -> None:
     """Store thread, knurl, and tooth face indices beside an STL. STL itself drops them."""
     tags = mesh.metadata.get("face_tags") if isinstance(getattr(mesh, "metadata", None), dict) else None
@@ -996,6 +1021,25 @@ def load_face_tags(stl_path) -> dict | None:
     }
 
 
+def _install_tag_export() -> None:
+    """Write ``<path>.faces.json`` when a tagged mesh is exported to a path."""
+    current = trimesh.Trimesh.export
+    if getattr(current, "_p2p_wrapped", False):
+        return
+
+    def export(self, file_obj=None, file_type=None, **kwargs):
+        result = current(self, file_obj=file_obj, file_type=file_type, **kwargs)
+        if isinstance(file_obj, (str, Path)):
+            try:
+                write_face_tags(self, file_obj)
+            except OSError:
+                pass
+        return result
+
+    export._p2p_wrapped = True
+    trimesh.Trimesh.export = export
+
+
 def _store_tags(mesh: trimesh.Trimesh, **kinds) -> None:
     tags = {"thread": [], "knurl": [], "teeth": []}
     existing = mesh.metadata.get("face_tags") if isinstance(mesh.metadata, dict) else None
@@ -1005,3 +1049,6 @@ def _store_tags(mesh: trimesh.Trimesh, **kinds) -> None:
     for key, value in kinds.items():
         tags[key] = [int(item) for item in np.asarray(value, dtype=int).tolist()]
     mesh.metadata["face_tags"] = tags
+
+
+_install_tag_export()

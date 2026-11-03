@@ -32,9 +32,13 @@ No model key is required. The runner does not open a socket.
 
 ```bash
 python -m evals.runner --transcript session.txt
+python -m evals.runner --hermes-session SESSION_ID --hermes-home "$HERMES_HOME"
+python -m evals.runner --hermes-session ./session.jsonl
 ```
 
-The transcript section counts tool-call records (JSON `tool_calls` / `function_call`, a `name` with `arguments`, and a timestamped call such as `skill_view` or `photo_part_validate`). A sentence that only mentions a tool is not a call. `plugin_calls` is the `photo_part_*` subset. It also reports minutes between the first and last timestamp, lines that delete an `.stl` or `.3mf`, and uses of the mistaken `plugin:` skill id. A line that only says that string is not a skill name is ignored.
+`--hermes-session` reads a Hermes v0.21.7 session directly. A session id is looked up in `$HERMES_HOME/state.db` (table `messages`, column `tool_calls`) and in `$HERMES_HOME/sessions` (`<id>.json`, `<id>.jsonl`, `session_<id>.json`, `session_<id>.jsonl`). A path scores that file. The export format is one session object per JSONL line, with a `messages` list. A live transcript is one message dict per line. Assistant `tool_calls` are the count. The matching `role=tool` row is not a second call. A text export of the form `<timestamp> TOOLCALL name {args}` counts every name on those lines, including `terminal`. `calls_source` is `state.db`, `jsonl`, `json`, or `transcript`. A missing session returns `ok: false` and `tool_calls: 0`.
+
+The transcript section counts the same records. A sentence that only mentions a tool is not a call. `plugin_calls` is the `photo_part_*` subset. It also reports minutes between the first and last timestamp, lines that delete an `.stl` or `.3mf`, and uses of the mistaken `plugin:` skill id. A line that only says that string is not a skill name is ignored.
 
 The in-process suite still runs, so a green transcript score does not replace a failing task. Hold out `worse_version_reverts` and `frozen_edit_needs_reason` when you want a pair the agent has not just been shown.
 

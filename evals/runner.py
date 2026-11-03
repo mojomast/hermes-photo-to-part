@@ -45,6 +45,7 @@ _EXPECTED_TOOLS = 6
 _WRONG_SKILL = "plugin:photo-to-part:photo-to-printable-part"
 _PLUGIN_CALL = re.compile(r"^photo_part_(?:validate|render|heal|template|measure|build)$")
 _STAMP_LINE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(?:Z)?\s+(\S+)")
+_TOOLCALL_LINE = re.compile(r"\bTOOLCALL\s+([A-Za-z][A-Za-z0-9_]*)\b")
 _NAME_ARG = re.compile(r'"name"\s*:\s*"([^"]+)"')
 _DELETE = re.compile(
     r"(?:\brm\b|\bunlink\b|\bos\.remove\b|\bshutil\.rmtree\b).{0,120}?\.(?:stl|3mf)\b",
@@ -239,54 +240,29 @@ def _remember_call(names: list[str], raw) -> None:
         names.append(token)
 
 
-def _collect_calls(obj, names: list[str]) -> None:
-    """Tool-call records: tool_calls, function_call, or a name plus arguments."""
-    if isinstance(obj, list):
-        for item in obj:
-            _collect_calls(item, names)
-        return
-    if not isinstance(obj, dict):
-        return
-    function = obj.get("function")
-    if isinstance(function, dict):
-        _remember_call(names, function.get("name"))
-    call = obj.get("function_call")
-    if isinstance(call, dict):
-        _remember_call(names, call.get("name"))
-    if "arguments" in obj and not isinstance(function, dict):
-        _remember_call(names, obj.get("name"))
-    for key, value in obj.items():
-        if key in {"function", "function_call"}:
-            continue
-        if isinstance(value, (dict, list)):
-            _collect_calls(value, names)
-
-
 def _call_records(text: str) -> list[str]:
-    """Session records only. A prose mention of a tool name is not a call."""
-    names: list[str] = []
-    used: set[int] = set()
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
+    """Session records only. A prose mention of a tool name is not a call.
+
+    JSON and JSONL go through the session reader so an assistant ``tool_calls``
+    entry and its ``role=tool`` result count once. ``TOOLCALL`` lines count
+    every name, including ones with no underscore such as ``terminal``.
+    """
+    from photopart.sessions import names_from_text
+
+    structured = names_from_text(text)
+    names = list(structured)
+    for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("{") or stripped.startswith("["):
-            try:
-                obj = json.loads(stripped)
-            except json.JSONDecodeError:
-                obj = None
-            if obj is not None:
-                found: list[str] = []
-                _collect_calls(obj, found)
-                if found:
-                    names.extend(found)
-                    used.add(index)
-                    continue
+        if not stripped or stripped[:1] in "{[" or _TOOLCALL_LINE.search(stripped):
+            continue
         stamp = _STAMP_LINE.match(stripped)
         if stamp:
             _remember_call(names, stamp.group(2).split("(")[0])
-            used.add(index)
-    for index, line in enumerate(lines):
-        if index in used or "arguments" not in line or "name" not in line:
+    if structured:
+        return names
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped[:1] in "{[" or "arguments" not in line or "name" not in line:
             continue
         for match in _NAME_ARG.finditer(line):
             _remember_call(names, match.group(1))
@@ -312,6 +288,48 @@ def _text_leaks(text: str) -> bool:
         if str(path).replace("\\", "/") in folded:
             return True
     return False
+
+
+def score_hermes_session(source: str, *, home: Path | None = None) -> dict:
+    """Score a Hermes v0.21.7 session id or a JSON/JSONL/text export.
+
+    ``source`` may be a session id under ``HERMES_HOME`` (``state.db`` and
+    ``sessions/*.json`` / ``*.jsonl``) or a path to an export. Tool calls are
+    the records in that file, including ``<timestamp> TOOLCALL name {args}``.
+    """
+    from photopart.sessions import load_session_calls, session_text
+
+    text = session_text(source, home=home)
+    loaded = load_session_calls(source, home=home)
+    if loaded is None and not text:
+        return {
+            "ok": False,
+            "error": f"no Hermes session records for {source}",
+            "tool_calls": 0,
+            "plugin_calls": 0,
+            "wrong_skill_ids": 0,
+            "deleted_files": [],
+            "minutes": None,
+            "leak": False,
+            "calls_source": None,
+        }
+    scored = score_transcript(text) if text else {
+        "tool_calls": 0,
+        "plugin_calls": 0,
+        "wrong_skill_ids": 0,
+        "deleted_files": [],
+        "minutes": None,
+        "leak": False,
+    }
+    if loaded is not None:
+        names, label = loaded
+        scored["tool_calls"] = len(names)
+        scored["plugin_calls"] = sum(1 for name in names if _PLUGIN_CALL.fullmatch(name))
+        scored["calls_source"] = label
+    else:
+        scored["calls_source"] = "transcript"
+    scored["ok"] = True
+    return scored
 
 
 def score_transcript(text: str) -> dict:
@@ -406,6 +424,11 @@ def stage_task(task_id: str, dest: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run photo-to-part evals.")
     parser.add_argument("--transcript", help="Score a saved Hermes transcript in addition to the suite.")
+    parser.add_argument(
+        "--hermes-session",
+        help="Score a Hermes session id or a JSON/JSONL session file. Reads HERMES_HOME/state.db and sessions/.",
+    )
+    parser.add_argument("--hermes-home", help="HERMES_HOME for --hermes-session. Defaults to $HERMES_HOME.")
     parser.add_argument("--json-out", help="Write the suite report to this path.")
     parser.add_argument("--stage", help="Copy one task prompt and fixtures to this directory, outside the plugin.")
     parser.add_argument("--task", help="Task id for --stage.")
@@ -425,6 +448,9 @@ def main(argv: list[str] | None = None) -> int:
         print(report["registration_error"], file=sys.stderr)
     if args.transcript:
         report["transcript"] = score_transcript(Path(args.transcript).read_text(encoding="utf-8"))
+    if args.hermes_session:
+        home = Path(args.hermes_home).expanduser() if args.hermes_home else None
+        report["hermes_session"] = score_hermes_session(args.hermes_session, home=home)
     text = json.dumps(report, indent=2, sort_keys=True)
     print(text)
     if args.json_out:

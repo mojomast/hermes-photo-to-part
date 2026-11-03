@@ -116,7 +116,14 @@ def apply_spec(mesh, *, spec=None, dims=None, tolerance: float = 0.3) -> tuple[l
         for failure in hole_failures:
             failures.append(f"spec {failure}")
         for row in hole_rows:
-            rows.append({"name": "hole", "ok": row["ok"], "actual": row})
+            rows.append(
+                {
+                    "name": "hole",
+                    "ok": row["ok"],
+                    "warning": row.get("warning"),
+                    "actual": row,
+                }
+            )
     return failures, rows
 
 

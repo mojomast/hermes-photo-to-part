@@ -5,8 +5,13 @@ Agents should use this instead of opening features.py, parts.py, or launcher.py.
 
 from __future__ import annotations
 
+from photopart.flow import SKILL_ID
+
 _NOTE = (
+    f'skill_view("{SKILL_ID}"). That is the only skill id. It has no plugin: prefix.\n'
     "Do not open features.py, parts.py, launcher.py, evals/, or tests/. "
+    "Check photo_part_template before a custom script. "
+    "Do not import build123d or cadquery, and do not install or patch around a missing CAD library. "
     "These parameters and the example script are enough."
 )
 
@@ -165,19 +170,23 @@ FEATURES: dict[str, dict] = {
     },
 }
 
-_FEATURE_EXAMPLE = """from photopart.features import strap_hinge, spur_gear
+_FEATURE_EXAMPLE = f"""# skill_view("{SKILL_ID}")
+from photopart.features import strap_hinge, spur_gear, tag_faces
 
 mesh = strap_hinge(length=80, width=8, thickness=3, turns=1.25, end_radius=16, ends=2)
 mesh.export("/absolute/project/strap_hinge_v1.stl")
 
 gear = spur_gear(module=1.0, teeth=20, face_width=6, bore=5)
 gear.export("/absolute/project/spur_gear_v1.stl")
+
+# tag_faces(mesh, thread=[0, 1], path="/absolute/project/part_v1.stl")
 """
 
 
 def _example_for(shape: str, params: dict) -> str:
     shown = {key: value for key, value in params.items() if value is not None}
     return (
+        f'# skill_view("{SKILL_ID}")\n'
         f"# photo_part_template. Do not open parts.py.\n"
         f"# shape={shape}\n"
         f"# params={shown}\n"
@@ -219,6 +228,6 @@ def describe_features() -> dict:
         "help": True,
         "features": FEATURES,
         "example_script": _FEATURE_EXAMPLE,
-        "import": "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff, bottle_cap, spur_gear, spiral_scroll, strap_hinge",
+        "import": "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff, bottle_cap, spur_gear, spiral_scroll, strap_hinge, tag_faces",
         "note": _NOTE,
     }

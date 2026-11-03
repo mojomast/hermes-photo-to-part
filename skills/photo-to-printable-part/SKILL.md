@@ -1,13 +1,15 @@
 ---
 name: photo-to-printable-part
 description: >-
-  photo-to-part:photo-to-printable-part. Do not prefix it with plugin:.
-  Rebuild a physical part as a printable STL or 3MF from photos and a few
-  measurements, or turn a messy scan into a clean solid. Use for a replacement
-  part, a fit-test print, an STL, a 2 mm grid-paper photo, or a scan cleaned
-  into CAD. Call the photo_part_* tools. Read next_step. About 40 tool calls
-  in total. Deliver as soon as validate passes.
-version: "0.1.9"
+  skill_view("photo-to-part:photo-to-printable-part"). That string is the
+  whole skill id. Do not add a plugin: prefix.
+  photo-to-part:photo-to-printable-part. Rebuild a physical part as a
+  printable STL or 3MF from photos and a few measurements, or turn a messy
+  scan into a clean solid. Use for a replacement part, a fit-test print, an
+  STL, a 2 mm grid-paper photo, or a scan cleaned into CAD. Call the
+  photo_part_* tools. Read next_step. About 40 tool calls in total. Deliver
+  as soon as validate passes.
+version: "0.1.10"
 author: mojomast
 license: MIT
 compatibility: >-
@@ -23,8 +25,11 @@ metadata:
 
 # Photo or scan to printable part
 
-The skill id is `photo-to-part:photo-to-printable-part`. Load that exact id
-with `skill_view("photo-to-part:photo-to-printable-part")`.
+skill_view("photo-to-part:photo-to-printable-part")
+
+The skill id is exactly `photo-to-part:photo-to-printable-part`. Load that
+exact id with `skill_view("photo-to-part:photo-to-printable-part")`. Copy it
+exactly. It has no plugin: prefix.
 `plugin:photo-to-part:photo-to-printable-part` is not a skill name. A `plugin:`
 prefix in Hermes docs is a placeholder, not part of this id. Hermes has no
 alias that registers that string: a skill name cannot contain a colon. Never
@@ -37,18 +42,27 @@ CadQuery unless the user asked for a STEP file. That install is in
 
 Always call the photo_part_* tools. Do not call the scripts under `scripts/`
 from Hermes. Those scripts are for a person at a shell. Do not write a
-photo-measurement, perspective, overlay, or checker script. Try
-`photo_part_template` shapes before any custom code: plate_clip, plate,
+photo-measurement, perspective, overlay, or checker script. Check
+`photo_part_template` shapes before any custom code, and before importing a
+CAD library: plate_clip, plate,
 countersink, revolve, ribs, l_bracket, hinge, thread, knurl, sweep, hex_screw,
-hex_standoff, bottle_cap, spur_gear, scroll, strap_hinge. A custom solid is a `.py` file run only by
+hex_standoff, bottle_cap, spur_gear, scroll, strap_hinge. Do not import
+build123d or cadquery. If a build fails because one of those is missing, do
+not install it and do not patch the environment. Use the template the error
+names (for example strap_hinge) and the trimesh/manifold path below. A custom solid is a `.py` file run only by
 `photo_part_build`. That tool uses the plugin interpreter. The path is the
 `interpreter` field. It is the unresolved Hermes venv `bin/python` when one
 matches this process, otherwise the Python running the tool. The script can
 import the same solids the template uses:
 
 ```python
-from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff, spur_gear, spiral_scroll, strap_hinge
+from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff, spur_gear, spiral_scroll, strap_hinge, tag_faces
 ```
+
+`tag_faces(mesh, thread=indices, knurl=indices, path=stl)` writes
+`<stl>.faces.json` so the wall check skips those faces. `external_thread`,
+`knurl`, and the other helpers tag their own faces, and exporting the mesh
+to a path writes that sidecar. Do not leave a script-built thread untagged.
 
 Each call returns one watertight trimesh, in millimetres. `spur_gear(module, teeth, pressure_angle=20, face_width, bore=None)` is an involute gear: tip diameter `module * (teeth + 2)`, root diameter `module * (teeth - 2.5)`, optional keyway or D-flat, optional hub. `spiral_scroll(width, thickness, turns, end_radius, kind="archimedean")` is a spiral strip (`kind` `log` is the other). `strap_hinge` attaches one or two of those scrolls to a strap. `photo_part_build`
 unions overlapping shells and reports `shells_before` and `shells_after`.
@@ -62,7 +76,7 @@ installed plugin.
 
 ## Order
 
-About 40 tool calls in total. Don't read the plugin's source or evals. Use the tools' help/params outputs. Batch independent calls. Deliver as soon as validate passes. Pass `calls_used` (tool calls already used in the session, including `skill_view`) on every photo_part_* call. `PHOTO_PART_MAX_CALLS` overrides the default cap of 40. When `calls_used` is omitted, `budget.remaining` is estimated high. At about 60% and about 80% of the cap, `next_step` starts with `Budget: deliver now.`
+About 40 tool calls in total. Don't read the plugin's source or evals. Use the tools' help/params outputs. Batch independent calls. Deliver as soon as validate passes. Pass `calls_used` (tool calls already used in the session, including `skill_view`) on every photo_part_* call. Hermes v0.21.7 does not put a call counter on the plugin context. It does pass `session_id`. When that session is on disk, the count is read from `$HERMES_HOME/state.db` and from JSON/JSONL files under `$HERMES_HOME/sessions`. The larger of the session count and `calls_used` wins. `PHOTO_PART_MAX_CALLS` overrides the default cap of 40. When both are omitted, `budget.remaining` is estimated high. At about 60% and about 80% of the cap, `next_step` starts with `Budget: deliver now.` Past 80%, a `photo_part_render` without `final` is refused, and a repeat `photo_part_validate` of a file that already passed is refused. The message is `Budget: deliver <file> now; render refused.` The validate of a file that does not yet have a fresh passing sidecar, a checklist `--answer`, and a render with `final` true still run.
 
 The whole job is one measure only if the photo has a coin or ruler, one template or one build, one validate, then stop. A failed build may be fixed once. Read each JSON `next_step` and do that. Do not spend the whole 40 turns. Do not explore, install, or re-render. Do not open `features.py`, `parts.py`, `launcher.py`, `evals/`, or `tests/`. `photo_part_template` and `photo_part_build` with `help` or `describe` true return the shape parameters and a minimal example script.
 

@@ -98,6 +98,7 @@ def evaluate(
 
         hole_failures, hole_report = check_holes(mesh, holes, tolerance=tolerance)
         failures.extend(hole_failures)
+        probe_warnings = [row.get("warning") for row in hole_report if row.get("warning")]
 
     delta = None
     if target is not None:
@@ -123,6 +124,7 @@ def evaluate(
         "extent_delta_mm": delta,
         "expected_shells": None if expected_shells is None else int(expected_shells),
         "holes": hole_report,
+        "probe_warnings": probe_warnings if holes else [],
         **measured,
     }
     return report
@@ -285,6 +287,13 @@ def run_validate(
             report["spec"] = spec_rows
             report["failures"].extend(spec_failures)
             report["ok"] = not report["failures"]
+            spec_probe = [
+                row.get("warning")
+                for row in spec_rows
+                if isinstance(row, dict) and row.get("warning")
+            ]
+            if spec_probe:
+                report["probe_warnings"] = list(report.get("probe_warnings") or []) + spec_probe
         from photopart.spec import template_omissions
 
         dropped = template_omissions(mesh_path, spec, dims)
