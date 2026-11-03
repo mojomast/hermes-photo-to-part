@@ -1,0 +1,28 @@
+{
+  "part": "strap_hinge",
+  "units": "mm",
+  "x": 400.0,
+  "y": 69.32,
+  "z": 4.0,
+  "shells": 1,
+  "hole_count": 4,
+  "holes": [
+    {"x": 100.0, "y": 0.0, "diameter": 4.5, "axis": "z"},
+    {"x": 165.0, "y": 0.0, "diameter": 4.5, "axis": "z"},
+    {"x": 235.0, "y": 0.0, "diameter": 4.5, "axis": "z"},
+    {"x": 300.0, "y": 0.0, "diameter": 4.5, "axis": "z"}
+  ],
+  "features": {
+    "flat single piece": "yes",
+    "no pivot": "yes",
+    "two scroll ends": "yes",
+    "4 nail holes": "yes",
+    "scroll od 70": "yes"
+  },
+  "notes": [
+    "Thickness (4 mm) and the scroll strip width are not observable in a single flat photo: user-supplied / assumed.",
+    "Photo's left scroll is visibly smaller than the right (about 78% of its diameter); user asked for about 70 mm at each end, so both ends are 70 mm.",
+    "Strap is modelled at 20 mm wide, widening to 30 mm over a 44 mm flat knuckle pad at the centre. No barrel, pin or pivot: one flat piece.",
+    "Four 4.5 mm nail holes on the strap centreline, from the pin holes visible in the photo."
+  ]
+}

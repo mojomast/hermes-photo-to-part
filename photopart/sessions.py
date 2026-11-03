@@ -494,12 +494,17 @@ def _parse_timestamp(value) -> float | None:
     return None
 
 
-def rewrite_ids(path) -> list[str]:
-    """Skill ids the pre_tool_call hook rewrote, one per calls.jsonl row."""
+def rewrite_ids(path, session_id: str | None = None) -> list[str]:
+    """Skill ids the pre_tool_call hook rewrote, one per calls.jsonl row.
+
+    With ``session_id``, only that session's rows count. A log whose rows have
+    no session id is kept (an older case log). Rows that belong to other
+    sessions are left out, including when the file also has anonymous rows.
+    """
     file = Path(path)
     if not file.is_file():
         return []
-    found: list[str] = []
+    rows: list[dict] = []
     try:
         lines = file.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeError):
@@ -513,5 +518,23 @@ def rewrite_ids(path) -> list[str]:
         except json.JSONDecodeError:
             continue
         if isinstance(item, dict) and item.get("rewrite_from"):
-            found.append(str(item["rewrite_from"]))
-    return found
+            rows.append(item)
+    if session_id is None:
+        return [str(item["rewrite_from"]) for item in rows]
+    wanted = str(session_id)
+    matched: list[str] = []
+    anonymous: list[str] = []
+    others = 0
+    for item in rows:
+        row_id = item.get("session_id")
+        if row_id is None or str(row_id).strip() == "":
+            anonymous.append(str(item["rewrite_from"]))
+        elif str(row_id) == wanted:
+            matched.append(str(item["rewrite_from"]))
+        else:
+            others += 1
+    if matched:
+        return matched
+    if anonymous and others == 0:
+        return anonymous
+    return []

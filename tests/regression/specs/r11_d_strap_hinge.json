@@ -1,0 +1,22 @@
+{
+  "part": "strap_hinge",
+  "shape": "strap_hinge",
+  "units": "mm",
+  "x": 400.0,
+  "y": 70.0,
+  "z": 4.0,
+  "shells": 1,
+  "knuckles": 0,
+  "features": {
+    "single flat piece, no pivot": "yes",
+    "two scroll ends at 70 mm OD": "yes",
+    "strap 30 mm wide at centre": "yes",
+    "rivet/fastener holes": "no"
+  },
+  "notes": [
+    "Overall length 400 mm and scroll OD 70 mm are from the user.",
+    "Thickness 4 mm is from the user; a single flat photo cannot show thickness.",
+    "The photo shows the left scroll about half the diameter of the right one; the user asked for about 70 mm at each end, so both scrolls are modelled at 70 mm OD.",
+    "Rivet holes are omitted: decorative copy, not a load-bearing hinge."
+  ]
+}

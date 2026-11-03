@@ -1,0 +1,28 @@
+{
+  "part": "jaw_half",
+  "description": "One jaw half (single wooden-style leg with spring notch) of a 26 mm red plastic clothespin, rebuilt from Miniklammer.jpg using a 1 euro coin (23.25 mm) as scale.",
+  "x": 3.2,
+  "y": 26.1,
+  "z": 3.0,
+  "shells": 1,
+  "units": "mm",
+  "features": {
+    "spring notch": "yes",
+    "tapered jaw": "yes",
+    "rounded jaw nose": "yes",
+    "single shell": "yes"
+  },
+  "measured": {
+    "px_per_mm": 34.099,
+    "coin_diameter_px": 792.8,
+    "overall_length_mm": 26.1,
+    "head_width_closed_jaws_mm": 7.16,
+    "single_leg_width_mm": 2.79,
+    "spring_notch_from_top_mm": 9.33,
+    "jaw_length_above_notch_mm": 6.04
+  },
+  "assumed": {
+    "thickness_z_mm": "3.0 - out of plane in a straight-on photo, not observed",
+    "half_width_x_mm": "3.2 - closed head 7.16 mm split into two halves with a ~0.76 mm gap"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "part": "minipeg_leg",
+  "units": "mm",
+  "source_photo": "Miniklammer.jpg",
+  "scale": {
+    "reference": "1 euro coin, 23.25 mm",
+    "reference_px": 792.8,
+    "px_per_mm": 34.099,
+    "method": "hough circle on coin, photo_part_measure"
+  },
+  "measured": {
+    "pin_length_mm": 26.1,
+    "pin_length_px": 890,
+    "pin_across_width_mm": 7.9,
+    "pin_across_width_px": 268,
+    "leg_thickness_mm": 3.8,
+    "pivot_hole_dia_mm": 2.2,
+    "pivot_hole_from_top_mm": 6.3,
+    "spring_seat_from_top_mm": 15.7
+  },
+  "assumed": {
+    "leg_breadth_mm": 6.0,
+    "leg_breadth_note": "depth into the photo plane - a single flat photo cannot show it; typical peg proportion",
+    "spring_notch_depth_mm": 1.1,
+    "spring_notch_height_mm": 3.0,
+    "jaw_tip_chamfer_mm": 1.0
+  },
+  "x": 26.1,
+  "y": 6.0,
+  "z": 3.8,
+  "shells": 1,
+  "hole_count": 1,
+  "patience_tol_mm": 0.35,
+  "tolerance_mm": 0.35,
+  "features": [
+    "single leg, no second half",
+    "spring notch on the inner face",
+    "one pivot bore through the thickness",
+    "tapered jaw end"
+  ],
+  "orientation": "printed flat: X = length, Y = leg breadth, Z = thickness"
+}

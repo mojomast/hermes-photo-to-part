@@ -1,0 +1,30 @@
+{
+  "part": "spur_gear",
+  "units": "mm",
+  "x": 45.0,
+  "y": 45.0,
+  "z": 20.0,
+  "shells": 1,
+  "hole_count": 1,
+  "holes": [
+    {"x": 0.0, "y": 0.0, "diameter": 25.0, "axis": "z"}
+  ],
+  "features": {
+    "16 teeth": true,
+    "module 2.5": true,
+    "20 degree pressure angle": true,
+    "involute flanks": true,
+    "plain 25 mm through bore": true,
+    "no hub": true,
+    "no keyway": true
+  },
+  "notes": [
+    "Tip diameter = module * (teeth + 2) = 2.5 * 18 = 45.0 mm",
+    "Root diameter = module * (teeth - 2.5) = 2.5 * 13.5 = 33.75 mm",
+    "Pitch diameter = module * teeth = 40.0 mm",
+    "Base diameter = pitch * cos(20 deg) = 37.588 mm",
+    "Face width 20 mm from user; not observable in a single top-down photo (assumed per user).",
+    "Bore 25 mm plain through hole, concentric, no keyway or D-flat (assumed).",
+    "Photo span reading 27.69 mm is a cross-check only; see assumptions in delivery notes."
+  ]
+}

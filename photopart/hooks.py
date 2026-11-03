@@ -362,10 +362,10 @@ def _log(sid: str, arguments: dict, row: dict) -> None:
 
 
 def _mirror_rewrite(written: Path, line: str, row: dict) -> None:
-    """Copy a skill-id rewrite to ``$HERMES_HOME/.photopart`` so the scorer sees it.
+    """Copy a skill-id rewrite to ``$HERMES_HOME/.photopart`` for inspection.
 
-    The project log is not next to the session file. ``score_hermes_session``
-    reads ``HERMES_HOME/.photopart/calls.jsonl``.
+    The scorer does not read that shared file. It reads the case directory's
+    ``.photopart/calls.jsonl``, filtered to the session being scored.
     """
     if not row.get("rewrite_from"):
         return

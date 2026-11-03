@@ -1,0 +1,33 @@
+{
+  "part": "glass_drawer_pull",
+  "title": "Antique pressed-glass rosette drawer pull",
+  "units": "mm",
+  "x": 45.0,
+  "y": 45.0,
+  "z": 50.0,
+  "shells": 1,
+  "hole_count": 2,
+  "hole_count_note": "One functional bore: the 4.2 mm M5 tap hole at the shank end (z 35-50). The second circular bore the detector finds at z=0.25 is the decorative annular rosette dish on the front face (23.5 mm dia, ~1.5 mm deep, boss in the middle), not a hole through the part.",
+  "holes": [
+    {"x": 0.0, "y": 0.0, "diameter": 4.2, "z": 50.0, "axis": "z", "depth": 15.0, "note": "M5 tap drill, 4.2 mm, 15 mm deep from shank end"}
+  ],
+  "dimensions": {
+    "face_diameter": {"mm": 45.0, "source": "user"},
+    "overall_length": {"mm": 50.0, "source": "user", "note": "face plane to shank end"},
+    "shank_diameter": {"mm": 16.0, "source": "user"},
+    "tap_hole_diameter": {"mm": 4.2, "source": "user"},
+    "tap_hole_depth": {"mm": 15.0, "source": "user"}
+  },
+  "assumed": [
+    "rosette disc is 4.8 mm thick at the rim, 3.4 mm wall (not visible in a single oblique photo)",
+    "neck 23.2 mm and collar 28.4 mm diameters, and their positions along the length, are read from the photo silhouette, not measured",
+    "petal count 16, scallop amplitude 1.2 mm, face flute depth 0.45 mm are the approximation of the organic rosette allowed by the brief",
+    "M5 hole is modelled as a straight 4.2 mm bore to 15 mm depth with a 0.7 mm mouth chamfer; a printed M5 thread needs a tap afterwards"
+  ],
+  "features": {
+    "rosette petal scallops": "yes",
+    "M5 tap hole in shank end": "yes",
+    "flat mounting face": "yes",
+    "single watertight body": "yes"
+  }
+}

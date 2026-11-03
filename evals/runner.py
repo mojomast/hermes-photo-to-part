@@ -325,7 +325,8 @@ def score_hermes_session(source: str, *, home: Path | None = None) -> dict:
             "leak": False,
             "calls_source": None,
         }
-    scored = score_transcript(text, _calls_log(source, home)) if text else {
+    session_id = None if Path(str(source)).expanduser().is_file() else str(source).strip()
+    scored = score_transcript(text, _calls_log(source, text, home), session_id=session_id) if text else {
         "tool_calls": 0,
         "plugin_calls": 0,
         "wrong_skill_ids": 0,
@@ -348,7 +349,7 @@ def score_hermes_session(source: str, *, home: Path | None = None) -> dict:
     return scored
 
 
-def score_transcript(text: str, calls=None) -> dict:
+def score_transcript(text: str, calls=None, session_id: str | None = None) -> dict:
     """Count tool-call records, mistaken skill_view ids, deletions, leaks, and minutes.
 
     ``tool_calls`` counts session records (JSON tool calls and timestamped
@@ -364,7 +365,7 @@ def score_transcript(text: str, calls=None) -> dict:
     from photopart.skillref import misspelled_skill_arguments
 
     views = misspelled_skill_arguments(text)
-    rewrites = _rewrite_rows(calls)
+    rewrites = _rewrite_rows(calls, session_id)
     if views and rewrites:
         paired = min(len(views), len(rewrites))
         rewritten = paired
@@ -394,14 +395,14 @@ def score_transcript(text: str, calls=None) -> dict:
     }
 
 
-def _rewrite_rows(calls) -> list[str]:
+def _rewrite_rows(calls, session_id: str | None = None) -> list[str]:
     """``rewrite_from`` values from a calls.jsonl path or an in-memory list."""
     if calls is None:
         return []
     if isinstance(calls, (str, Path)):
         from photopart.sessions import rewrite_ids
 
-        return rewrite_ids(calls)
+        return rewrite_ids(calls, session_id=session_id)
     found = []
     for item in calls:
         if isinstance(item, str) and item.strip():
@@ -411,18 +412,65 @@ def _rewrite_rows(calls) -> list[str]:
     return found
 
 
-def _calls_log(source: str, home: Path | None) -> Path | None:
-    """Sidecar the hook writes. A missing file leaves the transcript count alone."""
-    candidates = []
-    raw = Path(str(source))
+def _calls_log(source: str, text: str | None = None, home: Path | None = None) -> Path | None:
+    """The case directory's calls log. The shared Hermes-home log is not used.
+
+    A missing file leaves the transcript count alone. Paths named in the
+    session (``cwd``, a mesh, a photo) are searched for ``.photopart/calls.jsonl``.
+    """
+    candidates: list[Path] = []
+    raw = Path(str(source)).expanduser()
     if raw.is_file():
         candidates.append(raw.parent / ".photopart" / "calls.jsonl")
-    if home is not None:
-        candidates.append(Path(home) / ".photopart" / "calls.jsonl")
+    candidates.extend(_logs_named_in(text or ""))
+    seen: set[Path] = set()
     for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        if resolved in seen or _shared_calls_log(resolved, home):
+            continue
+        seen.add(resolved)
         if candidate.is_file():
             return candidate
     return None
+
+
+def _logs_named_in(text: str) -> list[Path]:
+    """``.photopart/calls.jsonl`` next to paths the session actually used."""
+    if not text:
+        return []
+    found: list[Path] = []
+    for match in re.finditer(r"(?:/[^\s\"'`<>|,;]{2,})", text):
+        path = Path(match.group(0).rstrip(").,]}"))
+        cursor = path if path.suffix == "" else path.parent
+        for _step in range(5):
+            if cursor == cursor.parent:
+                break
+            found.append(cursor / ".photopart" / "calls.jsonl")
+            cursor = cursor.parent
+    return found
+
+
+def _shared_calls_log(path: Path, home: Path | None = None) -> bool:
+    """True for ``$HERMES_HOME/.photopart/calls.jsonl`` and ``~/.hermes``."""
+    homes = []
+    if home is not None:
+        homes.append(Path(home))
+    raw = os.environ.get("HERMES_HOME", "").strip()
+    if raw:
+        homes.append(Path(raw).expanduser())
+    homes.append(Path.home() / ".hermes")
+    for root in homes:
+        shared = root / ".photopart" / "calls.jsonl"
+        try:
+            if path.resolve() == shared.resolve():
+                return True
+        except OSError:
+            if path == shared:
+                return True
+    return False
 
 
 def _answer_name(name: str) -> bool:

@@ -1,0 +1,35 @@
+{
+  "part": "bottle_cap",
+  "description": "Replacement screw cap for a PET bottle with a PCO 1881 neck. No tether, no tamper-evident band.",
+  "units": "mm",
+  "source_photo": "Pulloon_kiinnitetty_pullonkorkki_3.JPG",
+  "x": 33.0,
+  "y": 33.0,
+  "z": 17.0,
+  "shells": 1,
+  "hole_count": 1,
+  "tolerance_mm": 0.3,
+  "bbox": {"x": 33.0, "y": 33.0, "z": 17.0},
+  "features": {
+    "internal thread": true,
+    "single internal thread start": true,
+    "60 knurls": true,
+    "no tether": true,
+    "closed top": true,
+    "open bottom": true
+  },
+  "dimensions": {
+    "outer_diameter_mm": 33.0,
+    "height_mm": 17.0,
+    "thread_major_diameter_mm": 27.4,
+    "thread_pitch_mm": 2.7,
+    "top_wall_mm": 1.2,
+    "knurl_count": 60
+  },
+  "holes": [],
+  "notes": [
+    "x/y/z/shells/hole_count are the rows checked by photo_part_validate for bottle_cap_v3.stl.",
+    "hole_count 1 is the internal-thread cavity (open at the bottom, blind at the top plate).",
+    "The template record in params.json (bottle_cap_v1.stl.template.json) carries x/y = 41.197 from the first template run, whose knurl helper overshot the requested 33 mm OD and whose bore was D21.87. That record is stale and does not describe the delivered part; the mesh was rebuilt from the photopart features."
+  ]
+}

@@ -175,20 +175,28 @@ def count_knuckles(mesh, axis: str = "x") -> int:
     skipped. The count is the largest remaining run. Call this only when the
     spec asks for knuckles.
     """
-    from photopart.holes import _inside
-
     name = (axis or "x").lower()
     if name not in _AXES:
         raise ValueError("knuckle_axis must be x, y, or z")
-    along = _AXES[name]
+    return len(_ring_spans(mesh, _AXES[name]))
+
+
+def _ring_spans(mesh, axis: int) -> list[tuple[float, float]]:
+    """Occupied runs between the pin and the knuckle wall, in axis coordinates.
+
+    The chosen radius is the one with the most runs of at least three samples.
+    A radius that is solid across the span is the pin and is skipped.
+    """
+    from photopart.holes import _inside
+
     bounds = np.asarray(mesh.bounds, dtype=float)
-    span = float(bounds[1, along] - bounds[0, along])
+    span = float(bounds[1, axis] - bounds[0, axis])
     if span <= 0:
-        return 0
-    others = [slot for slot in range(3) if slot != along]
+        return []
+    others = [slot for slot in range(3) if slot != axis]
     cross = min(float(bounds[1, slot] - bounds[0, slot]) for slot in others)
     if cross <= 0:
-        return 0
+        return []
     outer = 0.48 * cross
     if outer <= 0.55:
         radii = np.array([max(0.2, outer * 0.6)], dtype=float)
@@ -198,40 +206,81 @@ def count_knuckles(mesh, axis: str = "x") -> int:
     stations = int(np.clip(round(span / 0.15), 80, 360))
     angles = 8
     pad = min(0.15, 0.005 * span)
-    coords = np.linspace(bounds[0, along] + pad, bounds[1, along] - pad, stations)
+    coords = np.linspace(bounds[0, axis] + pad, bounds[1, axis] - pad, stations)
     turns = np.arange(angles, dtype=float) * (2.0 * np.pi / angles)
     n_radii = len(radii)
     points = np.empty((n_radii, stations, angles, 3), dtype=float)
     points[...] = center
-    points[..., along] = coords[None, :, None]
+    points[..., axis] = coords[None, :, None]
     points[..., others[0]] = center[others[0]] + radii[:, None, None] * np.cos(turns)[None, None, :]
     points[..., others[1]] = center[others[1]] + radii[:, None, None] * np.sin(turns)[None, None, :]
     inside = _inside(mesh, points.reshape(-1, 3)).reshape(n_radii, stations, angles)
     occupied = inside.any(axis=2)
-    best = 0
+    best: list[tuple[float, float]] = []
     for row in occupied:
-        runs, fraction = _occupied_runs(row)
-        if runs == 1 and fraction >= 0.97:
+        spans, fraction = _occupied_runs(row, coords)
+        if len(spans) == 1 and fraction >= 0.97:
             continue
-        if runs == 0:
-            continue
-        if runs > best:
-            best = runs
+        if len(spans) > len(best):
+            best = spans
     return best
 
 
-def _occupied_runs(flags) -> tuple[int, float]:
-    """Runs of at least three inside samples, and the occupied fraction."""
+def _occupied_runs(flags, coords=None) -> tuple[list[tuple[float, float]], float]:
+    """Runs of at least three inside samples, as ``(start, end)`` along ``coords``."""
     row = np.asarray(flags, dtype=bool)
     if len(row) == 0:
-        return 0, 0.0
+        return [], 0.0
     padded = np.concatenate(([False], row, [False]))
     changes = np.diff(padded.astype(np.int8))
     starts = np.flatnonzero(changes == 1)
     ends = np.flatnonzero(changes == -1)
-    runs = int(np.count_nonzero((ends - starts) >= 3))
+    axis_coords = np.arange(len(row), dtype=float) if coords is None else np.asarray(coords, dtype=float)
+    spans: list[tuple[float, float]] = []
+    for start, end in zip(starts, ends):
+        if int(end - start) < 3:
+            continue
+        spans.append((float(axis_coords[start]), float(axis_coords[end - 1])))
     fraction = float(np.count_nonzero(row)) / float(len(row))
-    return runs, fraction
+    return spans, fraction
+
+
+def _unmerge_knuckles(mesh, found: dict) -> dict:
+    """Split cylinders that the pin or a fillet has joined back into rings.
+
+    Face intervals merge neighbouring knuckles when the pin or a teardrop
+    bridge connects them. The ring probe still sees each barrel. When at
+    least one cylinder exists and more rings overlap those cylinders than the
+    merged count, the rings are the knuckle count. Zero cylinders stays zero,
+    so a strap or a cap is not reported as a hinge.
+    """
+    cylinders = int(found.get("cylinders") or 0)
+    if cylinders < 1:
+        return found
+    axis_name = str(found.get("axis") or "x")
+    if axis_name not in _AXES:
+        return found
+    try:
+        rings = _ring_spans(mesh, _AXES[axis_name])
+    except Exception:
+        return found
+    if len(rings) < 2 or len(rings) <= cylinders:
+        return found
+    overlapping: list[tuple[float, float]] = []
+    for start, end in rings:
+        for segment in found.get("segments") or []:
+            if not isinstance(segment, (list, tuple)) or len(segment) < 2:
+                continue
+            if float(end) >= float(segment[0]) - 1.0 and float(start) <= float(segment[1]) + 1.0:
+                overlapping.append((float(start), float(end)))
+                break
+    if len(overlapping) < 2 or len(overlapping) <= cylinders:
+        return found
+    updated = dict(found)
+    updated["knuckles"] = len(overlapping)
+    updated["cylinders"] = len(overlapping)
+    updated["segments"] = [[round(start, 4), round(end, 4)] for start, end in overlapping]
+    return updated
 
 
 def detect_knuckles(mesh, axis_hint=None) -> dict:
@@ -242,6 +291,8 @@ def detect_knuckles(mesh, axis_hint=None) -> dict:
     and RMS radial residual under 3% of r. The count is that run only when at
     least two segments share an axis and a gap. One rod is reported as one
     segment and does not satisfy the gap rule, so ``knuckles`` stays 0 or 1.
+    When those cylinders have been merged by a pin or a fillet, the individual
+    ring spans along the same axis replace the merged count.
     ``count_knuckles`` remains the ring cross-check.
     """
     names = ("x", "y", "z")
@@ -262,7 +313,7 @@ def detect_knuckles(mesh, axis_hint=None) -> dict:
             found["cylinders"] == best["cylinders"] and found["knuckles"] > best["knuckles"]
         ):
             best = found
-    return best
+    return _unmerge_knuckles(mesh, best)
 
 
 def _knuckles_along(mesh, axis: int) -> dict:

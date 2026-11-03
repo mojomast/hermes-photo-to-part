@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.14 — 2026-11-03
+
+- Knuckle count uses the individual rings along the axis when a pin or a fillet has merged neighbouring cylinders. The r12 teardrop hinge reports 5, and the r11 hinge stays 5. Zero cylinders is still not a knuckle, so a strap hinge and a bottle cap are unchanged.
+- A copied thread is detected from the crest again. Run splits follow the neighbouring radius (1.5 mm) and a drift from the run's first sample, the crest may be up to 2.2 mm, and a bottle thread whose second harmonic hides the helix is accepted when the columns agree on pitch. The wall check then skips the collar around an external crest and the skirt around an internal one. The r12 cap and the r12 screw do not warn. A 0.3 mm flange of radius 6 mm beside an M3 thread still warns, and a 0.70 mm plate still warns.
+- `score_hermes_session` reads the case directory's `.photopart/calls.jsonl`, filtered to that session. It does not read the shared `$HERMES_HOME/.photopart/calls.jsonl`. `box_matches_spec` no longer reports 9 rewrites from other sessions.
+- `photo_part_measure` intersects the GrabCut mask with the border-color mask and snaps a nearby seed onto the part. The staged loonie photo with seed `[479, 252]` measures 22.30×12.16 mm, inside 5% of 22×12.
+- The gear overlay drop (0.66 trusted in r11 to 0.13 untrusted in r12) was checked on the same photo and the same mesh. Unseeded fit is 0.43 on both v0.1.12 and v0.1.13. GrabCut downscale, the iteration cap, the ECC skip, and the elevation skip do not explain the live drop. Those speedups stay. A seeded fit on the current code is about 0.90 and trusted.
+- `tests/regression/` holds the r10–r12 meshes and `tests/test_regression_rounds.py` checks knuckle count, bore count, the dish-versus-bore split, and thin-wall warnings with and without sidecars. `unittest discover` runs that module on every pull request.
+
 ## 0.1.13 — 2026-11-03
 
 - `photo_part_template` no longer drops a shape value that arrives next to `shape`. Known keys, for every template, are merged into `params`. `knuckles: 5` at the top level builds a 5-knuckle hinge. An unknown name, or the same key with two different values, is an error that says the value belongs in `params`.
