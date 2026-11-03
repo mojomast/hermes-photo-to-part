@@ -318,26 +318,65 @@ def measure(payload: dict) -> dict:
         "angled": bool(payload.get("angled", False)),
         "note": _PLANE_NOTE,
     }
-    _write_last_measure(report, payload)
+    directory = _write_last_measure(report, payload)
+    if directory is None:
+        report["last_measure_warning"] = (
+            "last_measure.json was not written. Pass out_dir or cwd as the project directory. "
+            "The plugin install directory is not a project."
+        )
+    else:
+        report["last_measure"] = str(directory / "last_measure.json")
     return attach_flow(report, step_measure())
 
 
-def _write_last_measure(report: dict, payload: dict) -> None:
-    """Remember px/mm and an optional part roi for the next overlay."""
-    image = payload.get("image")
+def _project_directory(payload: dict) -> Path | None:
+    """Where this project's scale file belongs. Never the plugin install root."""
+    from photopart.paths import plugin_root
+
+    root = plugin_root()
+
+    def _accept(path: Path) -> Path | None:
+        try:
+            resolved = path.expanduser().resolve()
+        except OSError:
+            return None
+        if root is not None and resolved == root:
+            return None
+        return resolved
+
+    for key in ("out_dir", "cwd", "project"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            chosen = _accept(Path(value))
+            if chosen is not None:
+                return chosen
     out = payload.get("out")
-    if image:
-        directory = Path(str(image)).expanduser().resolve().parent
-    elif out:
-        directory = Path(str(out)).expanduser().resolve().parent
-    else:
-        directory = Path.cwd()
+    if isinstance(out, str) and out.strip():
+        chosen = _accept(Path(out).parent)
+        if chosen is not None:
+            return chosen
+    image = payload.get("image")
+    if isinstance(image, str) and image.strip():
+        chosen = _accept(Path(image).parent)
+        if chosen is not None:
+            return chosen
+    return _accept(Path.cwd())
+
+
+def _write_last_measure(report: dict, payload: dict) -> Path | None:
+    """Remember px/mm and an optional part region, scoped to the project directory."""
+    directory = _project_directory(payload)
+    if directory is None:
+        return None
+    image = payload.get("image")
     body = {
         "px_per_mm": report.get("px_per_mm"),
         "roi": payload.get("roi"),
+        "seed": payload.get("seed"),
         "reference_bbox": report.get("reference_bbox"),
         "image": None if not image else str(Path(str(image)).expanduser().resolve()),
         "angled": bool(report.get("angled")),
+        "project": str(directory),
     }
     try:
         directory.mkdir(parents=True, exist_ok=True)
@@ -345,23 +384,41 @@ def _write_last_measure(report: dict, payload: dict) -> None:
             json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
     except OSError:
-        return
+        return None
+    return directory
 
 
 def load_last_measure(*dirs) -> dict | None:
-    """Newest-looking measure hint. Callers pass the photo directory first."""
+    """Scale hint for one project. Skips the plugin install directory."""
+    from photopart.paths import plugin_root
+
+    root = plugin_root()
     for directory in dirs:
         if not directory:
             continue
-        path = Path(directory) / "last_measure.json"
+        try:
+            resolved = Path(directory).expanduser().resolve()
+        except OSError:
+            continue
+        if root is not None and resolved == root:
+            continue
+        path = resolved / "last_measure.json"
         if not path.is_file():
             continue
         try:
             loaded = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, UnicodeError):
             continue
-        if isinstance(loaded, dict) and loaded.get("px_per_mm"):
-            return loaded
+        if not isinstance(loaded, dict) or not loaded.get("px_per_mm"):
+            continue
+        project = loaded.get("project")
+        if isinstance(project, str) and project.strip():
+            try:
+                if Path(project).expanduser().resolve() != resolved:
+                    continue
+            except OSError:
+                continue
+        return loaded
     return None
 
 

@@ -1,8 +1,8 @@
 # Evals
 
-Twenty-five tasks from the photo-to-part test rounds. Inputs are synthetic meshes and one self-made CC0 washer photo in `fixtures/`. `photos.json` names openly licensed photos for an optional Hermes session. Those files are not downloaded and their bytes are not in this repo.
+Twenty-six tasks from the photo-to-part test rounds. Inputs are synthetic meshes and one self-made CC0 washer photo in `fixtures/`. `photos.json` names openly licensed photos for an optional Hermes session. Those files are not downloaded and their bytes are not in this repo.
 
-`worse_version_reverts`, `frozen_edit_needs_reason`, and `real_photo_overlay` are held out of `results` unless `--include-holdout`. They still run, and a failure fails the suite. `--stage DIR --task ID` copies that task's prompt and fixtures to a directory outside this repo. A transcript that reads `evals/` or `runner.py` is marked `leak`. `wrong_skill_ids` counts only `skill_view` arguments.
+`worse_version_reverts`, `frozen_edit_needs_reason`, and `real_photo_overlay` are held out of `results` unless `--include-holdout`. They still run, and a failure fails the suite. `--stage DIR --task ID` copies that task's prompt and its `inputs` to a directory outside this repo. Answer files (`fixture.json`, truth masks, and anything listed under `answers`) stay here for the scorer. `overlay_low_confidence` is `scripted`, so staging writes the prompt only. A transcript leaks when it reads this repo's `evals/` files (`tasks.json`, `runner.py`, `fixtures/`, and the other eval modules) or their absolute paths. A lookalike directory such as `hevals/` does not count. `tool_calls` counts session records, not prose mentions. `wrong_skill_ids` counts only `skill_view` arguments.
 
 ## In-process suite
 
@@ -34,7 +34,7 @@ No model key is required. The runner does not open a socket.
 python -m evals.runner --transcript session.txt
 ```
 
-The transcript section counts `photo_part_validate`, `photo_part_render`, `photo_part_heal`, `photo_part_template`, `photo_part_measure`, and `photo_part_build` calls, minutes between the first and last timestamp, lines that delete an `.stl` or `.3mf`, and uses of the mistaken `plugin:` skill id. A line that only says that string is not a skill name is ignored.
+The transcript section counts tool-call records (JSON `tool_calls` / `function_call`, a `name` with `arguments`, and a timestamped call such as `skill_view` or `photo_part_validate`). A sentence that only mentions a tool is not a call. `plugin_calls` is the `photo_part_*` subset. It also reports minutes between the first and last timestamp, lines that delete an `.stl` or `.3mf`, and uses of the mistaken `plugin:` skill id. A line that only says that string is not a skill name is ignored.
 
 The in-process suite still runs, so a green transcript score does not replace a failing task. Hold out `worse_version_reverts` and `frozen_edit_needs_reason` when you want a pair the agent has not just been shown.
 

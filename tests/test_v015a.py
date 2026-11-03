@@ -179,7 +179,7 @@ class SkillOrderTests(unittest.TestCase):
         self.assertIn("spec.json", step1)
         self.assertNotIn("photo_part_measure", step1)
         self.assertLess(order.index("spec.json"), order.index("photo_part_measure"))
-        self.assertIn("25 tool calls", text)
+        self.assertIn("40 tool calls", text)
         self.assertIn("deviations", text)
         self.assertIn("unvalidated", text)
         self.assertIn("history", text)

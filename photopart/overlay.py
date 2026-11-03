@@ -15,6 +15,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from photopart.flow import OVERLAY_LOW_STEP
+
 _MAGENTA = np.array([255.0, 0.0, 210.0])
 _ALPHA = 0.62
 
@@ -87,7 +89,7 @@ def paint_overlay(
     alignment = _alignment(image, placed, foreground, roi, seed, exclude)
     if alignment["confidence"] == "low":
         iou = None
-        unreliable = "overlay unreliable: pass roi= or a seed; do not iterate geometry on it"
+        unreliable = OVERLAY_LOW_STEP
         note = f"{note} {unreliable}".strip() if note else unreliable
     poses = []
     if used == "auto" and iou is not None:
@@ -206,7 +208,7 @@ def paint_auto_views(
         iou = None
         for row in poses:
             row["iou"] = None
-        unreliable = "overlay unreliable: pass roi= or a seed; do not iterate geometry on it"
+        unreliable = OVERLAY_LOW_STEP
         note = f"{note} {unreliable}".strip() if note else unreliable
     warnings = _overlay_warnings(
         iou, blob, angled=angled, missed=foreground is None, extra=roi_warnings

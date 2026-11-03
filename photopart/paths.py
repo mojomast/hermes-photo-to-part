@@ -8,6 +8,15 @@ from pathlib import Path
 from photopart.flow import SKILL_ID
 
 
+def plugin_root() -> Path | None:
+    """Directory that holds ``plugin.yaml``. None when this file is not in a checkout."""
+    here = Path(__file__).resolve()
+    for candidate in (here.parents[1], here.parent):
+        if (candidate / "plugin.yaml").is_file() and (candidate / "photopart").is_dir():
+            return candidate
+    return None
+
+
 def cache_root() -> Path | None:
     raw = os.environ.get("HERMES_HOME", "").strip()
     if not raw:

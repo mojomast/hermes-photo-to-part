@@ -63,6 +63,7 @@ def apply_spec(mesh, *, spec=None, dims=None, tolerance: float = 0.3) -> tuple[l
     extents = np.asarray(mesh.extents, dtype=float)
     for name, value, tol in checks:
         extra: dict = {}
+        undetected = False
         if name in _AXES:
             actual = float(extents[_AXES[name]])
         elif name == "shells":
@@ -71,15 +72,29 @@ def apply_spec(mesh, *, spec=None, dims=None, tolerance: float = 0.3) -> tuple[l
             actual = float(count_knuckles(mesh, axis=str(checks.axis or "x")))
         elif name == "hole_count":
             bores = count_bores(mesh)
+            info = genus_report(mesh)
             actual = float(len(bores))
+            genus = info.get("genus")
             extra = {
                 "bores": bores,
-                "genus": mesh_genus(mesh),
+                "genus": genus,
+                "genus_reliable": bool(info.get("reliable")),
                 "note": GENUS_NOTE,
             }
+            if info.get("reason") and not info.get("reliable"):
+                extra["genus_reason"] = info["reason"]
+            # Zero bores plus a positive genus, or a genus we cannot trust,
+            # means the counter missed holes. Say so instead of failing.
+            undetected = len(bores) == 0 and ((genus or 0) > 0 or not info.get("reliable"))
+            if undetected:
+                extra["status"] = "undetected"
+                extra["note"] = "undetected. " + GENUS_NOTE
         else:
             raise ValueError(f"unknown spec field {name}")
-        ok = abs(actual - value) <= tol + 1e-9
+        if undetected:
+            ok = True
+        else:
+            ok = abs(actual - value) <= tol + 1e-9
         rows.append(
             {
                 "name": name,
@@ -174,24 +189,82 @@ def _occupied_runs(flags) -> tuple[int, float]:
     return runs, fraction
 
 
+def genus_report(mesh) -> dict:
+    """Handle count and whether that count can be trusted.
+
+    ``split`` can turn one watertight solid into shells that are no longer
+    watertight, so a per-shell sum then reports 0 while the unsplit Euler
+    characteristic still shows the holes. That result is not reliable.
+    """
+    try:
+        whole_watertight = bool(mesh.is_watertight)
+        whole_euler = int(mesh.euler_number)
+    except Exception:
+        return {
+            "genus": None,
+            "reliable": False,
+            "reason": "euler characteristic could not be computed",
+        }
+    whole_genus = (2 - whole_euler) / 2.0
+    whole_integer = abs(whole_genus - round(whole_genus)) < 1e-6 and whole_genus >= -1e-6
+    whole_value = int(round(whole_genus)) if whole_integer else None
+    try:
+        shells = list(mesh.split(only_watertight=False))
+    except Exception:
+        shells = []
+    if not shells:
+        if whole_watertight and whole_value is not None:
+            return {"genus": whole_value, "reliable": True, "reason": None}
+        return {
+            "genus": whole_value,
+            "reliable": False,
+            "reason": "mesh is not watertight" if not whole_watertight else "genus is not an integer",
+        }
+    total = 0
+    split_reliable = True
+    reason = None
+    for shell in shells:
+        try:
+            closed = bool(shell.is_watertight)
+            euler = int(shell.euler_number)
+        except Exception:
+            split_reliable = False
+            reason = "euler characteristic could not be computed"
+            continue
+        if not closed:
+            split_reliable = False
+            reason = "split shell is not watertight"
+            continue
+        genus = (2 - euler) / 2.0
+        if abs(genus - round(genus)) > 1e-6 or genus < -1e-6:
+            split_reliable = False
+            reason = "genus is not a non-negative integer"
+            continue
+        if genus > 0:
+            total += int(round(genus))
+    if whole_watertight and whole_value is not None and (not split_reliable or total != whole_value):
+        return {
+            "genus": whole_value,
+            "reliable": False,
+            "reason": reason or "split genus does not match the whole mesh",
+            "split_genus": total,
+        }
+    if not split_reliable:
+        return {"genus": whole_value, "reliable": False, "reason": reason}
+    return {"genus": total, "reliable": True, "reason": None}
+
+
 def mesh_genus(mesh) -> int:
-    """Handle count from the Euler characteristic of each watertight shell.
+    """Handle count. Unreliable meshes still return the whole-mesh genus when it exists.
 
     This is information only. A shaft through several knuckles adds handles
     that are not separate bores, so ``hole_count`` uses :func:`count_bores`.
     """
-    total = 0
-    try:
-        shells = mesh.split(only_watertight=False)
-    except Exception:
-        shells = [mesh]
-    for shell in shells:
-        if not shell.is_watertight:
-            continue
-        genus = (2 - int(shell.euler_number)) / 2
-        if genus > 0:
-            total += int(round(genus))
-    return total
+    info = genus_report(mesh)
+    genus = info.get("genus")
+    if isinstance(genus, int):
+        return genus
+    return 0
 
 
 def count_holes(mesh) -> int:
@@ -200,38 +273,402 @@ def count_holes(mesh) -> int:
 
 
 def count_bores(mesh) -> list[dict]:
-    """Circular bores from cross-sections on the three principal axes.
+    """Circular bores from per-leg slices on all three axes, plus ray casting.
 
-    Each axis is sliced at 25, 50, and 75 percent of the bounding box.
-    An interior ring whose circularity (4πA/P²) is above 0.85 is a bore
-    section. Sections whose centres agree within 0.5 mm are the same bore.
-    A gap (a slice with no ring) splits them, so two collinear knuckle bores
-    stay two bores. A bore seen at all three levels is through; any other
-    run is blind.
+    Whole-part stations at 25, 50, and 75 percent stay, and each planar leg
+    is also sliced at 30, 50, and 70 percent of its own thickness. An interior
+    ring whose circularity (4πA/P²) is above 0.85 is a bore section. Sections
+    whose centres agree within 0.6 mm are the same bore. A sampled station
+    between two sightings with no ring splits them, so two collinear knuckle
+    bores stay two bores.
+
+    Through-holes are also found by casting a grid of rays along each axis.
+    A void column enclosed by material is a bore. A ray that never hits is
+    through; a ray that hits the floor is blind. Ray bores that share an axis
+    and a perpendicular centre with a section bore are not added again, so a
+    pair of collinear knuckle bores is not collapsed into one tunnel.
 
     trimesh's ``section_multiplane`` needs scipy, which this plugin does not
-    install. The slices are the same three planes, computed with numpy and
-    shapely.
+    install. The slices are computed with numpy and shapely.
     """
     if mesh is None or len(getattr(mesh, "faces", [])) == 0:
         return []
+    section_bores = _bores_from_sections(mesh)
+    ray_bores = _bores_from_rays(mesh)
+    merged = _merge_bores(section_bores, ray_bores)
+    return _mark_through(mesh, merged)
+
+
+def _bores_from_sections(mesh) -> list[dict]:
     bounds = np.asarray(mesh.bounds, dtype=float)
     extents = np.asarray(mesh.extents, dtype=float)
+    planes = _unique_planes(_section_planes(mesh, bounds, extents))
+    by_axis: dict[int, list[tuple[float, list[dict]]]] = {0: [], 1: [], 2: []}
+    for axis, position in planes:
+        origin = np.array(bounds[0], dtype=float)
+        origin[axis] = float(position)
+        normal = np.zeros(3, dtype=float)
+        normal[axis] = 1.0
+        rings = _circular_interiors(mesh, origin, normal, axis)
+        by_axis[axis].append((float(position), rings))
     found: list[dict] = []
-    axes = ("x", "y", "z")
-    for axis, name in enumerate(axes):
+    names = ("x", "y", "z")
+    for axis, samples in by_axis.items():
+        samples.sort(key=lambda item: item[0])
+        found.extend(_bores_from_stations(names[axis], samples))
+    return found
+
+
+def _section_planes(mesh, bounds: np.ndarray, extents: np.ndarray) -> list[tuple[int, float]]:
+    """Whole-part stations plus several cuts through each planar leg."""
+    planes: list[tuple[int, float]] = []
+    for axis in range(3):
         span = float(extents[axis])
         if span <= 1e-6:
             continue
-        rings_by_level: list[list[dict]] = []
         for frac in (0.25, 0.50, 0.75):
-            origin = np.array(bounds[0], dtype=float)
-            origin[axis] = float(bounds[0, axis] + frac * span)
-            normal = np.zeros(3, dtype=float)
-            normal[axis] = 1.0
-            rings_by_level.append(_circular_interiors(mesh, origin, normal, axis))
-        found.extend(_bores_from_levels(name, rings_by_level))
+            planes.append((axis, float(bounds[0, axis] + frac * span)))
+    planes.extend(_slab_planes(mesh))
+    return planes
+
+
+def _slab_planes(mesh) -> list[tuple[int, float]]:
+    """Mid-thickness cuts of each axis-aligned wall, including a thin leg."""
+    triangles = np.asarray(mesh.triangles, dtype=float)
+    if len(triangles) == 0:
+        return []
+    edge1 = triangles[:, 1] - triangles[:, 0]
+    edge2 = triangles[:, 2] - triangles[:, 0]
+    normals = np.cross(edge1, edge2)
+    area = np.linalg.norm(normals, axis=1)
+    keep = area > 1.0
+    if not np.any(keep):
+        return []
+    normals = normals[keep] / area[keep, None]
+    area = area[keep]
+    centroids = triangles[keep].mean(axis=1)
+    planes: list[tuple[int, float]] = []
+    for axis in range(3):
+        aligned = np.abs(normals[:, axis]) >= 0.92
+        if int(np.count_nonzero(aligned)) < 4:
+            continue
+        pos = centroids[aligned, axis]
+        weight = area[aligned]
+        other = [slot for slot in range(3) if slot != axis]
+        flat = centroids[aligned][:, other]
+        keys = np.round(pos / 0.35) * 0.35
+        clusters: dict[float, dict] = {}
+        for key, position, mass, point in zip(keys, pos, weight, flat):
+            bucket = clusters.get(float(key))
+            if bucket is None:
+                bucket = {
+                    "pos": 0.0,
+                    "mass": 0.0,
+                    "min": np.array(point, dtype=float),
+                    "max": np.array(point, dtype=float),
+                    "count": 0,
+                }
+                clusters[float(key)] = bucket
+            bucket["pos"] += float(position) * float(mass)
+            bucket["mass"] += float(mass)
+            bucket["min"] = np.minimum(bucket["min"], point)
+            bucket["max"] = np.maximum(bucket["max"], point)
+            bucket["count"] += 1
+        slabs = []
+        for bucket in clusters.values():
+            if bucket["mass"] <= 0 or bucket["count"] < 4:
+                continue
+            slabs.append(
+                {
+                    "pos": bucket["pos"] / bucket["mass"],
+                    "min": bucket["min"],
+                    "max": bucket["max"],
+                }
+            )
+        slabs.sort(key=lambda item: item["pos"])
+        for left, right in zip(slabs, slabs[1:]):
+            gap = float(right["pos"] - left["pos"])
+            if gap < 0.4 or gap > 40.0:
+                continue
+            overlaps = bool(np.all(left["max"] + 1.5 >= right["min"]) and np.all(right["max"] + 1.5 >= left["min"]))
+            if not overlaps:
+                continue
+            for frac in (0.30, 0.50, 0.70):
+                planes.append((axis, float(left["pos"] + frac * gap)))
+    return planes
+
+
+def _unique_planes(planes: list[tuple[int, float]]) -> list[tuple[int, float]]:
+    kept: list[tuple[int, float]] = []
+    for axis, position in sorted(planes, key=lambda item: (item[0], item[1])):
+        if any(other == axis and abs(found - position) < 0.15 for other, found in kept):
+            continue
+        kept.append((axis, position))
+    return kept
+
+
+def _bores_from_stations(axis_name: str, samples: list[tuple[float, list[dict]]]) -> list[dict]:
+    """Group rings by perpendicular centre. A missed station between them splits the run."""
+    positions = [position for position, _rings in samples]
+    events: list[tuple[float, dict]] = []
+    for position, rings in samples:
+        for ring in rings:
+            events.append((position, ring))
+    groups: list[dict] = []
+    for position, ring in events:
+        placed = None
+        for group in groups:
+            if np.linalg.norm(np.asarray(group["perp"], dtype=float) - np.asarray(ring["perp"], dtype=float)) <= 0.6:
+                placed = group
+                break
+        if placed is None:
+            groups.append({"perp": list(ring["perp"]), "hits": [(position, ring)]})
+            continue
+        placed["hits"].append((position, ring))
+        placed["perp"] = [(float(a) + float(b)) / 2.0 for a, b in zip(placed["perp"], ring["perp"])]
+    bores = []
+    for group in groups:
+        hits = sorted(group["hits"], key=lambda item: item[0])
+        run: list[tuple[float, dict]] = []
+        for position, ring in hits:
+            if run and _station_between(positions, run[-1][0], position):
+                bores.append(_record_from_run(axis_name, run))
+                run = []
+            run.append((position, ring))
+        if run:
+            bores.append(_record_from_run(axis_name, run))
+    return bores
+
+
+def _station_between(positions: list[float], start: float, end: float) -> bool:
+    """True when a sampled plane between two sightings missed this bore.
+
+    A short gap is a thread or a tessellation miss, not a second bore.
+    Knuckle bores sit tens of millimetres apart, so those still split.
+    """
+    low = min(start, end)
+    high = max(start, end)
+    if high - low <= 8.0:
+        return False
+    return any(low + 1e-6 < position < high - 1e-6 for position in positions)
+
+
+def _record_from_run(axis_name: str, run: list[tuple[float, dict]]) -> dict:
+    rings = [ring for _position, ring in run]
+    centers = np.asarray([ring["center"] for ring in rings], dtype=float)
+    diameters = [float(ring["diameter"]) for ring in rings]
+    return {
+        "axis": axis_name,
+        "center": [round(float(value), 4) for value in centers.mean(axis=0)],
+        "diameter": round(float(np.median(diameters)), 4),
+        "through": False,
+    }
+
+
+def _bores_from_rays(mesh) -> list[dict]:
+    """Enclosed void columns. Spacing stays near 1.5 mm so a Ø5 hole is hit."""
+    bounds = np.asarray(mesh.bounds, dtype=float)
+    extents = np.asarray(mesh.extents, dtype=float)
+    found: list[dict] = []
+    for axis in range(3):
+        found.extend(_ray_axis(mesh, axis, bounds, extents))
     return found
+
+
+def _ray_axis(mesh, axis: int, bounds: np.ndarray, extents: np.ndarray) -> list[dict]:
+    perp = [slot for slot in range(3) if slot != axis]
+    coords = []
+    steps = []
+    for slot in perp:
+        span = float(extents[slot])
+        if span <= 1e-6:
+            return []
+        count = int(np.clip(round(span / 1.5), 8, 40))
+        step = span / count
+        coords.append(bounds[0, slot] + (np.arange(count) + 0.5) * step)
+        steps.append(step)
+    first, second = np.meshgrid(coords[0], coords[1], indexing="ij")
+    origins = np.zeros((first.size, 3), dtype=float)
+    origins[:, perp[0]] = first.ravel()
+    origins[:, perp[1]] = second.ravel()
+    origins[:, axis] = float(bounds[0, axis]) - 1.0
+    counts = _hit_counts(mesh, origins, axis).reshape(first.shape)
+    names = ("x", "y", "z")
+    bores = []
+    for kind, through in ((counts == 0, True), (counts == 1, False)):
+        for cells, touches in _mask_components(kind):
+            if touches or len(cells) < 1:
+                continue
+            if not _enclosed(counts, cells):
+                continue
+            center2, diameter = _cell_circle(cells, coords[0], coords[1], steps)
+            if diameter < 0.8 or diameter > 80.0:
+                continue
+            if not _round_enough(cells, coords[0], coords[1], steps):
+                continue
+            center = np.zeros(3, dtype=float)
+            center[perp[0]] = center2[0]
+            center[perp[1]] = center2[1]
+            center[axis] = float(np.mean(bounds[:, axis]))
+            bores.append(
+                {
+                    "axis": names[axis],
+                    "center": [round(float(value), 4) for value in center],
+                    "diameter": round(float(diameter), 4),
+                    "through": through,
+                }
+            )
+    confirmed = [bore for bore in _unique_ray_bores(bores) if _confirm_ray(mesh, bore)]
+    return confirmed
+
+
+def _confirm_ray(mesh, bore: dict) -> bool:
+    """Keep a ray column only when some plane shows a circular ring there.
+
+    A square through-hole is an enclosed void and would otherwise count.
+    The confirming plane also places the centre inside a thin leg instead of
+    at the middle of the whole part.
+    """
+    bounds = np.asarray(mesh.bounds, dtype=float)
+    axis = {"x": 0, "y": 1, "z": 2}[str(bore["axis"])]
+    span = float(bounds[1, axis] - bounds[0, axis])
+    if span <= 1e-6:
+        return False
+    normal = np.zeros(3, dtype=float)
+    normal[axis] = 1.0
+    target = np.asarray(_perp_center(bore), dtype=float)
+    for frac in (0.01, 0.04, 0.12, 0.25, 0.50, 0.75, 0.88, 0.96, 0.99):
+        origin = np.array(bounds[0], dtype=float)
+        origin[axis] = float(bounds[0, axis] + frac * span)
+        for ring in _circular_interiors(mesh, origin, normal, axis):
+            if np.linalg.norm(np.asarray(ring["perp"], dtype=float) - target) <= 1.0:
+                bore["center"] = list(ring["center"])
+                bore["diameter"] = ring["diameter"]
+                return True
+    return False
+
+
+def _hit_counts(mesh, origins: np.ndarray, axis: int) -> np.ndarray:
+    from photopart.holes import _ray_hits
+
+    direction = np.zeros(3, dtype=float)
+    direction[axis] = 1.0
+    triangles = np.asarray(mesh.triangles, dtype=float)
+    hits = np.zeros(len(origins), dtype=np.int32)
+    for triangle in triangles:
+        hits += _ray_hits(origins, direction, triangle).astype(np.int32)
+    return hits
+
+
+def _mask_components(mask: np.ndarray) -> list[tuple[list[tuple[int, int]], bool]]:
+    height, width = mask.shape
+    seen = np.zeros(mask.shape, dtype=bool)
+    found = []
+    for y in range(height):
+        for x in range(width):
+            if not mask[y, x] or seen[y, x]:
+                continue
+            stack = [(y, x)]
+            seen[y, x] = True
+            cells: list[tuple[int, int]] = []
+            touches = False
+            while stack:
+                cy, cx = stack.pop()
+                cells.append((cy, cx))
+                if cy in {0, height - 1} or cx in {0, width - 1}:
+                    touches = True
+                for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    ny, nx = cy + dy, cx + dx
+                    if 0 <= ny < height and 0 <= nx < width and mask[ny, nx] and not seen[ny, nx]:
+                        seen[ny, nx] = True
+                        stack.append((ny, nx))
+            found.append((cells, touches))
+    return found
+
+
+def _enclosed(counts: np.ndarray, cells: list[tuple[int, int]]) -> bool:
+    """A hole's neighbours are material. Exterior bays are not."""
+    height, width = counts.shape
+    occupied = set(cells)
+    material = 0
+    checked = 0
+    for y, x in cells:
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            ny, nx = y + dy, x + dx
+            if not (0 <= ny < height and 0 <= nx < width) or (ny, nx) in occupied:
+                continue
+            checked += 1
+            if int(counts[ny, nx]) >= 2:
+                material += 1
+    if checked == 0:
+        return False
+    return material >= max(1, int(0.6 * checked))
+
+
+def _cell_circle(cells, xs, ys, steps) -> tuple[np.ndarray, float]:
+    # cells are (row, col) into meshgrid(xs, ys, indexing="ij").
+    points = np.array([[float(xs[row]), float(ys[col])] for row, col in cells], dtype=float)
+    center = points.mean(axis=0)
+    step = float(np.mean(steps))
+    if len(points) == 1:
+        return center, step
+    radii = np.linalg.norm(points - center, axis=1)
+    return center, float(2.0 * (radii.max() + 0.5 * step))
+
+
+def _round_enough(cells, xs, ys, steps) -> bool:
+    points = np.array([[float(xs[row]), float(ys[col])] for row, col in cells], dtype=float)
+    if len(points) <= 2:
+        return True
+    span = points.max(axis=0) - points.min(axis=0)
+    step = float(np.mean(steps))
+    aspect = (float(span.max()) + step) / max(step, float(span.min()) + step)
+    return aspect <= 1.85
+
+
+def _unique_ray_bores(bores: list[dict]) -> list[dict]:
+    kept: list[dict] = []
+    for bore in bores:
+        if any(_perp_close(bore, other) and bore.get("through") == other.get("through") for other in kept):
+            continue
+        kept.append(bore)
+    return kept
+
+
+def _merge_bores(sections: list[dict], rays: list[dict]) -> list[dict]:
+    """Keep section bores. A ray bore is new only when no section shares its centre."""
+    merged = list(sections)
+    for ray in rays:
+        if any(_perp_close(ray, existing) for existing in merged):
+            continue
+        merged.append(ray)
+    return merged
+
+
+def _perp_close(left: dict, right: dict) -> bool:
+    if left.get("axis") != right.get("axis"):
+        return False
+    return float(np.linalg.norm(np.asarray(_perp_center(left)) - np.asarray(_perp_center(right)))) <= 0.8
+
+
+def _perp_center(bore: dict) -> list[float]:
+    axis = {"x": 0, "y": 1, "z": 2}[str(bore["axis"])]
+    return [float(value) for index, value in enumerate(bore["center"]) if index != axis]
+
+
+def _mark_through(mesh, bores: list[dict]) -> list[dict]:
+    """A centre ray with no hit is a through-hole. A hit is the floor of a blind bore."""
+    if not bores:
+        return bores
+    axis_index = {"x": 0, "y": 1, "z": 2}
+    bounds = np.asarray(mesh.bounds, dtype=float)
+    for bore in bores:
+        axis = axis_index[str(bore["axis"])]
+        origin = np.asarray(bore["center"], dtype=float).reshape(1, 3).copy()
+        origin[0, axis] = float(bounds[0, axis]) - 1.0
+        hits = int(_hit_counts(mesh, origin, axis)[0])
+        bore["through"] = hits == 0
+    return bores
 
 
 def section_areas_mm2(mesh) -> dict:
