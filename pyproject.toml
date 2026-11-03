@@ -29,6 +29,7 @@ dependencies = [
 dev = [
   "pyyaml>=6,<7",
   "lxml>=5,<6.2",
+  "setuptools>=69",
 ]
 threemf = [
   "lxml>=5,<6.2",
