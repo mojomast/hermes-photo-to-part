@@ -27,10 +27,12 @@ def check_printability(
 ) -> dict:
     """Return measurements and warnings. Warnings do not change ``ok`` by themselves.
 
-    Wall thickness is an SDF-lite median of 7 rays in a 60° cone. Thread, knurl,
-    and tooth faces are not ray sources (they stay valid targets). The warning
-    uses the 5th percentile and the thin-area fraction. ``min_wall_raw_mm`` is
-    the old single-ray minimum, including those crests.
+    Wall thickness is an SDF-lite median of 7 rays in a 60° cone, converted
+    from path length to distance along the inward normal. A raw 30° path
+    through a 0.70 mm plate is about 0.81 mm and would hide the warning.
+    Thread, knurl, and tooth faces are not ray sources (they stay valid
+    targets). The warning uses the 5th percentile and the thin-area fraction.
+    ``min_wall_raw_mm`` is the old single-ray minimum, including those crests.
     """
     warnings: list[str] = []
     raw = _min_wall(mesh, samples)
@@ -147,7 +149,13 @@ def _sdf_wall(
     hit_normals = normals[tri_index]
     source_normals = normals[face_of_ray[ray_index]]
     same_way = np.einsum("ij,ij->i", hit_normals, source_normals) > 0.0
-    keep = (distance > 1e-3) & ~same_way
+    # The ray starts 0.001 mm inside the face. Path length times the cosine
+    # of the angle from the inward normal is the wall thickness, plus that
+    # offset. Cone rays otherwise read a 0.70 mm plate as 0.807 mm.
+    inward = -source_normals
+    cosine = np.einsum("ij,ij->i", ray_dirs[ray_index], inward)
+    thickness = distance * np.clip(cosine, 0.0, 1.0) + 1e-3
+    keep = (distance > 1e-3) & ~same_way & (cosine >= 0.5)
     per_face: dict[int, list[float]] = {int(slot): [] for slot in index_arr.tolist()}
     order = np.argsort(distance)
     seen_ray: set[int] = set()
@@ -158,7 +166,7 @@ def _sdf_wall(
         if ray in seen_ray:
             continue
         seen_ray.add(ray)
-        per_face[int(face_of_ray[ray])].append(float(distance[slot]))
+        per_face[int(face_of_ray[ray])].append(float(thickness[slot]))
     medians = []
     weights = []
     for slot, lengths in per_face.items():

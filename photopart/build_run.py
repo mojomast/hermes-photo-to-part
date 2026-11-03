@@ -92,7 +92,7 @@ def run_build(
         "history": history,
     }
     if not ok:
-        report["error"] = _failure_text(completed.stderr, completed.returncode)
+        report["error"] = _failure_text(completed.stderr, completed.returncode, script_path)
     from photopart.spec import note_missing_spec
 
     return note_missing_spec(attach_flow(report, step_build(outputs, ok=ok)), work)
@@ -253,17 +253,124 @@ def _union_outputs(paths: list[str]) -> list[dict]:
     return rows
 
 
-def _failure_text(stderr, returncode: int) -> str:
-    """Exception line first, then a short traceback. No skill-id filler."""
+def _failure_text(stderr, returncode: int, script: Path | None = None) -> str:
+    """Exception line first, then a short traceback. No skill-id filler.
+
+    A missing build123d or cadquery import names the libraries that are
+    installed and the template to use instead of installing one.
+    """
     text = _clip(stderr).strip()
     lines = [line for line in text.splitlines() if line.strip()]
     if not lines:
-        return f"build exited {returncode} with no stderr"
-    exception = lines[-1]
-    context = lines[max(0, len(lines) - 13) : -1]
-    if not context:
-        return exception
-    return exception + "\n" + "\n".join(context)
+        body = f"build exited {returncode} with no stderr"
+    else:
+        exception = lines[-1]
+        context = lines[max(0, len(lines) - 13) : -1]
+        body = exception if not context else exception + "\n" + "\n".join(context)
+    guidance = _cad_guidance(body, script)
+    if guidance:
+        return body + "\n" + guidance
+    return body
+
+
+_CAD_MODULES = ("build123d", "cadquery", "OCP")
+_TEMPLATE_RULES = (
+    ("strap_hinge", ("strap_hinge", "strap hinge", "strap", "scroll")),
+    ("spur_gear", ("spur_gear", "involute", "gear")),
+    ("bottle_cap", ("bottle_cap", "bottle cap", "bottle")),
+    ("hex_screw", ("hex_screw", "screw")),
+    ("hex_standoff", ("hex_standoff", "standoff")),
+    ("l_bracket", ("l_bracket", "bracket")),
+    ("hinge", ("knuckle", "print-in-place", "print_in_place")),
+    ("thread", ("thread",)),
+    ("knurl", ("knurl",)),
+    ("sweep", ("sweep",)),
+)
+_FEATURE_IMPORT = {
+    "strap_hinge": "strap_hinge",
+    "spur_gear": "spur_gear",
+    "bottle_cap": "bottle_cap",
+    "hex_screw": "hex_screw",
+    "hex_standoff": "hex_standoff",
+    "thread": "external_thread",
+    "knurl": "knurl",
+    "sweep": "sweep_path",
+    "scroll": "spiral_scroll",
+}
+
+
+def _cad_guidance(error: str, script: Path | None) -> str | None:
+    module = _missing_cad_module(error)
+    if module is None:
+        return None
+    script_text = _script_text(script)
+    shape = _matching_template(script_text)
+    available = _available_libraries()
+    if shape:
+        point = f"Use photo_part_template shape {shape}."
+    else:
+        point = "Use photo_part_template. For a strap hinge the shape is strap_hinge."
+    feature = _FEATURE_IMPORT.get(shape or "")
+    if feature:
+        path = f"A trimesh/manifold script can `from photopart.features import {feature}`."
+    else:
+        path = "A trimesh/manifold script can import photopart.features, or call photo_part_template."
+    return (
+        f"{module} is not available. Available libraries: {available}. "
+        f"{point} {path} "
+        "Do not install the missing CAD library and do not patch around it."
+    )
+
+
+def _missing_cad_module(error: str) -> str | None:
+    import re
+
+    match = re.search(r"No module named ['\"]([^'\"]+)['\"]", error)
+    if match:
+        root = match.group(1).split(".", 1)[0]
+        if root in _CAD_MODULES or root.lower() in {name.lower() for name in _CAD_MODULES}:
+            return root
+        return None
+    if "ModuleNotFoundError" not in error and "ImportError" not in error:
+        return None
+    lowered = error.lower()
+    for name in _CAD_MODULES:
+        if name.lower() in lowered:
+            return name
+    return None
+
+
+def _matching_template(script_text: str) -> str | None:
+    lowered = script_text.lower()
+    if not lowered:
+        return None
+    for shape, keys in _TEMPLATE_RULES:
+        if any(key in lowered for key in keys):
+            return shape
+    return None
+
+
+def _script_text(script: Path | None) -> str:
+    if script is None:
+        return ""
+    try:
+        return Path(script).read_text(encoding="utf-8", errors="replace")[:20000]
+    except OSError:
+        return ""
+
+
+def _available_libraries() -> str:
+    import importlib.util
+
+    found = []
+    for name in ("trimesh", "manifold3d", "shapely", "numpy", "photopart.features"):
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ValueError):
+            spec = None
+        if spec is not None:
+            found.append(name)
+    return ", ".join(found) if found else "none"
 
 
 def _timeout_error(limit: float, stderr) -> str:

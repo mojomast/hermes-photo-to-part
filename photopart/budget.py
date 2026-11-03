@@ -1,19 +1,32 @@
 """Per-project tool-call budget.
 
-Hermes stops a session at about 40 tool calls in total. Counting only this
-plugin's calls never reaches that cap, so the hint never fired. ``calls_used``
-is the session total when the agent passes it. When it is omitted, the used
-count is estimated high (four session calls per plugin call) so ``remaining``
-is conservative. ``next_step`` says deliver now at 60 percent and at 80
-percent of the cap. ``PHOTO_PART_MAX_CALLS`` overrides the default of 40.
+Hermes v0.21.7 stops a session at about 40 tool calls in total.
+``PluginContext.register_tool`` does not expose a counter. The dispatcher
+does pass ``session_id`` into a handler that accepts ``**kwargs``. That id
+is counted from ``$HERMES_HOME/state.db`` and from JSON/JSONL files under
+``$HERMES_HOME/sessions``. ``calls_used`` is the fallback the agent passes
+when the host has no session id. The used count is the larger of those
+sources and this plugin's own counter. When neither session nor
+``calls_used`` is available, the used count is estimated high (four session
+calls per plugin call) and capped, so ``remaining`` stays conservative.
+
+``next_step`` says deliver now at 60 percent and at 80 percent of the cap.
+Past 80 percent the tools refuse a non-final render and a repeat validate.
+``PHOTO_PART_MAX_CALLS`` overrides the default of 40.
 """
 
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+
+session_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "p2p_session_id",
+    default=None,
+)
 
 DEFAULT_MAX_CALLS = 40
 _ESTIMATE_PER_PLUGIN_CALL = 4
@@ -41,13 +54,15 @@ def max_calls() -> int:
     return value
 
 
-def attach_budget(payload: dict, tool_name: str, calls_used=None) -> dict:
+def attach_budget(payload: dict, tool_name: str, calls_used=None, session_id=None) -> dict:
     """Increment the project counter and attach ``budget``. Hint at 60% and 80%."""
     directory = project_dir(payload)
     state = _bump(directory, tool_name, _file_name(payload))
     cap = max_calls()
     plugin_calls = int(state["plugin_calls"])
-    used, source = _resolve_used(plugin_calls, calls_used, cap)
+    if session_id is None:
+        session_id = session_id_var.get()
+    used, source = _resolve_used(plugin_calls, calls_used, cap, session_id)
     remaining = max(0, cap - used)
     phase = _PHASE.get(tool_name, "build")
     payload["budget"] = {
@@ -89,16 +104,65 @@ def project_dir(payload: dict) -> Path:
     return Path.cwd()
 
 
-def _resolve_used(plugin_calls: int, provided, cap: int) -> tuple[int, str]:
+def consumption(payload: dict, calls_used=None, session_id=None) -> dict:
+    """Used count before this call is recorded. Does not write state."""
+    directory = project_dir(payload)
+    state = _read(directory / ".p2p_state.json")
+    plugin_calls = int(state.get("plugin_calls") or 0)
+    cap = max_calls()
+    if session_id is None:
+        session_id = session_id_var.get()
+    used, source = _resolve_used(plugin_calls, calls_used, cap, session_id)
+    return {
+        "max_calls": cap,
+        "calls_used": used,
+        "remaining": max(0, cap - used),
+        "plugin_calls": plugin_calls,
+        "calls_used_source": source,
+    }
+
+
+def past_soft_wall(info: dict) -> bool:
+    """True at 80 percent of the cap, where non-final renders are refused."""
+    cap = int(info.get("max_calls") or 0)
+    if cap < 1:
+        return True
+    return float(info.get("calls_used") or 0) / float(cap) >= 0.80 - 1e-9
+
+
+def _resolve_used(plugin_calls: int, provided, cap: int, session_id=None) -> tuple[int, str]:
+    """The larger of the session record, ``calls_used``, and this plugin's counter.
+
+    A session count is not capped, so a run of 47 calls is reported as 47.
+    The estimate used when both are missing stays capped.
+    """
+    session_count = None
+    if session_id:
+        from photopart.sessions import session_call_count
+
+        session_count = session_call_count(str(session_id))
+    argument = None
     if provided is not None and provided != "":
         try:
-            reported = int(provided)
+            argument = int(provided)
         except (TypeError, ValueError):
-            reported = None
-        if reported is not None:
-            if reported < 0:
-                reported = 0
-            return min(cap, max(plugin_calls, reported)), "argument"
+            argument = None
+        if argument is not None and argument < 0:
+            argument = 0
+    if session_count is not None or argument is not None:
+        parts = [plugin_calls]
+        if session_count is not None:
+            parts.append(int(session_count))
+        if argument is not None:
+            parts.append(argument)
+        used = max(parts)
+        if session_count is not None and int(session_count) >= (argument if argument is not None else -1) and int(session_count) >= plugin_calls:
+            return used, "session"
+        if argument is not None and argument >= plugin_calls and (session_count is None or argument >= int(session_count)):
+            return used, "argument"
+        if session_count is not None:
+            return used, "session"
+        return used, "argument"
     estimated = max(plugin_calls, plugin_calls * _ESTIMATE_PER_PLUGIN_CALL)
     return min(cap, estimated), "estimate"
 

@@ -39,15 +39,23 @@ def _params(params) -> dict:
 
 
 def _dump(payload: dict) -> str:
-    return json.dumps(payload, indent=2, sort_keys=True)
+    """``skill_id`` and ``skill_view`` stay on the first lines. The rest is sorted."""
+    ordered = {}
+    for key in ("skill_id", "skill_view"):
+        if key in payload:
+            ordered[key] = payload[key]
+    for key in sorted(payload):
+        if key not in ordered:
+            ordered[key] = payload[key]
+    return json.dumps(ordered, indent=2)
 
 
 def _lead(text: str) -> str:
     """Tool text Hermes shows. The exact skill id stays in front if it is cut."""
     return (
         f"{SKILL_ID}. "
-        f'skill_view("{SKILL_ID}") is the skill id. '
-        "Do not pass plugin:photo-to-part:photo-to-printable-part. "
+        f'skill_view("{SKILL_ID}") is the only skill id. '
+        "Copy that id exactly. It has no plugin: prefix. "
         f"{text}"
     )
 
@@ -120,6 +128,7 @@ def _emit(
             payload["failures"] = payload["failures"][:8]
     from photopart.budget import attach_budget
 
+    payload["skill_view"] = f'skill_view("{SKILL_ID}")'
     attach_budget(payload, tool_name, calls_used=calls_used)
     return _dump(payload)
 
@@ -131,6 +140,89 @@ def _calls_used(args: dict):
     if value is None or value == "":
         return None
     return value
+
+
+def _bind_session(kwargs) -> None:
+    """Keep the session id Hermes v0.21.7 passes into the handler."""
+    import os
+
+    from photopart.budget import session_id_var
+
+    found = None
+    if isinstance(kwargs, dict):
+        raw = kwargs.get("session_id")
+        if isinstance(raw, str) and raw.strip():
+            found = raw.strip()
+    if not found:
+        found = os.environ.get("HERMES_SESSION_ID", "").strip() or None
+    session_id_var.set(found)
+
+
+def _over_budget(args: dict, *, kind: str, mesh, final: bool = False):
+    """Refuse a non-final render or a repeat validate once 80% of the cap is used.
+
+    The final validate (no fresh passing sidecar yet, or a checklist answer)
+    and a render with ``final`` true still run.
+    """
+    if final or not isinstance(mesh, str) or not mesh.strip():
+        return None
+    if kind == "validate" and not _repeat_validate(mesh, args):
+        return None
+    from photopart.budget import consumption, past_soft_wall
+
+    info = consumption({"file": mesh}, _calls_used(args))
+    if not past_soft_wall(info):
+        return None
+    name = _best_name(mesh)
+    phrase = "repeat validate refused" if kind == "validate" else "render refused"
+    text = f"Budget: deliver {name} now; {phrase}."
+    return {
+        "ok": False,
+        "refused": True,
+        "budget_refused": kind,
+        "file": mesh,
+        "error": text,
+        "next_step": text,
+        "skill_id": SKILL_ID,
+    }
+
+
+def _repeat_validate(mesh: str, args: dict) -> bool:
+    """True when this file already has a fresh passing sidecar and no new answer."""
+    if _answers_present(args):
+        return False
+    path = Path(mesh).expanduser()
+    if not path.is_file():
+        return False
+    from photopart.stamp import mesh_hash, read_sidecar
+
+    side = read_sidecar(path)
+    if not isinstance(side, dict) or side.get("ok") is not True:
+        return False
+    try:
+        return side.get("sha256") == mesh_hash(path)
+    except OSError:
+        return False
+
+
+def _answers_present(args: dict) -> bool:
+    raw = args.get("answer")
+    if raw is None or raw == "":
+        raw = args.get("answers")
+    return raw not in (None, "", [])
+
+
+def _best_name(mesh: str) -> str:
+    path = Path(mesh).expanduser()
+    try:
+        from photopart.score import best_validated
+
+        info = best_validated(path)
+    except OSError:
+        info = None
+    if isinstance(info, dict) and info.get("name"):
+        return str(info["name"])
+    return "the best validated file"
 
 
 def _wants_help(args: dict) -> bool:
@@ -217,11 +309,22 @@ def _size(params: dict) -> tuple[float, float, float] | None:
 
 def validate_tool(params, **_kwargs) -> str:
     """Check watertightness and the bounding box. Size targets are millimetres."""
+    _bind_session(_kwargs)
     mode = "concise"
     args: dict = {}
     try:
         args = _params(params)
         mode = _format(args)
+        blocked = _over_budget(args, kind="validate", mesh=args.get("mesh"))
+        if blocked:
+            return _emit(
+                blocked,
+                blocked["next_step"],
+                plain_error=True,
+                response_format=mode,
+                tool_name="photo_part_validate",
+                calls_used=_calls_used(args),
+            )
         from photopart.validate import run_validate
 
         _code, report = run_validate(
@@ -392,11 +495,22 @@ def _maybe_render(args: dict, report: dict) -> None:
 
 def render_tool(params, **_kwargs) -> str:
     """Render fitted views and, with photo_scale, an outline overlay on the photo."""
+    _bind_session(_kwargs)
     mode = "concise"
     args: dict = {}
     try:
         args = _params(params)
         mode = _format(args)
+        blocked = _over_budget(args, kind="render", mesh=args.get("mesh"), final=_flag(args, "final"))
+        if blocked:
+            return _emit(
+                blocked,
+                blocked["next_step"],
+                plain_error=True,
+                response_format=mode,
+                tool_name="photo_part_render",
+                calls_used=_calls_used(args),
+            )
         argv = [str(args["mesh"]), "--out-dir", str(args["out_dir"])]
         photo = _optional_str(args, "photo")
         if photo:
@@ -479,6 +593,7 @@ def render_tool(params, **_kwargs) -> str:
 
 def heal_tool(params, **_kwargs) -> str:
     """Heal a scan into a new STL. Report fan fallback and shell counts separately."""
+    _bind_session(_kwargs)
     mode = "concise"
     args: dict = {}
     try:
@@ -530,6 +645,7 @@ def heal_tool(params, **_kwargs) -> str:
 
 def template_tool(params, **_kwargs) -> str:
     """Write a building block. The default shape is still the sample plate."""
+    _bind_session(_kwargs)
     mode = "concise"
     args: dict = {}
     try:
@@ -628,6 +744,7 @@ def template_tool(params, **_kwargs) -> str:
 
 def measure_tool(params, **_kwargs) -> str:
     """Pixel scale from a coin or a ruler, plus an optional rectified image."""
+    _bind_session(_kwargs)
     mode = "concise"
     args: dict = {}
     try:
@@ -655,6 +772,7 @@ def measure_tool(params, **_kwargs) -> str:
 
 def build_tool(params, **_kwargs) -> str:
     """Run a local Python build script with the plugin interpreter."""
+    _bind_session(_kwargs)
     mode = "concise"
     args: dict = {}
     try:
@@ -725,8 +843,9 @@ def _schema(name: str, description: str, properties: dict, required: list[str]) 
         "type": "integer",
         "description": (
             "Tool calls already used in this Hermes session, including skill_view and other tools. "
-            "The cap is about 40 (PHOTO_PART_MAX_CALLS). Pass it so budget.remaining is exact. "
-            "Omit it and remaining is estimated high."
+            "Pass it on every call. Hermes v0.21.7 also supplies session_id; when that session "
+            "is on disk the count comes from state.db or HERMES_HOME/sessions. The larger number wins. "
+            "The cap is about 40 (PHOTO_PART_MAX_CALLS). Omit both and remaining is estimated high."
         ),
     }
     return {
@@ -1063,6 +1182,8 @@ def tool_specs() -> list[dict]:
             "Do not open features.py or launcher.py. "
             "About 40 tool calls in total. "
             "Import photopart.features for a thread, knurl, revolve, sweep, hex screw, standoff, spur gear, or spiral scroll. "
+            "Check photo_part_template first, including strap_hinge. "
+            "Do not import build123d or cadquery, and do not install or patch around a missing CAD library. "
             "Overlapping shells are unioned. The error field is the exception, not a status line. "
             "No shell. Try photo_part_template first."
         ),
@@ -1070,8 +1191,10 @@ def tool_specs() -> list[dict]:
             "photo_part_build",
             _lead(
                 "Run a Python file with the plugin environment interpreter and return the new files. "
-                "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff, spur_gear, spiral_scroll, strap_hinge. "
+                "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff, spur_gear, spiral_scroll, strap_hinge, tag_faces. "
+                "Check photo_part_template first. Do not import build123d or cadquery. "
                 "Each returns one watertight trimesh in millimetres. Overlapping shells are unioned; shells_before and shells_after are in the JSON. "
+                "tag_faces(mesh, thread=indices, path=stl) excludes those faces from the wall check. "
                 "On failure the error field starts with the exception. "
                 "Pass cwd as an absolute project path. Do not write into HERMES_HOME/cache. "
                 "Do not delete an STL or 3MF. The interpreter path is in the JSON."

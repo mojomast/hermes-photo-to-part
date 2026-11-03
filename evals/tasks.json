@@ -118,7 +118,7 @@
     },
     {
       "id": "bores_not_genus",
-      "prompt": "hole_count is the circular bore count. A 6-hole L-bracket is 6. A 5-knuckle body with two bores is hole_count 2 while genus stays 4. A blind M5 hole is one blind bore.",
+      "prompt": "Build these three solids and validate each one. Do not answer from this prompt alone. Call photo_part_template or photo_part_build, then photo_part_validate, and report the bore list from the tool. First, a 1.5 mm L-bracket with six through holes, three along X in the upright and three along Z in the foot: hole_count must be 6. Second, a 5-knuckle hinge: hole_count is 2 while genus stays 4. Third, a blind M5 hole: one blind bore. hole_count is the circular bore count, not the genus.",
       "budget_calls": 40,
       "budget_minutes": 5
     },

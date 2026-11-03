@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.10 — 2026-11-03
+
+- A per-hole probe that disagrees with the bore detector, or whose votes are split, is a warning. The row keeps both the probe and the bore. The warning does not fail validation and does not block delivery.
+- The call budget reads Hermes v0.21.7 session records. `PluginContext` has no counter. The dispatcher passes `session_id`, and the count comes from `$HERMES_HOME/state.db` (`messages.tool_calls`) and from JSON/JSONL files under `$HERMES_HOME/sessions`. `calls_used` is the fallback the agent passes. The larger of the session count and `calls_used` wins, and a session count is not capped. Past 80% of the cap, a non-final `photo_part_render` and a repeat validate of a file that already passed are refused with `Budget: deliver <file> now`. The first validate of a file, a checklist answer, and a render with `final` still run.
+- A build script that imports build123d, cadquery, or OCP when it is not installed names the libraries that are available, points at the matching template (for example `strap_hinge`), and says to use the trimesh/manifold path. The skill says to check the templates first and not to install or patch around the missing library.
+- Wall thickness corrects the cone-ray path by the cosine of the angle off the inward normal, so a 0.70 mm plate warns and an 0.80 mm plate does not. `tag_faces` and an export hook write `<stl>.faces.json` so thread, knurl, and tooth faces are left out of that check.
+- `python -m evals.runner --hermes-session` reads a session id or a JSON/JSONL/text export and counts the tool calls in it, including `<timestamp> TOOLCALL name` lines. The `bores_not_genus` prompt is a task that asks the agent to build and validate, not a statement to answer from the prompt.
+- Tool descriptions and the first lines of help output lead with `photo-to-part:photo-to-printable-part` and `skill_view("photo-to-part:photo-to-printable-part")`. The text says that id has no `plugin:` prefix.
+
 ## 0.1.9 — 2026-11-03
 
 - The tool budget is the whole Hermes session, default 40 calls (`PHOTO_PART_MAX_CALLS`). Pass `calls_used`. When it is omitted, `remaining` is estimated high. `next_step` starts with `Budget: deliver now.` at about 60% and again at about 80%, and adds `Stop exploring.` at 80%.
