@@ -121,8 +121,10 @@ segmentation initializers; saved reference exclusions on a rectified input use
 polygons. Invalid padding is masked from segmentation and image edges, and a fit
 touching unobserved padding is untrusted. Already-rectified input is identified
 by path/hash and is not warped again. Matrix-only legacy contexts and conflicting
-explicit scales produce a remeasurement error. Coin-ellipse hints no longer
-apply an uncalibrated image stretch; those overlays remain guides.
+explicit scales produce a remeasurement error. A foreshortened coin ellipse no longer
+applies an uncalibrated image stretch; that overlay remains a guide. A nearly circular
+coin is not treated as tilt. Observed photo-border pixels stay in the valid mask, and
+chamfer sampling uses the same half-pixel rounding as placement.
 
 Seven new regression tests cover metric landmarks and measured dimensions, identical
 overlays from source/saved images, center/origin paths, source-to-rectified seed and

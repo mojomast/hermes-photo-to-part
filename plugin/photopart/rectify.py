@@ -112,9 +112,12 @@ def valid_mask(record):
         with np.errstate(divide="ignore", invalid="ignore"):
             sx = (inverse[0, 0] * x + inverse[0, 1] * y + inverse[0, 2]) / denominator
             sy = (inverse[1, 0] * x + inverse[1, 1] * y + inverse[1, 2]) / denominator
+        # Pixel i covers [i - 0.5, i + 0.5]. A destination pixel whose center
+        # lands in that coverage is observed. A tighter center-only bound erases
+        # the source border, including samples warpPerspective already filled.
         valid[start:start + len(y)] = (np.isfinite(sx) & np.isfinite(sy)
-                                      & (sx >= -1e-7) & (sx <= width - 1 + 1e-7)
-                                      & (sy >= -1e-7) & (sy <= height - 1 + 1e-7))
+                                      & (sx >= -0.5) & (sx <= width - 0.5)
+                                      & (sy >= -0.5) & (sy <= height - 0.5))
     return valid
 
 

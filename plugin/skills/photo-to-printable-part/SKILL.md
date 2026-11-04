@@ -13,7 +13,7 @@ description: >-
   part, a fit-test print, an STL, a 2 mm grid-paper photo, or a scan cleaned
   into CAD. Call the photo_part_* tools. Read next_step. About 40 tool calls
   in total. Deliver as soon as validate passes.
-version: "0.1.17"
+version: "0.1.18"
 author: mojomast
 license: MIT
 compatibility: >-

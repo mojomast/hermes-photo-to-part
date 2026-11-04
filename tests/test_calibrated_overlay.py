@@ -7,10 +7,30 @@ from unittest.mock import patch
 
 import numpy as np
 
-from photopart.overlay import _place, _select_pose
+from photopart.overlay import _contour_points, _mask_center, _place, _rotated_samples, _select_pose
 
 
 class CalibratedOverlayTests(unittest.TestCase):
+    def test_chamfer_samples_use_the_same_half_pixel_rounding_as_placement(self):
+        # A 2px bar has its centroid on a half-pixel. Round-to-even sends the
+        # two columns to non-adjacent samples, so the chamfer score no longer
+        # describes the mask that gets placed.
+        model = np.ones((8, 2), dtype=bool)
+        foreground = np.zeros((40, 40), dtype=bool)
+        foreground[10:30, 10:13] = True
+        placed = _place(model, foreground, 0, False, close=False, scale_mode="fixed")
+        distance = np.where(placed, np.float32(0), np.float32(50))
+        samples = _rotated_samples(
+            _contour_points(model),
+            _mask_center(model),
+            _mask_center(foreground),
+            0,
+            False,
+            distance,
+        )
+        self.assertIsNotNone(samples)
+        self.assertEqual(float(np.max(samples)), 0.0)
+
     def test_half_pixel_translation_preserves_a_solid_calibrated_raster(self):
         model = np.ones((41, 81), dtype=bool)
         foreground = np.zeros((160, 160), dtype=bool)

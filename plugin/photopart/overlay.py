@@ -21,6 +21,26 @@ _MAGENTA = np.array([255.0, 0.0, 210.0])
 _ALPHA = 0.62
 
 
+def _foreshortened_coin(measure) -> bool:
+    """True when a coin ellipse is flattened enough to be a tilt hint.
+
+    The previous code stretched the photo for ratios in this band. That stretch
+    is not a calibrated plane transform, so the overlay stays in the source
+    frame and is guide-only. A nearly circular coin is not tilt.
+    """
+    if not isinstance(measure, dict):
+        return False
+    ellipse = measure.get("coin_ellipse")
+    if not isinstance(ellipse, dict):
+        return False
+    try:
+        raw = ellipse.get("ratio")
+        ratio = 1.0 if raw is None else float(raw)
+    except (TypeError, ValueError):
+        return False
+    return bool(math.isfinite(ratio) and 0.2 < ratio < 0.95)
+
+
 def paint_overlay(
     points: np.ndarray,
     faces: np.ndarray,
@@ -53,7 +73,7 @@ def paint_overlay(
         from photopart.rectify import map_points
 
         origin = tuple(map_points(frame["matrix"], [origin])[0])
-    if measure and measure.get("coin_ellipse") and not frame:
+    if _foreshortened_coin(measure) and not frame:
         angled = True
     height, width = image.shape[:2]
     model, minimum, maximum = raster_model(points, faces, photo_scale)
@@ -170,7 +190,7 @@ def paint_auto_views(
     image, roi, seed, exclude, frame, valid = _prepare_photo(
         image, photo, measure, photo_scale, roi, seed, exclude
     )
-    if measure and measure.get("coin_ellipse") and not frame:
+    if _foreshortened_coin(measure) and not frame:
         angled = True
     foreground, blob, roi_warnings, roi_expanded = _foreground_for_overlay(
         image, roi=roi, seed=seed, exclude=exclude, hints=True
@@ -458,6 +478,15 @@ def _mask_center(mask: np.ndarray):
     return float(xs.mean()), float(ys.mean())
 
 
+def _nearest_pixel(values) -> np.ndarray:
+    """Nearest integer, with half-integers rounding toward +inf.
+
+    ``np.rint`` breaks ties toward even. A half-pixel translation then collapses
+    alternate rows or columns. Placement and chamfer sampling share this rule.
+    """
+    return np.floor(np.asarray(values, dtype=float) + 0.5).astype(np.int32)
+
+
 def _rotated_samples(points, center, photo, angle: float, mirror: bool, dist: np.ndarray):
     mcx, mcy = center
     pcx, pcy = photo
@@ -470,8 +499,8 @@ def _rotated_samples(points, center, photo, angle: float, mirror: bool, dist: np
     sin_a = math.sin(rad)
     rx = cos_a * dx - sin_a * dy
     ry = sin_a * dx + cos_a * dy
-    qx = np.rint(pcx + rx).astype(np.int32)
-    qy = np.rint(pcy + ry).astype(np.int32)
+    qx = _nearest_pixel(pcx + rx)
+    qy = _nearest_pixel(pcy + ry)
     height, width = dist.shape
     keep = (qx >= 0) & (qy >= 0) & (qx < width) & (qy < height)
     if int(np.count_nonzero(keep)) < 8:
@@ -841,11 +870,11 @@ def _place(
     sin_a = math.sin(rad)
     rx = cos_a * dx - sin_a * dy
     ry = sin_a * dx + cos_a * dy
-    # Use a consistent nearest pixel at half-pixel translations. Round-to-even
-    # alternates ties between neighbours, collapsing rows/columns and leaving
-    # gaps when model and foreground have different pixel-count parity.
-    placed_x = np.floor(pcx + rx + 0.5).astype(np.int32)
-    placed_y = np.floor(pcy + ry + 0.5).astype(np.int32)
+    # Same nearest-pixel rule as chamfer sampling. Round-to-even alternates
+    # ties between neighbours, collapsing rows/columns and leaving gaps when
+    # model and foreground have different pixel-count parity.
+    placed_x = _nearest_pixel(pcx + rx)
+    placed_y = _nearest_pixel(pcy + ry)
     placed = np.zeros(foreground.shape, dtype=bool)
     keep = (placed_x >= 0) & (placed_y >= 0) & (placed_x < placed.shape[1]) & (placed_y < placed.shape[0])
     placed[placed_y[keep], placed_x[keep]] = True

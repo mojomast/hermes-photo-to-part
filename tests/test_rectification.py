@@ -107,6 +107,51 @@ class RectificationTests(unittest.TestCase):
             self.assertFalse(result["iou_trusted"])
             self.assertIn("padding", result["iou_trust_reason"])
 
+    def test_observed_border_pixels_are_not_erased_as_padding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photo = Path(tmp) / "photo.png"
+            image = np.zeros((100, 140, 3), dtype=np.uint8)
+            image[:, :] = (10, 20, 30)
+            image[0, -1] = (0, 255, 0)
+            Image.fromarray(image).save(photo)
+            quad = [[20, 15], [110, 18], [108, 80], [22, 84]]
+            record = plan(photo, image.shape, quad, 30, 12, 4)
+            warped, valid = warp_image(image, record)
+            mapped = map_points(record["matrix"], [[image.shape[1] - 1, 0]])[0]
+            x = int(np.floor(mapped[0] + 0.5))
+            y = int(np.floor(mapped[1] + 0.5))
+            self.assertTrue(valid[y, x])
+            self.assertEqual(warped[y, x].tolist(), [0, 255, 0])
+            self.assertLess(float(valid.mean()), 0.99)
+            self.assertTrue(np.any(~valid))
+            self.assertTrue(np.all(warped[~valid] == (10, 20, 30)))
+
+    def test_round_coin_ellipse_is_not_tilt_and_a_flat_one_does_not_stretch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image = np.full((160, 160, 3), 240, dtype=np.uint8)
+            image[50:110, 40:120] = 20
+            photo = root / "photo.png"
+            Image.fromarray(image).save(photo)
+            points = np.array([[0, 0], [16, 0], [16, 12], [0, 12]], dtype=float)
+            faces = np.array([[0, 1, 2], [0, 2, 3]])
+            for ratio, label in ((0.99, "measured"), (0.70, "guide_only")):
+                with self.subTest(ratio=ratio):
+                    output = paint_auto_views(
+                        [("front", points, faces)],
+                        photo,
+                        root / f"{ratio}.png",
+                        root / f"{ratio}-diff.png",
+                        photo_scale=5,
+                        measure={"coin_ellipse": {"ratio": ratio, "major_px": 40, "minor_px": 40 * ratio, "angle_deg": 10}},
+                    )
+                    self.assertEqual(output["overlay_iou_label"], label)
+                    self.assertEqual(output["photo_coordinate_frame"], "source")
+                    with Image.open(root / f"{ratio}.png") as painted:
+                        self.assertEqual(painted.size, (160, 160))
+                    angled = any("angled" in item.lower() for item in output["overlay_warnings"])
+                    self.assertEqual(angled, label == "guide_only")
+
     def test_canvas_cap_preserves_calibrated_landmark_distances(self):
         with tempfile.TemporaryDirectory() as tmp:
             photo, image = self.scene(Path(tmp))

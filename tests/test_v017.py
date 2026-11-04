@@ -63,10 +63,10 @@ def _kwargs_accepting(ctx, name, toolset, schema, handler, description="", **kwa
 
 
 class RegisterCompatTests(unittest.TestCase):
-    def test_version_is_0_1_7(self):
+    def test_version_is_0_1_18(self):
         from photopart import __version__
 
-        self.assertEqual(__version__, "0.1.17")
+        self.assertEqual(__version__, "0.1.18")
 
     def test_six_tools_register_against_hermes_v0217(self):
         ctx = HermesV0217Context()
