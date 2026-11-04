@@ -704,7 +704,8 @@ def openings(mesh) -> dict:
     Through-holes and blind bores whose depth is at least max(1 mm, 0.35 ×
     diameter) are bores. A blind dish shallower than that is a recess and is
     left out of ``hole_count``. Centred blind openings spanning at least 70%
-    of both transverse body dimensions are reported separately as cavities.
+    of both transverse body dimensions, with a thin closed end, are reported
+    separately as cavities.
     """
     key = _openings_key(mesh)
     if key is not None and key == _OPEN_CACHE[0]:
@@ -762,6 +763,8 @@ def _is_cap_cavity(mesh, bore: dict) -> bool:
     This geometric classification survives STL export. A through opening or
     pin clearance stays a bore; a small blind tap in a large body stays too.
     The 70% cutoff describes a thin enclosing skirt, not thread recognition.
+    Require a thin closed end too: a broad blind bore in thick stock is not
+    a cap. The axial depth probe has 0.45 mm station spacing.
     """
     if bore.get("through") or bore.get("kind") == "pin_clearance":
         return False
@@ -772,7 +775,9 @@ def _is_cap_cavity(mesh, bore: dict) -> bool:
     diameter = float(bore.get("diameter") or 0.0)
     center = np.asarray(bore["center"], dtype=float)[perp]
     midpoint = np.mean(bounds, axis=0)
+    closed_end = float(mesh.extents[axis]) - float(bore.get("depth_mm") or 0.0)
     return bool(diameter > 0 and np.all(diameter >= 0.7 * spans)
+                and closed_end <= max(1.5, 0.15 * diameter) + 0.45
                 and np.all(np.abs(center - midpoint) <= 0.05 * spans))
 
 

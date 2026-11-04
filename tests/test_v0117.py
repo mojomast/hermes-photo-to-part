@@ -91,6 +91,14 @@ class CapTests(unittest.TestCase):
                 self.assertEqual(found["bores"][0]["through"], through)
                 self.assertEqual(found["cavities"], [])
 
+    def test_broad_blind_bore_in_thick_stock_is_not_a_cap_cavity(self):
+        body = _cylinder_z(8, 12, 0, 0, 0, segments=64)
+        cutter = _cylinder_z(6, 9, 0, 0, 4, segments=64)
+        found = openings(_as_mesh(_difference(body, [cutter])))
+        self.assertEqual(len(found["bores"]), 1)
+        self.assertFalse(found["bores"][0]["through"])
+        self.assertEqual(found["cavities"], [])
+
 
 class PhotoContextTests(unittest.TestCase):
     def test_user_dimension_keeps_the_part_in_the_overlay_and_render_reuses_context(self):
