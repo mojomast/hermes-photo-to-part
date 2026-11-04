@@ -486,13 +486,20 @@ def _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=None) ->
     iou = None
     if foreground is not None and placed is not None:
         iou = round(float(_iou(placed, foreground)), 4)
-    trusted = segmentation != "low" and iou is not None
+    trusted = overall != "low" and iou is not None and iou > 0.0
+    trust_reasons = []
+    if segmentation == "low":
+        trust_reasons.append(gate["reason"])
+    if fit_confidence == "low" or iou == 0.0:
+        trust_reasons.append("overlay fit is low; do not use it to change geometry")
+    if iou is None:
+        trust_reasons.append("overlay fit is unavailable")
     return {
         "chamfer_px": metrics.get("chamfer_px"),
         "chamfer_norm": metrics.get("chamfer_norm"),
         "iou": iou,
         "iou_trusted": bool(trusted),
-        "iou_trust_reason": None if trusted else gate["reason"],
+        "iou_trust_reason": None if trusted else "; ".join(trust_reasons),
         "stability": gate["stability"],
         "segmentation_confidence": segmentation,
         "confidence": segmentation,

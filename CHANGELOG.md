@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.17 — 2026-11-04
+
+- An overlay is trusted only when both segmentation and fit are usable. Zero overlap is untrusted even with a stable foreground mask, with an explicit fit reason. The numeric IoU remains visible.
+- The bottle-cap template now has a closed top (`top_thickness_mm`, default 1.2 mm). `length_mm` is total height and `outer_diameter_mm` includes the knurl crests. Straight ribs no longer extend beyond their intended radius or intrude into an internal thread. Invalid top thickness and insufficient thread wall are rejected.
+- Broad, centred blind openings spanning at least 70% of both transverse body dimensions are classified as `cavities`, outside `hole_count`. This is a geometric thin-skirt heuristic, not thread recognition. Through-holes, pin clearances, small blind taps, and shallow recesses retain their existing classifications. Archived specs that counted a cap cavity as a bore now correctly fail that count; their original specs are preserved.
+- A known, visible user-given part dimension can calibrate a photo without a coin or ruler: pass `reference_is_part: true` to measure. The part is kept in the foreground, the scale provenance is reported, and the overlay is labelled as a guide rather than independent size verification. The skill uses this path for photo comparison.
+- Render reuses photo context from the mesh's project directory, including reference exclusion and perspective flags, and refuses to borrow measurements for a different explicit photo. A missing scale is reported as `overlay_status: missing_scale` with a measurement next step instead of silently omitting the comparison.
+- The Hermes integration test validates `plugin/`, not the repository-root refusal stub.
+
 ## 0.1.16 — 2026-11-04
 
 - A terminal or code tool that runs a photo-to-part build asks for the same Hermes approval as `photo_part_build` (`rule_key` `photo_part_build`). That covers `python build.py`, `photo-part-build`, `python -m photopart.build_run` or `photopart.stamp`, a CadQuery or build123d export, and a Python file whose text imports those modules or writes an STL, STEP, STP, or 3MF. `ls`, `cat`, `echo`, `rg`, and `pytest` are not builds. `PHOTOPART_BUILD_APPROVAL=allow` (also `yes`, `true`, `1`, `off`, `skip`) skips the prompt. Anything else still asks, and Hermes blocks the command when nobody can approve.

@@ -36,6 +36,7 @@ def mesh_facts(mesh) -> dict:
         "bodies": bodies,
         "bores": found["bores"],
         "recesses": found["recesses"],
+        "cavities": found["cavities"],
         "sections_mm2": section_areas_mm2(mesh),
     }
 

@@ -44,10 +44,12 @@ class LiveRoundTests(unittest.TestCase):
             self.assertEqual(detected["knuckles"], expect["knuckles"], row.get("note"))
         if "cylinders_max" in expect:
             self.assertLessEqual(detected["cylinders"], expect["cylinders_max"])
-        if "bores" in expect or expect.get("dish_not_bore"):
+        if "bores" in expect or "cavities" in expect or expect.get("dish_not_bore"):
             found = openings(mesh)
             if "bores" in expect:
                 self.assertEqual(len(found["bores"]), expect["bores"], found["bores"])
+            if "cavities" in expect:
+                self.assertEqual(len(found["cavities"]), expect["cavities"], found)
             if expect.get("dish_not_bore"):
                 wide = [bore for bore in found["bores"] if float(bore.get("diameter") or 0) >= 12.0]
                 self.assertEqual(wide, [], "a decorative dish is a recess, not a bore")

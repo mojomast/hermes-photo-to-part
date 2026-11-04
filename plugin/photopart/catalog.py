@@ -91,8 +91,8 @@ SHAPES: dict[str, dict] = {
         "params": {"designation": "M3", "body_length_mm": 6.0, "thread_length_mm": 3.0},
     },
     "bottle_cap": {
-        "summary": "Cap with an internal thread and straight knurl.",
-        "params": {"diameter_mm": 20.0, "pitch_mm": 3.0, "length_mm": 8.0, "outer_diameter_mm": 26.0, "knurl_count": 16},
+        "summary": "Closed cap with an internal thread. diameter_mm is the thread nominal; outer_diameter_mm includes the knurl crests; length_mm is total height.",
+        "params": {"diameter_mm": 20.0, "pitch_mm": 3.0, "length_mm": 8.0, "outer_diameter_mm": 26.0, "knurl_count": 16, "top_thickness_mm": 1.2},
     },
     "spur_gear": {
         "summary": "Involute gear. Tip diameter is module_mm * (teeth + 2). Root diameter is module_mm * (teeth - 2.5).",
@@ -159,8 +159,8 @@ FEATURES: dict[str, dict] = {
         "summary": "Hex body, blind bore, male thread on +Z.",
     },
     "bottle_cap": {
-        "signature": "bottle_cap(diameter=20, pitch=3, length=8, outer_diameter=26, knurl_count=16)",
-        "summary": "Internal thread plus straight knurl.",
+        "signature": "bottle_cap(diameter=20, pitch=3, length=8, outer_diameter=26, knurl_count=16, top_thickness=1.2)",
+        "summary": "Closed cap. diameter is the thread nominal, outer_diameter includes knurls, length includes the top.",
     },
     "spur_gear": {
         "signature": "spur_gear(module, teeth, pressure_angle=20, face_width, bore=None, keyway_width=None, keyway_depth=None, d_flat=None, hub_diameter=None, hub_length=None)",

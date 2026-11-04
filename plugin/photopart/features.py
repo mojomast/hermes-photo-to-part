@@ -234,28 +234,44 @@ def bottle_cap(
     length: float = 8.0,
     outer_diameter: float = 26.0,
     knurl_count: int = 16,
+    top_thickness: float = 1.2,
 ) -> trimesh.Trimesh:
-    """Coarse internal thread with straight knurl ridges. One shell, not a stack of ribs."""
+    """Closed cap; length is total height and outer_diameter includes the knurls."""
+    length = _positive("length", length)
+    outer_r = _positive("outer_diameter", outer_diameter) / 2.0
+    top_thickness = _positive("top_thickness", top_thickness)
+    if top_thickness >= length:
+        raise ValueError("top_thickness must be less than length")
+    knurl_count = int(knurl_count)
+    if not 6 <= knurl_count <= 60:
+        raise ValueError("knurl_count must be from 6 to 60")
+    depth = max(0.35, outer_r * 0.04)
+    core_r = outer_r - depth
+    thickness = min(max(0.7, outer_r * 0.1), 2.0 * math.pi * core_r / knurl_count * 0.55)
+    # Even a rib's outer corners must fit inside the requested crest diameter.
+    tip_r = math.sqrt(outer_r ** 2 - (thickness / 2.0) ** 2)
+    cavity_depth = length - top_thickness
     cap = internal_thread(
         diameter=diameter,
         pitch=pitch,
-        length=length,
-        outer_diameter=outer_diameter,
+        # Overlap the top rather than joining two float32 surfaces edge-to-edge.
+        length=cavity_depth + top_thickness * 0.5,
+        outer_diameter=2.0 * core_r,
         segments_per_turn=10,
     )
-    outer_r = float(outer_diameter) / 2.0
     ribs = _straight_ribs(
-        outer_r * 0.92,
-        length * 0.82,
-        int(knurl_count),
-        tooth=max(0.6, outer_r * 0.08),
-        thickness=max(0.7, outer_r * 0.1),
+        core_r,
+        cavity_depth * 0.82,
+        knurl_count,
+        tooth=tip_r - core_r,
+        thickness=thickness,
     )
     # Drop the ribs onto the cap wall. internal_thread starts at z=0.
-    shifted = [rib.translate((0.0, 0.0, length * 0.09)) for rib in ribs]
-    mesh = _as_one(_union([_ingest(cap), *shifted]))
+    shifted = [rib.translate((0.0, 0.0, cavity_depth * 0.09)) for rib in ribs]
+    top = _cylinder(top_thickness, outer_r, segments=96).translate((0.0, 0.0, cavity_depth))
+    mesh = _as_one(_union([_ingest(cap), top, *shifted]))
     # Include the thread runout at both ends. Those crests are not a wall.
-    _tag_thread_crest(mesh, diameter, pitch, z_max=length + 1.0, internal=True)
+    _tag_thread_crest(mesh, diameter, pitch, z_max=cavity_depth, internal=True)
     _tag_knurl(mesh, outer_diameter / 2.0)
     return mesh
 
@@ -534,8 +550,9 @@ def _straight_ribs(radius, length, count, *, tooth, thickness):
     ribs = []
     for index in range(count):
         angle = 360.0 * index / count
-        # Overlaps the core: the box starts inside the radius.
-        rib = _box(radius * 0.55 + tooth, thickness, length).translate((radius * 0.72, -thickness / 2.0, 0.0))
+        # Only a shallow overlap: ribs on a hollow cap must not fill its thread.
+        start = radius - min(0.2, tooth * 0.5)
+        rib = _box(radius + tooth - start, thickness, length).translate((start, -thickness / 2.0, 0.0))
         ribs.append(rib.rotate((0.0, 0.0, angle)))
     return ribs
 

@@ -264,7 +264,7 @@ class PluginTests(unittest.TestCase):
         front = text.split("---", 2)[1]
         meta = yaml.safe_load(front)
         self.assertEqual(meta["name"], "photo-to-printable-part")
-        self.assertEqual(meta["version"], "0.1.16")
+        self.assertEqual(meta["version"], "0.1.17")
         description = meta["description"].strip()
         self.assertLessEqual(len(description), 1024)
         self.assertIn("STL", description)
@@ -285,8 +285,8 @@ class PluginTests(unittest.TestCase):
         manifest = yaml.safe_load((PLUGIN / "plugin.yaml").read_text(encoding="utf-8"))
         project = tomllib.loads((PLUGIN / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "photo-to-part")
-        self.assertEqual(manifest["version"], "0.1.16")
-        self.assertEqual(project["project"]["version"], "0.1.16")
+        self.assertEqual(manifest["version"], "0.1.17")
+        self.assertEqual(project["project"]["version"], "0.1.17")
         self.assertEqual(manifest["python_dependencies"], project["project"]["dependencies"])
         from photopart.tools import TOOL_NAMES
 
@@ -803,7 +803,9 @@ class GuidanceTests(unittest.TestCase):
         text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("photo-to-part:photo-to-printable-part", text)
         self.assertIn("`plugin:photo-to-part:photo-to-printable-part` is not a skill name", text)
-        self.assertIn("Use one photo_part_validate and one photo_part_render per version.", text)
+        self.assertIn("It renders automatically and reuses the project's measurement for the overlay.", text)
+        self.assertIn("reference_is_part: true", text)
+        self.assertIn("render.overlay_status", text)
         self.assertIn("Do not write an overlay script.", text)
         self.assertIn("Do not delete a file the user told you to skip.", text)
         self.assertIn("Do not claim the part passed a fit test", text)

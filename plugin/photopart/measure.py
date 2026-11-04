@@ -330,7 +330,8 @@ def measure(payload: dict) -> dict:
         "diameter_mm": None if diameter_mm is None else float(diameter_mm),
         "ruler_mm": None if ruler_mm is None else float(ruler_mm),
         "reference_px": reference_px,
-        "reference_bbox": _reference_bbox(kind, bbox_pair, reference_px, coin_detect),
+        "reference_bbox": None if payload.get("reference_is_part") else _reference_bbox(kind, bbox_pair, reference_px, coin_detect),
+        "reference_is_part": bool(payload.get("reference_is_part")),
         "coin_px": None if coin_detect is None else coin_detect.get("coin_px"),
         "coin_detect": None if coin_detect is None else coin_detect.get("coin_detect"),
         "coin_ellipse": None if coin_detect is None else coin_detect.get("coin_ellipse"),
@@ -428,9 +429,10 @@ def _write_last_measure(report: dict, payload: dict) -> Path | None:
     image = payload.get("image")
     body = {
         "px_per_mm": report.get("px_per_mm"),
-        "roi": payload.get("roi"),
-        "seed": payload.get("seed"),
+        "roi": payload.get("roi") if payload.get("roi") is not None else _box(payload.get("part_roi"), "part_roi"),
+        "seed": payload.get("seed") if payload.get("seed") is not None else payload.get("part_seed"),
         "reference_bbox": report.get("reference_bbox"),
+        "reference_is_part": bool(report.get("reference_is_part")),
         "part_bbox_mm": report.get("part_bbox_mm"),
         "image": None if not image else str(Path(str(image)).expanduser().resolve()),
         "angled": bool(report.get("angled")),
@@ -449,7 +451,7 @@ def _write_last_measure(report: dict, payload: dict) -> Path | None:
     return directory
 
 
-def load_last_measure(*dirs) -> dict | None:
+def load_last_measure(*dirs, image=None) -> dict | None:
     """Scale hint for one project. Skips the plugin install and the source checkout."""
     from photopart.paths import not_a_project
 
@@ -471,6 +473,10 @@ def load_last_measure(*dirs) -> dict | None:
             continue
         if not isinstance(loaded, dict) or not loaded.get("px_per_mm"):
             continue
+        if image is not None:
+            saved_image = loaded.get("image")
+            if not saved_image or Path(saved_image).expanduser().resolve() != Path(image).expanduser().resolve():
+                continue
         project = loaded.get("project")
         if isinstance(project, str) and project.strip():
             try:
@@ -723,7 +729,9 @@ def _measure_part(image_path, px_per_mm, coin_detect, seed, roi, payload) -> dic
     """Part length and width in millimetres from a seed, a box, or the non-coin blob."""
     path = Path(image_path).expanduser()
     image = np.array(Image.open(path).convert("RGB"))
-    if coin_detect is None:
+    if payload.get("reference_is_part"):
+        coin_detect = None
+    elif coin_detect is None:
         try:
             coin_detect = _detect_coin(image)
         except ValueError:
@@ -929,6 +937,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--coin", help="Denomination id, such as euro_1 or us_quarter.")
     parser.add_argument("--diameter-mm", type=float, help="Reference diameter when it is not a known coin.")
     parser.add_argument("--diameter-px", type=float, help="That diameter in pixels.")
+    parser.add_argument("--reference-is-part", action="store_true", help="The known span belongs to the part; do not exclude it from the overlay.")
     parser.add_argument("--points", help="Two pixels x1,y1,x2,y2 spanning the coin or the ruler.")
     parser.add_argument("--ruler-mm", type=float, help="Real length between --points, in millimetres.")
     parser.add_argument("--quad", help="Four pixels TL,TR,BR,BL as x,y,x,y,x,y,x,y.")
@@ -956,6 +965,8 @@ def main(argv: list[str] | None = None) -> int:
             payload["diameter_mm"] = args.diameter_mm
         if args.diameter_px is not None:
             payload["diameter_px"] = args.diameter_px
+        if args.reference_is_part:
+            payload["reference_is_part"] = True
         if args.ruler_mm is not None:
             payload["ruler_mm"] = args.ruler_mm
         if args.width_mm is not None:

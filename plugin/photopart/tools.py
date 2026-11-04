@@ -441,8 +441,8 @@ def _maybe_render(args: dict, report: dict) -> None:
     cwd = Path.cwd().resolve()
     if not not_a_project(cwd):
         dirs.append(cwd)
-    hint = load_last_measure(*dirs) or {}
     photo = _optional_str(args, "photo")
+    hint = load_last_measure(*dirs, image=photo) or {}
     if not photo and isinstance(hint.get("image"), str):
         candidate = Path(hint["image"])
         if candidate.is_file():
@@ -484,6 +484,8 @@ def _maybe_render(args: dict, report: dict) -> None:
     report["render"] = {
         "sheet": None if not isinstance(manifest, dict) else manifest.get("sheet"),
         "overlay": None if not isinstance(manifest, dict) else manifest.get("overlay"),
+        "overlay_status": None if not isinstance(manifest, dict) else manifest.get("overlay_status"),
+        "next_step": None if not isinstance(manifest, dict) else manifest.get("next_step"),
         "alignment": alignment,
         "photo": photo,
         "photo_scale": scale,
@@ -491,6 +493,8 @@ def _maybe_render(args: dict, report: dict) -> None:
         "ok": bool(isinstance(manifest, dict) and manifest.get("ok")),
         "error": None if not isinstance(manifest, dict) else manifest.get("error"),
     }
+    if report["render"].get("overlay_status") == "missing_scale":
+        report["next_step"] = report["render"]["next_step"]
 
 
 def render_tool(params, **_kwargs) -> str:
@@ -1136,7 +1140,7 @@ def tool_specs() -> list[dict]:
     measure = {
         "name": "photo_part_measure",
         "description": _lead(
-            "Pixel-to-millimetre scale from a coin or a ruler. Returns reference_bbox so render can exclude that object, and absolute paths. "
+            "Pixel-to-millimetre scale from a coin, ruler, or a user-given part dimension. Returns reference_bbox so render can exclude a separate reference, and absolute paths. "
             "Pass auto, part_seed, or part_roi to size the part. Do not open the photo with cv2 or PIL."
         ),
         "schema": _schema(
@@ -1155,6 +1159,10 @@ def tool_specs() -> list[dict]:
                 "coin": {"type": "string", "description": "euro_1, euro_2, euro_50c, us_quarter, us_penny, us_nickel, us_dime, us_half, gbp_1, cad_quarter, cad_loonie."},
                 "diameter_mm": {"type": "number", "description": "Reference diameter when it is not a known coin."},
                 "diameter_px": {"type": "number", "description": "That diameter in source-image pixels."},
+                "reference_is_part": {"type": "boolean", "description": "True when points span a user-given part dimension rather than a separate coin or ruler. Keeps the part in the overlay mask. This scale is not independent dimensional verification."},
+                "out_dir": {"type": "string", "description": "Absolute project directory for last_measure.json so validate/render can reuse this photo and scale."},
+                "roi": {"type": "array", "description": "Part overlay region [x, y, width, height] in pixels."},
+                "seed": {"type": "array", "description": "One [x, y] pixel on the part for the overlay."},
                 "points": {
                     "type": "array",
                     "description": "Two [x, y] pixels spanning the coin diameter or the ruler length.",
