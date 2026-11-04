@@ -22,10 +22,11 @@
       "mesh": "meshes/r10_b_bottlecap.stl",
       "spec": "specs/r10_b_bottlecap.json",
       "sidecar": "meshes/r10_b_bottlecap.stl.faces.json",
-      "note": "Copied cap, with and without its sidecar: no thin-wall warning.",
+      "note": "Copied cap, with and without its sidecar: no thin-wall warning. The original spec counts its broad blind cavity as a bore; v0.1.17 correctly rejects that count.",
       "expect": {
-        "bores": 1,
-        "spec_pass": true,
+        "bores": 0,
+        "cavities": 1,
+        "spec_pass": false,
         "wall_warning": false,
         "cylinders_max": 0
       }
@@ -245,10 +246,11 @@
       "mesh": "meshes/r12_b_bottlecap.stl",
       "spec": "specs/r12_b_bottlecap.json",
       "sidecar": "meshes/r12_b_bottlecap.stl.faces.json",
-      "note": "Sidecar hash does not match. v0.1.13 warned. Detection must keep the wall quiet.",
+      "note": "Sidecar hash does not match. v0.1.13 warned. Detection must keep the wall quiet. The original spec counts its broad blind cavity as a bore; v0.1.17 correctly rejects that count.",
       "expect": {
-        "bores": 1,
-        "spec_pass": true,
+        "bores": 0,
+        "cavities": 1,
+        "spec_pass": false,
         "wall_warning": false,
         "cylinders_max": 0
       }

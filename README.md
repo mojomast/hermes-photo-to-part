@@ -4,7 +4,7 @@ Hermes plugin that turns photos, a few measurements, or a messy 3D scan into a p
 
 It is a community plugin by [Kyle Durepos](https://github.com/mojomast). It is not a Nous Research product. The method is inspired by Michael Lydick's video [I'm an Engineer. This ChatGPT Test Scared Me.](https://www.youtube.com/watch?v=TUqScwjnO_k) The sample in this repo is a generic plate with a hook, not a copy of the object in that video.
 
-0.1.16 gates a photo-to-part build that an agent runs from the terminal (`python build.py`, CadQuery, build123d, or `photopart.build_run`) with the same approval as `photo_part_build`. Install the `plugin/` directory so `evals/` and `tests/` are not copied into Hermes. 0.1.15, from [@teknium1](https://github.com/teknium1): `photo_part_build` asks for approval before it runs a script, and output paths that Hermes's write denylist refuses are rejected. A rectified measure PNG must end in `.png` and is not replaced unless `overwrite` is set.
+0.1.17 fixes overlay trust, builds closed bottle caps to the requested outer diameter, and reports broad blind cap cavities separately from bores. Photo comparisons can use a visible user-given dimension when no coin or ruler is present; a missing scale is reported with a next step. See [CHANGELOG.md](CHANGELOG.md) for details. Install the `plugin/` directory so `evals/` and `tests/` are not copied into Hermes. Build approval and protected output paths from 0.1.15–0.1.16 remain in place.
 
 ![Catalog banner](docs/catalog-banner.png)
 

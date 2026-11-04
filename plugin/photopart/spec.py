@@ -119,6 +119,12 @@ def apply_spec(mesh, *, spec=None, dims=None, tolerance: float = 0.3) -> tuple[l
                     f"{len(recesses)} shallow dish(es) or recess(es) are not bores. "
                     "Do not add them to hole_count."
                 )
+            if found["cavities"]:
+                extra["cavities"] = found["cavities"]
+                extra["cavity_note"] = (
+                    "A broad blind cavity enclosed by a thin skirt is not a fastening bore. "
+                    "Do not add it to hole_count."
+                )
             if info.get("reason") and not info.get("reliable"):
                 extra["genus_reason"] = info["reason"]
             # Zero bores plus a positive genus, or a genus we cannot trust,
@@ -693,22 +699,31 @@ _OPEN_CACHE: list = [None, None]
 
 
 def openings(mesh) -> dict:
-    """Circular bores, and the shallow dishes that are not bores.
+    """Circular bores, shallow recesses, and broad blind cap cavities.
 
     Through-holes and blind bores whose depth is at least max(1 mm, 0.35 ×
     diameter) are bores. A blind dish shallower than that is a recess and is
-    left out of ``hole_count``.
+    left out of ``hole_count``. Centred blind openings spanning at least 70%
+    of both transverse body dimensions, with a thin closed end, are reported
+    separately as cavities.
     """
     key = _openings_key(mesh)
     if key is not None and key == _OPEN_CACHE[0]:
         return _OPEN_CACHE[1]
     if mesh is None or len(getattr(mesh, "faces", [])) == 0:
-        result = {"bores": [], "recesses": []}
+        result = {"bores": [], "recesses": [], "cavities": []}
     else:
         merged = _merge_bores(_bores_from_sections(mesh), _bores_from_rays(mesh))
         marked = _mark_through(mesh, merged)
         bores, recesses = _split_recesses(mesh, marked)
-        result = {"bores": bores, "recesses": recesses}
+        cavities = []
+        kept = []
+        for bore in bores:
+            if _is_cap_cavity(mesh, bore):
+                cavities.append({**bore, "kind": "cavity"})
+            else:
+                kept.append(bore)
+        result = {"bores": kept, "recesses": recesses, "cavities": cavities}
     if key is not None:
         _OPEN_CACHE[0] = key
         _OPEN_CACHE[1] = result
@@ -733,12 +748,37 @@ def count_bores(mesh) -> list[dict]:
 
     A blind opening whose depth is under max(1 mm, 0.35 × diameter) is a
     recess, not a bore. Decorative dishes fail that test. Through-holes and
-    pin-clearance bores of meaningful depth stay.
+    pin-clearance bores of meaningful depth stay. Broad centred blind cap
+    cavities are reported by :func:`openings` separately from fastening bores.
 
     trimesh's ``section_multiplane`` needs scipy, which this plugin does not
     install. The slices are computed with numpy and shapely.
     """
     return openings(mesh)["bores"]
+
+
+def _is_cap_cavity(mesh, bore: dict) -> bool:
+    """A centred blind opening occupying most of both transverse body dimensions.
+
+    This geometric classification survives STL export. A through opening or
+    pin clearance stays a bore; a small blind tap in a large body stays too.
+    The 70% cutoff describes a thin enclosing skirt, not thread recognition.
+    Require a thin closed end too: a broad blind bore in thick stock is not
+    a cap. The axial depth probe has 0.45 mm station spacing.
+    """
+    if bore.get("through") or bore.get("kind") == "pin_clearance":
+        return False
+    axis = {"x": 0, "y": 1, "z": 2}[str(bore["axis"])]
+    perp = [i for i in range(3) if i != axis]
+    bounds = np.asarray(mesh.bounds, dtype=float)[:, perp]
+    spans = bounds[1] - bounds[0]
+    diameter = float(bore.get("diameter") or 0.0)
+    center = np.asarray(bore["center"], dtype=float)[perp]
+    midpoint = np.mean(bounds, axis=0)
+    closed_end = float(mesh.extents[axis]) - float(bore.get("depth_mm") or 0.0)
+    return bool(diameter > 0 and np.all(diameter >= 0.7 * spans)
+                and closed_end <= max(1.5, 0.15 * diameter) + 0.45
+                and np.all(np.abs(center - midpoint) <= 0.05 * spans))
 
 
 def _openings_key(mesh):

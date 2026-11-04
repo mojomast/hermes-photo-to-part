@@ -15,6 +15,7 @@ from evals.runner import HermesV0217Context, load_plugin_register, registration_
 from photopart.tools import TOOL_NAMES, _call_register_tool, register_tools, tool_specs, validate_tool
 
 ROOT = Path(__file__).resolve().parents[1]
+PLUGIN = ROOT / "plugin"
 
 
 def _plugin_register():
@@ -65,7 +66,7 @@ class RegisterCompatTests(unittest.TestCase):
     def test_version_is_0_1_7(self):
         from photopart import __version__
 
-        self.assertEqual(__version__, "0.1.16")
+        self.assertEqual(__version__, "0.1.17")
 
     def test_six_tools_register_against_hermes_v0217(self):
         ctx = HermesV0217Context()
@@ -214,18 +215,18 @@ class HermesCliTests(unittest.TestCase):
         home = tempfile.mkdtemp(prefix="hermes-home-")
         env = dict(os.environ)
         env["HERMES_HOME"] = home
-        env["PYTHONPATH"] = str(ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(PLUGIN) + os.pathsep + env.get("PYTHONPATH", "")
         validate = subprocess.run(
-            [hermes, "plugins", "validate", str(ROOT)],
-            cwd=ROOT,
+            [hermes, "plugins", "validate", str(PLUGIN)],
+            cwd=PLUGIN,
             env=env,
             capture_output=True,
             text=True,
             check=False,
         )
         doctor = subprocess.run(
-            [hermes, "plugins", "doctor", str(ROOT), "--ci"],
-            cwd=ROOT,
+            [hermes, "plugins", "doctor", str(PLUGIN), "--ci"],
+            cwd=PLUGIN,
             env=env,
             capture_output=True,
             text=True,

@@ -511,13 +511,16 @@ def _bottle_cap(params: dict):
     length = _require_positive("length_mm", _number(params, "length_mm", 8.0))
     outer = _require_positive("outer_diameter_mm", _number(params, "outer_diameter_mm", 26.0))
     count = int(_number(params, "knurl_count", 16))
-    mesh = bottle_cap(diameter=diameter, pitch=pitch, length=length, outer_diameter=outer, knurl_count=count)
+    top = _require_positive("top_thickness_mm", _number(params, "top_thickness_mm", 1.2))
+    mesh = bottle_cap(diameter=diameter, pitch=pitch, length=length, outer_diameter=outer, knurl_count=count,
+                     top_thickness=top)
     resolved = {
         "diameter_mm": diameter,
         "pitch_mm": pitch,
         "length_mm": length,
         "outer_diameter_mm": outer,
         "knurl_count": count,
+        "top_thickness_mm": top,
     }
     return mesh, resolved, 1
 

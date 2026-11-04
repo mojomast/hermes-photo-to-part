@@ -577,7 +577,7 @@ def render_views(
         raise ValueError("--overlay-origin needs --photo-scale")
     if overlay_fit not in ("center", "auto"):
         raise ValueError("overlay fit must be center or auto")
-    if overlay_fit == "auto" and (photo is None or photo_scale is None):
+    if overlay_fit == "auto" and photo is None:
         raise ValueError("--overlay-fit auto needs --photo and --photo-scale")
     out_dir = absolute_path(out_dir)
     axes = choose_axes(mesh.extents, up=up, front_axis=front_axis)
@@ -679,6 +679,7 @@ def render_views(
         "views": written,
         "compare_front": compare,
         "overlay": overlay,
+        "overlay_status": "created" if overlay else ("missing_scale" if photo is not None else "not_requested"),
         "overlay_fit": overlay_report.get("overlay_fit"),
         "overlay_iou": overlay_report.get("overlay_iou"),
         "overlay_iou_label": overlay_report.get("overlay_iou_label"),
@@ -700,6 +701,11 @@ def render_views(
     }
     if unit_meta is not None:
         attach_units(manifest, unit_meta)
+    if measure and measure.get("reference_is_part"):
+        manifest["photo_scale_source"] = "user_part_dimension"
+        manifest["photo_scale_note"] = "Scale uses a user-given part dimension; the overlay is not an independent size check."
+        if manifest.get("overlay_iou_label") == "measured":
+            manifest["overlay_iou_label"] = "guide_only"
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -845,33 +851,35 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
     try:
         loaded = load_mesh(mesh_path, max_bytes=args.max_bytes)
         mesh, meta = prepare_mesh(loaded, args.units, args.scale)
-        photo = None
-        if args.photo:
-            photo = resolve_file(args.photo, max_bytes=args.max_bytes, label="photo")
         origin = None if args.overlay_origin is None else _parse_origin(args.overlay_origin)
-        measure_hint = None
-        if args.photo and (args.photo_scale is None or args.roi is None or args.seed is None):
-            from photopart.measure import load_last_measure
-            from photopart.paths import not_a_project
+        from photopart.measure import load_last_measure
 
-            photo_path = Path(args.photo).expanduser()
-            candidates = [photo_path.resolve().parent, out_dir, Path.cwd()]
-            candidates = [item for item in candidates if not not_a_project(item)]
-            hint = load_last_measure(*candidates)
-            if hint:
-                if args.photo_scale is None and hint.get("px_per_mm"):
-                    args.photo_scale = float(hint["px_per_mm"])
-                if args.roi is None and hint.get("roi"):
-                    args.roi = _roi_text(hint["roi"])
-                if args.seed is None and hint.get("seed"):
-                    args.seed = _pair_text(hint["seed"])
-                measure_hint = hint
-            else:
-                measure_hint = None
+        candidates = [mesh_path.parent]
+        if args.photo:
+            candidates.append(Path(args.photo).expanduser().resolve().parent)
+        candidates.extend([out_dir, Path.cwd()])
+        measure_hint = load_last_measure(*candidates, image=args.photo)
+        if measure_hint:
+            if not args.photo and measure_hint.get("image"):
+                args.photo = measure_hint["image"]
+            if args.photo:
+                if args.photo_scale is None and measure_hint.get("px_per_mm"):
+                    args.photo_scale = float(measure_hint["px_per_mm"])
+                if args.roi is None and measure_hint.get("roi"):
+                    args.roi = _roi_text(measure_hint["roi"])
+                if args.seed is None and measure_hint.get("seed"):
+                    args.seed = _pair_text(measure_hint["seed"])
+        photo = None if not args.photo else resolve_file(args.photo, max_bytes=args.max_bytes, label="photo")
         roi = None if args.roi is None else _parse_rect(args.roi)
         seed = None if args.seed is None else _parse_pair(args.seed, "--seed")
         exclude = [_parse_rect(item) for item in args.exclude_roi]
         angled = bool(args.angled)
+        if measure_hint:
+            from photopart.measure import load_measure_hints
+
+            extra, flagged = load_measure_hints(measure_hint)
+            exclude.extend(extra)
+            angled = angled or flagged
         if args.measure_json:
             from photopart.measure import load_measure_hints
 
@@ -923,8 +931,14 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         validation_ok=stamp["validation_ok"],
     )
     alignment = manifest.get("alignment") or {}
-    if isinstance(alignment, dict) and alignment.get("confidence") == "low":
+    if isinstance(alignment, dict) and alignment.get("overall_confidence") == "low":
         step = OVERLAY_LOW_STEP
+    if manifest.get("overlay_status") == "missing_scale":
+        step = (
+            "Overlay missing: call photo_part_measure with image and a known in-plane span "
+            "(diameter_mm or ruler_mm, plus points). Set reference_is_part true for a user-given "
+            "part dimension, then photo_part_render with overlay_fit auto."
+        )
     attach_flow(manifest, step)
     return 0, manifest
 
