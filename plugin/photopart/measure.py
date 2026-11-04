@@ -145,8 +145,8 @@ def _quad(value) -> np.ndarray:
 
 def quad_px_per_mm(quad: np.ndarray, width_mm: float, height_mm: float) -> float:
     """Average the two width edges and the two height edges of a TL,TR,BR,BL quad."""
-    if width_mm <= 0 or height_mm <= 0:
-        raise ValueError("width_mm and height_mm must be positive")
+    if not all(np.isfinite(v) and v > 0 for v in (width_mm, height_mm)):
+        raise ValueError("width_mm and height_mm must be finite and positive")
     top = _distance(quad[0], quad[1])
     bottom = _distance(quad[3], quad[2])
     left = _distance(quad[0], quad[3])
@@ -288,8 +288,13 @@ def measure(payload: dict) -> dict:
 
     rectified = None
     rectified_px = None
+    rectification = None
     if quad is not None and payload.get("image") and width_mm is not None and height_mm is not None:
-        rectified, rectified_px = _rectify(
+        for item in payload.get("measurements") or []:
+            if not isinstance(item, dict) or item.get("points") is None:
+                raise ValueError("rectified measurements need two source-image points, not length_px")
+            _pair(item["points"], "measurement")
+        rectified, rectified_px, rectification = _rectify(
             str(payload["image"]),
             _quad(quad),
             float(width_mm),
@@ -298,6 +303,7 @@ def measure(payload: dict) -> dict:
             payload.get("out"),
             overwrite=bool(payload.get("overwrite") or payload.get("force")),
         )
+        px_per_mm = rectified_px
     bbox_pair = None
     if kind == "ruler" and points is not None:
         bbox_pair = _pair(points, "ruler")
@@ -312,8 +318,20 @@ def measure(payload: dict) -> dict:
             _point(payload.get("part_seed"), "part_seed"),
             _box(payload.get("part_roi"), "part_roi"),
             payload,
+            rectification=rectification,
         )
-    measurements = _measurements(payload.get("measurements"), float(px_per_mm))
+    measurement_items = payload.get("measurements")
+    measurement_matrix = rectification["matrix"] if rectification else _stored_homography(payload, px_per_mm=px_per_mm)
+    if measurement_matrix is not None and measurement_items:
+        from photopart.rectify import map_points
+
+        measurement_items = [dict(item) for item in measurement_items]
+        for item in measurement_items:
+            if item.get("points") is None:
+                raise ValueError("rectified measurements need two source-image points, not length_px")
+            item.pop("length_px", None)
+            item["points"] = map_points(measurement_matrix, _pair(item["points"], "measurement")).tolist()
+    measurements = _measurements(measurement_items, float(px_per_mm))
     out_of_plane = [item["name"] for item in measurements if item.get("plane") == "out_of_plane"]
     warning = None
     if out_of_plane:
@@ -345,6 +363,8 @@ def measure(payload: dict) -> dict:
         "marker": marker,
         "rectified": rectified,
         "rectified_px_per_mm": rectified_px,
+        "rectification": rectification,
+        "measurement_coordinate_frame": "rectified" if measurement_matrix is not None else "source",
         "angled": bool(payload.get("angled", False)),
         "note": _PLANE_NOTE,
         "part_bbox_mm": None if part is None else part.get("part_bbox_mm"),
@@ -400,23 +420,23 @@ def _project_directory(payload: dict) -> Path | None:
     return _accept(Path.cwd())
 
 
-def _stored_homography(payload: dict):
-    """3×3 homography for a TL,TR,BR,BL quad, or None when the quad is absent."""
+def _stored_homography(payload: dict, *, px_per_mm=None):
+    """Metric reference-plane map; saved photos use their full rectification record."""
     quad = payload.get("quad")
     if quad is None:
         return None
     try:
         source = _quad(quad)
-        width = float(np.max(source[:, 0]) - np.min(source[:, 0]))
-        height = float(np.max(source[:, 1]) - np.min(source[:, 1]))
-        if width < 2 or height < 2:
-            return None
+        width_mm = float(payload["width_mm"])
+        height_mm = float(payload["height_mm"])
+        scale = quad_px_per_mm(source, width_mm, height_mm) if px_per_mm is None else float(px_per_mm)
+        width, height = width_mm * scale, height_mm * scale
         dest = np.array(
             [[0.0, 0.0], [width, 0.0], [width, height], [0.0, height]],
             dtype=float,
         )
         matrix = homography(source, dest)
-    except (TypeError, ValueError):
+    except (KeyError, TypeError, ValueError):
         return None
     return [[round(float(value), 8) for value in row] for row in np.asarray(matrix, dtype=float)]
 
@@ -438,7 +458,10 @@ def _write_last_measure(report: dict, payload: dict) -> Path | None:
         "angled": bool(report.get("angled")),
         "project": str(directory),
         "quad": payload.get("quad"),
-        "homography": _stored_homography(payload),
+        "homography": (report.get("rectification") or {}).get("matrix"),
+        "rectification": report.get("rectification"),
+        "rectified": report.get("rectified"),
+        "hints_coordinate_frame": "source",
         "coin_ellipse": report.get("coin_ellipse") or payload.get("coin_ellipse"),
     }
     try:
@@ -449,6 +472,36 @@ def _write_last_measure(report: dict, payload: dict) -> Path | None:
     except OSError:
         return None
     return directory
+
+
+def context_for_image(loaded: dict, image=None) -> dict | None:
+    """Normalize source hints when consuming either member of a rectified pair."""
+    loaded = dict(loaded)
+    record = loaded.get("rectification") or {}
+    saved_image = loaded.get("image") or record.get("source_image")
+    if image is None:
+        if saved_image:
+            loaded["image"] = saved_image
+        return loaded
+    path = Path(image).expanduser().resolve()
+    if saved_image and Path(saved_image).expanduser().resolve() == path:
+        return loaded
+    rectified = loaded.get("rectified") or record.get("rectified_image")
+    if not rectified or Path(rectified).resolve() != path or not record:
+        return None
+    from photopart.rectify import map_points, map_rect, rectangle_points
+
+    if loaded.get("hints_coordinate_frame") != "rectified":
+        matrix = record["matrix"]
+        loaded["roi"] = map_rect(matrix, loaded.get("roi"))
+        if loaded.get("seed") is not None:
+            loaded["seed"] = map_points(matrix, [loaded["seed"]])[0].tolist()
+        if loaded.get("reference_bbox") is not None:
+            loaded["reference_polygon"] = map_points(matrix, rectangle_points(loaded["reference_bbox"])).tolist()
+            loaded["reference_bbox"] = None
+    loaded["image"] = str(path)
+    loaded["hints_coordinate_frame"] = "rectified"
+    return loaded
 
 
 def load_last_measure(*dirs, image=None) -> dict | None:
@@ -473,10 +526,9 @@ def load_last_measure(*dirs, image=None) -> dict | None:
             continue
         if not isinstance(loaded, dict) or not loaded.get("px_per_mm"):
             continue
-        if image is not None:
-            saved_image = loaded.get("image")
-            if not saved_image or Path(saved_image).expanduser().resolve() != Path(image).expanduser().resolve():
-                continue
+        loaded = context_for_image(loaded, image)
+        if loaded is None:
+            continue
         project = loaded.get("project")
         if isinstance(project, str) and project.strip():
             try:
@@ -534,11 +586,11 @@ def _detect_marker(gray: np.ndarray) -> dict | None:
     return None
 
 
-def load_measure_hints(payload: dict) -> tuple[list[tuple[float, float, float, float]], bool]:
+def load_measure_hints(payload: dict) -> tuple[list, bool]:
     """Rectangles to keep out of an overlay, plus whether the photo was angled."""
     if not isinstance(payload, dict):
         raise ValueError("measure JSON must be an object")
-    rects: list[tuple[float, float, float, float]] = []
+    rects: list = []
 
     def add(value) -> None:
         if value is None:
@@ -556,6 +608,8 @@ def load_measure_hints(payload: dict) -> tuple[list[tuple[float, float, float, f
                 add(item)
 
     add(payload.get("reference_bbox"))
+    if payload.get("reference_polygon") is not None:
+        rects.append({"polygon": payload["reference_polygon"]})
     add(payload.get("exclude_roi"))
     add(payload.get("exclude_rois"))
     return rects, bool(payload.get("angled", False))
@@ -725,7 +779,7 @@ def _round_contour(blurred, min_r: int, max_r: int, hough, cv2):
     return best
 
 
-def _measure_part(image_path, px_per_mm, coin_detect, seed, roi, payload) -> dict:
+def _measure_part(image_path, px_per_mm, coin_detect, seed, roi, payload, *, rectification=None) -> dict:
     """Part length and width in millimetres from a seed, a box, or the non-coin blob."""
     path = Path(image_path).expanduser()
     image = np.array(Image.open(path).convert("RGB"))
@@ -743,6 +797,12 @@ def _measure_part(image_path, px_per_mm, coin_detect, seed, roi, payload) -> dic
     component = _part_mask(image, seed, roi, circle)
     if component is None or int(np.count_nonzero(component)) < 16:
         raise ValueError("could not find the part in the photo; pass part_seed or part_roi")
+    if rectification:
+        from photopart.rectify import valid_mask, warp_mask
+
+        component = warp_mask(component, rectification) & valid_mask(rectification)
+        if int(np.count_nonzero(component)) < 16:
+            raise ValueError("rectified part is too small to measure; use a closer photo")
     length_px, width_px, angle = _min_area_size(component)
     mask_png = _save_part_mask(component, payload, path)
     return {
@@ -899,7 +959,7 @@ def _reference_bbox(kind: str | None, pair, reference_px, coin_detect=None) -> d
     }
 
 
-def _rectify(image_path, quad, width_mm, height_mm, px_per_mm, out, *, overwrite=False) -> tuple[str, float]:
+def _rectify(image_path, quad, width_mm, height_mm, px_per_mm, out, *, overwrite=False) -> tuple[str, float, dict]:
     from PIL import Image
 
     path = Path(image_path).expanduser()
@@ -908,26 +968,22 @@ def _rectify(image_path, quad, width_mm, height_mm, px_per_mm, out, *, overwrite
     if not path.is_file():
         raise FileNotFoundError(f"image not found: {path}")
     image = np.array(Image.open(path).convert("RGB"))
-    scale = float(px_per_mm)
-    out_w = max(2, int(round(width_mm * scale)))
-    out_h = max(2, int(round(height_mm * scale)))
-    cap = 4000
-    if max(out_w, out_h) > cap:
-        factor = cap / max(out_w, out_h)
-        out_w = max(2, int(round(out_w * factor)))
-        out_h = max(2, int(round(out_h * factor)))
-        scale *= factor
-    dest = np.array([[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]], dtype=float)
-    matrix = homography(quad, dest)
-    warped = _warp(image, matrix, out_w, out_h)
+    from photopart.rectify import image_hash, plan, warp_image
+
+    record = plan(path, image.shape, quad, width_mm, height_mm, px_per_mm)
+    warped, _valid = warp_image(image, record)
     fallback = path.stem + "_rectified.png"
     if out:
         destination = new_output(out, ".png", overwrite=overwrite)
     else:
         destination = new_output(default_output(path.with_name(fallback), fallback), ".png", overwrite=overwrite)
+    if destination.resolve() == path.resolve():
+        raise ValueError("rectified output must be a separate image from the source photo")
     destination.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(warped, mode="RGB").save(destination, format="PNG")
-    return str(destination.resolve()), float(scale)
+    record["rectified_image"] = str(destination.resolve())
+    record["rectified_sha256"] = image_hash(destination)
+    return str(destination.resolve()), float(record["px_per_mm"]), record
 
 
 def main(argv: list[str] | None = None) -> int:

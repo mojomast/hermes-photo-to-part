@@ -519,11 +519,12 @@ def overlay_outline(
     seed: tuple[float, float] | None = None,
     exclude: list | None = None,
     angled: bool = False,
+    measure: dict | None = None,
 ) -> dict:
     """Draw the silhouette contour onto a copy of the photo.
 
     ``photo_scale`` is pixels per millimetre. ``center`` puts the model center
-    on the image center. ``auto`` scales and translates that silhouette onto
+    on the image center. ``auto`` rotates and translates that silhouette onto
     the part segmented from the photo. ``origin`` is the image pixel of the
     model's minimum corner (image y grows downward) and overrides fit.
     ``roi`` and ``seed`` pick the part. ``exclude`` drops a coin or ruler.
@@ -547,6 +548,7 @@ def overlay_outline(
         seed=seed,
         exclude=exclude,
         angled=angled,
+        measure=measure,
     )
 
 
@@ -667,6 +669,7 @@ def render_views(
                 seed=overlay_seed,
                 exclude=overlay_exclude,
                 angled=overlay_angled,
+                measure=measure,
             )
         overlay = str(overlay_path)
         written.append(overlay)
@@ -695,6 +698,8 @@ def render_views(
         "overlay_roi_expanded": bool(overlay_report.get("overlay_roi_expanded", False)),
         "alignment": overlay_report.get("alignment"),
         "photo_scale_px_per_mm": photo_scale,
+        "photo_coordinate_frame": overlay_report.get("photo_coordinate_frame", "source"),
+        "rectification": overlay_report.get("rectification"),
         "view_axes": axes,
         "units": length_unit,
         "length_unit": length_unit,
@@ -742,7 +747,7 @@ def _parse_rect(text: str) -> tuple[float, float, float, float]:
     return rect
 
 
-def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
+def run_render(argv: list[str] | None = None, *, measure_payload: dict | None = None) -> tuple[int, dict]:
     parser = argparse.ArgumentParser(description="Render front, side, top, and iso views.")
     parser.add_argument("mesh")
     parser.add_argument("--out-dir", required=True)
@@ -852,13 +857,24 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         loaded = load_mesh(mesh_path, max_bytes=args.max_bytes)
         mesh, meta = prepare_mesh(loaded, args.units, args.scale)
         origin = None if args.overlay_origin is None else _parse_origin(args.overlay_origin)
-        from photopart.measure import load_last_measure
+        from photopart.measure import context_for_image, load_last_measure
 
         candidates = [mesh_path.parent]
         if args.photo:
             candidates.append(Path(args.photo).expanduser().resolve().parent)
         candidates.extend([out_dir, Path.cwd()])
         measure_hint = load_last_measure(*candidates, image=args.photo)
+        if args.measure_json:
+            measure_payload = json.loads(Path(args.measure_json).expanduser().read_text(encoding="utf-8"))
+            if not isinstance(measure_payload, dict):
+                raise ValueError("--measure-json must contain an object")
+        if measure_payload and measure_payload.get("homography") and not measure_payload.get("rectification"):
+            raise ValueError("legacy perspective calibration has no coordinate frame; run photo_part_measure again")
+        if measure_payload and measure_payload.get("rectification"):
+            measure_hint = context_for_image(measure_payload, args.photo)
+            if measure_hint is None:
+                raise ValueError("measure JSON belongs to a different photo; run photo_part_measure again")
+            measure_payload = None  # Its exclusions are already part of this context.
         if measure_hint:
             if not args.photo and measure_hint.get("image"):
                 args.photo = measure_hint["image"]
@@ -880,13 +896,10 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
             extra, flagged = load_measure_hints(measure_hint)
             exclude.extend(extra)
             angled = angled or flagged
-        if args.measure_json:
+        if measure_payload:
             from photopart.measure import load_measure_hints
 
-            payload = json.loads(Path(args.measure_json).expanduser().read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("--measure-json must contain an object")
-            extra, flagged = load_measure_hints(payload)
+            extra, flagged = load_measure_hints(measure_payload)
             exclude.extend(extra)
             angled = angled or flagged
         manifest = render_views(

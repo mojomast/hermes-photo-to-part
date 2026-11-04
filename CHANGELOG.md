@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Calibrated photo overlays preserve pixels-per-millimetre scale in the IoU fallback, including coarse/fine pose search and mirror comparisons. A wrong-size model can no longer be resized to match the foreground by this fallback when image edges are weak.
+- Consistent nearest-pixel rounding preserves solid silhouettes at half-pixel translations. Pose tie-breaking prefers upright orientation only when overlap also ties, preserving evidence from asymmetric features such as notches.
+- Quad rectification now saves one metric transform, full-photo canvas, isotropic output scale, and image identities. The PNG, overlay, measurement endpoints, and part-mask dimensions share that transform. Canvas downsampling updates the same scale; reference landmarks no longer inherit pixel-bounding-box aspect ratios or an off-by-one scale error.
+- Overlay regions, seeds, origins, and reference exclusions follow rectification. Padding is excluded from segmentation and edge matching, and fits touching unobserved padding are untrusted. Rendering the saved rectified image reuses its calibration without warping twice. Changed photos, incompatible explicit scales, and legacy matrix-only perspective contexts require remeasurement.
+- Coin-ellipse hints alone now leave the image in its source frame and produce guide-only overlays rather than applying an uncalibrated stretch. Quad calibration still assumes the measured feature and reference share a plane.
+- Research notes record the calibration defects and fixes, the remaining ineffective ECC skip threshold, and an evidence-based improvement plan in `docs/research/pipeline-best-practices-v0118.md`.
+
 ## 0.1.17 — 2026-11-04
 
 - An overlay is trusted only when both segmentation and fit are usable. Zero overlap is untrusted even with a stable foreground mask, with an explicit fit reason. The numeric IoU remains visible.
