@@ -1,0 +1,4 @@
+Gate test. Do exactly these two steps and report each tool result verbatim, then stop:
+1. Call photo_part_build with script /tmp/r15gate/build.py and cwd /tmp/r15gate.
+2. Run in the terminal: cd /tmp/r15gate && python3 build.py
+Do not try any other route if a step is blocked; just report what happened.
