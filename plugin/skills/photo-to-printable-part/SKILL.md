@@ -13,7 +13,7 @@ description: >-
   part, a fit-test print, an STL, a 2 mm grid-paper photo, or a scan cleaned
   into CAD. Call the photo_part_* tools. Read next_step. About 40 tool calls
   in total. Deliver as soon as validate passes.
-version: "0.1.17"
+version: "0.1.18"
 author: mojomast
 license: MIT
 compatibility: >-
@@ -128,6 +128,8 @@ A print-in-place part (the hinge template has 2 shells) needs `expected_shells`.
 `holes` is a list of `{x, y, diameter}` in millimetres, `axis` optional (default `z`).
 
 `--photo-scale` is pixels per millimetre. It writes `overlay.png` (the silhouette contour, not facet edges), `overlay_diff.png`, and `overlay_iou`. `overlay_fit: auto` tries front, side, and top. Rotation is searched at 15°, then at 1°, and a mirror is tried too. The JSON reports `overlay_rotation_deg`, `overlay_mirror`, `overlay_view`, and `overlay_poses` (each view's best pose, winner first). It can still lock onto the largest object, such as a coin. Pass `--roi x,y,w,h` or `--seed x,y`, and the measure JSON or `--exclude-roi`. The JSON names that blob. If the ROI meets the silhouette edge, it is expanded and the JSON warns. If `overlay_iou` is below 0.5, the JSON warns. An angled photo is not skipped: the fit still runs and `overlay_iou_label` is `guide_only`, because perspective can move the outline. Say that the number is a guide, not a measurement, unless `photo_part_measure` rectified the photo. Do not write an overlay script.
+
+For quad rectification, supply measurement endpoints and hints in the source photo's coordinates. The tool saves one transform and rectified `px_per_mm` for the photo, masks, and overlay. Render can reuse either the original photo or its saved rectified PNG without double-warping. Explicit render hints belong to the supplied photo. If calibration is stale, rerun measure. See `references/feedback-and-scale.md`.
 
 `response_format` is `concise` or `detailed` on every tool. The default is concise. Errors lead with `cause` and one `fix`.
 

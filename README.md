@@ -4,7 +4,7 @@ Hermes plugin that turns photos, a few measurements, or a messy 3D scan into a p
 
 It is a community plugin by [Kyle Durepos](https://github.com/mojomast). It is not a Nous Research product. The method is inspired by Michael Lydick's video [I'm an Engineer. This ChatGPT Test Scared Me.](https://www.youtube.com/watch?v=TUqScwjnO_k) The sample in this repo is a generic plate with a hook, not a copy of the object in that video.
 
-0.1.17 fixes overlay trust, builds closed bottle caps to the requested outer diameter, and reports broad blind cap cavities separately from bores. Photo comparisons can use a visible user-given dimension when no coin or ruler is present; a missing scale is reported with a next step. See [CHANGELOG.md](CHANGELOG.md) for details. Install the `plugin/` directory so `evals/` and `tests/` are not copied into Hermes. Build approval and protected output paths from 0.1.15–0.1.16 remain in place.
+0.1.18 keeps a calibrated overlay at its true size and rectifies a photo, its measurements, and its masks in one metric frame. 0.1.17 fixes overlay trust, builds closed bottle caps to the requested outer diameter, and reports broad blind cap cavities separately from bores. See [CHANGELOG.md](CHANGELOG.md) for details. Install the `plugin/` directory so `evals/` and `tests/` are not copied into Hermes. Build approval and protected output paths from 0.1.15–0.1.16 remain in place.
 
 ![Catalog banner](docs/catalog-banner.png)
 

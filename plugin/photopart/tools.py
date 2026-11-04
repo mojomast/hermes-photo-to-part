@@ -544,14 +544,6 @@ def render_tool(params, **_kwargs) -> str:
         measure_json = args.get("measure_json")
         if isinstance(measure_json, str) and measure_json.strip():
             argv.extend(["--measure-json", measure_json.strip()])
-        elif isinstance(measure_json, dict):
-            from photopart.measure import load_measure_hints
-
-            rects, flagged = load_measure_hints(measure_json)
-            for rect in rects:
-                argv.extend(["--exclude-roi", _csv_rect(rect)])
-            if flagged:
-                argv.append("--angled")
         if _flag(args, "angled"):
             argv.append("--angled")
         grid = _optional_float(args, "grid_mm")
@@ -577,7 +569,7 @@ def render_tool(params, **_kwargs) -> str:
             argv.extend(["--max-bytes", str(int(args["max_bytes"]))])
         from photopart.render import run_render
 
-        _code, report = run_render(argv)
+        _code, report = run_render(argv, measure_payload=measure_json if isinstance(measure_json, dict) else None)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _emit(
             {"ok": False, "error": str(exc)},
@@ -1010,7 +1002,7 @@ def tool_specs() -> list[dict]:
                     "description": "Rectangles to ignore, [x, y, w, h] or a list of them. A coin from photo_part_measure.",
                 },
                 "measure_json": {
-                    "description": "photo_part_measure JSON object or a path to it. Uses reference_bbox and angled.",
+                    "description": "photo_part_measure JSON object or a path to it. Reuses rectification and its scale when present, and reference exclusions and angled hints in the matching photo frame.",
                 },
                 "angled": {
                     "type": "boolean",
@@ -1152,6 +1144,7 @@ def tool_specs() -> list[dict]:
                 "auto, part_seed [x, y], or part_roi [x0, y0, x1, y1] also returns part_bbox_mm. "
                 "Optional quad of four pixels TL, TR, BR, BL plus width_mm, height_mm, and image "
                 "writes a rectified PNG in the working directory, never HERMES_HOME/cache. "
+                "With a quad, input hints and measurement points are source-image pixels; returned px_per_mm is for the rectified frame. "
                 "Returns reference_bbox and absolute paths. Same-plane, straight-on, unless a quad was given. "
                 "Do not open the photo with cv2 or PIL. Do not write a perspective script. Returns JSON."
             ),
@@ -1170,7 +1163,7 @@ def tool_specs() -> list[dict]:
                 "ruler_mm": {"type": "number", "description": "Real millimetres between points."},
                 "measurements": {
                     "type": "array",
-                    "description": "Spans to convert: {name, points or length_px, optional plane in_plane or out_of_plane}.",
+                    "description": "Spans to convert: {name, points or length_px, optional plane in_plane or out_of_plane}. With quad, give two source-image points per span; length_px alone cannot be perspective-corrected.",
                     "items": {"type": "object"},
                 },
                 "image": {"type": "string", "description": "Photo to rectify when quad is set, or the image that contains an ArUco or AprilTag."},

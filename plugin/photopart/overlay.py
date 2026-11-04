@@ -1,8 +1,8 @@
 """Silhouette outline for a reference photo.
 
 The line is the outer contour of the z-buffer mask, not the mesh's facet edges.
-``center`` places that mask on the image center. ``auto`` scales, rotates,
-and optionally mirrors it onto the part. It tries front, side, and top,
+``center`` places that mask on the image center. ``auto`` translates, rotates,
+and optionally mirrors it onto the part at the supplied scale. It tries front, side, and top,
 searching rotation at 15° and then 1°. An angled photo still gets an IoU,
 labelled ``guide_only``. An ROI that cuts the silhouette is expanded.
 """
@@ -21,6 +21,26 @@ _MAGENTA = np.array([255.0, 0.0, 210.0])
 _ALPHA = 0.62
 
 
+def _foreshortened_coin(measure) -> bool:
+    """True when a coin ellipse is flattened enough to be a tilt hint.
+
+    The previous code stretched the photo for ratios in this band. That stretch
+    is not a calibrated plane transform, so the overlay stays in the source
+    frame and is guide-only. A nearly circular coin is not tilt.
+    """
+    if not isinstance(measure, dict):
+        return False
+    ellipse = measure.get("coin_ellipse")
+    if not isinstance(ellipse, dict):
+        return False
+    try:
+        raw = ellipse.get("ratio")
+        ratio = 1.0 if raw is None else float(raw)
+    except (TypeError, ValueError):
+        return False
+    return bool(math.isfinite(ratio) and 0.2 < ratio < 0.95)
+
+
 def paint_overlay(
     points: np.ndarray,
     faces: np.ndarray,
@@ -36,6 +56,7 @@ def paint_overlay(
     exclude: list | None = None,
     angled: bool = False,
     view: str = "front",
+    measure: dict | None = None,
 ) -> dict:
     """Draw the front silhouette on a copy of ``photo`` and write a diff image.
 
@@ -45,6 +66,15 @@ def paint_overlay(
     if fit not in ("center", "auto"):
         raise ValueError("overlay fit must be center or auto")
     image = np.array(Image.open(photo).convert("RGB"))
+    image, roi, seed, exclude, frame, valid = _prepare_photo(
+        image, photo, measure, photo_scale, roi, seed, exclude
+    )
+    if frame and origin is not None and not frame["already_rectified"]:
+        from photopart.rectify import map_points
+
+        origin = tuple(map_points(frame["matrix"], [origin])[0])
+    if _foreshortened_coin(measure) and not frame:
+        angled = True
     height, width = image.shape[:2]
     model, minimum, maximum = raster_model(points, faces, photo_scale)
     note = None
@@ -74,7 +104,7 @@ def paint_overlay(
                 "Pass roi or seed on the part, and exclude the coin."
             )
         else:
-            pose = _select_pose(model, foreground, image, roi)
+            pose = _select_pose(model, foreground, image, roi, valid=valid)
             placed = pose["placed"]
             note = pose["note"]
             rotation = pose["rotation_deg"]
@@ -86,7 +116,7 @@ def paint_overlay(
             image, roi=roi, seed=seed, exclude=exclude, hints=hints
         )
     iou = None if foreground is None else _iou(placed, foreground)
-    alignment = _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=photo_scale)
+    alignment = _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=photo_scale, valid=valid)
     if alignment.get("iou") is not None:
         iou = alignment["iou"]
     if alignment["confidence"] == "low":
@@ -102,7 +132,7 @@ def paint_overlay(
                 "iou": round(float(iou), 4),
             }
         ]
-    return _write_overlay(
+    report = _write_overlay(
         image,
         placed,
         foreground,
@@ -128,6 +158,9 @@ def paint_overlay(
         angled=angled,
         alignment=alignment,
     )
+    report["photo_coordinate_frame"] = "rectified" if frame else "source"
+    report["rectification"] = frame
+    return report
 
 
 def paint_auto_views(
@@ -154,7 +187,11 @@ def paint_auto_views(
     if not views:
         raise ValueError("overlay auto needs at least one view")
     image = np.array(Image.open(photo).convert("RGB"))
-    image = _rectify_for_measure(image, measure)
+    image, roi, seed, exclude, frame, valid = _prepare_photo(
+        image, photo, measure, photo_scale, roi, seed, exclude
+    )
+    if _foreshortened_coin(measure) and not frame:
+        angled = True
     foreground, blob, roi_warnings, roi_expanded = _foreground_for_overlay(
         image, roi=roi, seed=seed, exclude=exclude, hints=True
     )
@@ -173,7 +210,7 @@ def paint_auto_views(
             nonlocal chosen
             name, points, faces = item
             model, _minimum, _maximum = raster_model(points, faces, photo_scale)
-            pose = _select_pose(model, foreground, image, roi)
+            pose = _select_pose(model, foreground, image, roi, valid=valid)
             row = {
                 "pose": pose,
                 "name": name,
@@ -224,7 +261,7 @@ def paint_auto_views(
             }
             for row in (chosen, *rest)
         ]
-    alignment = _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=photo_scale)
+    alignment = _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=photo_scale, valid=valid)
     if alignment.get("iou") is not None:
         iou = alignment["iou"]
     if alignment["confidence"] == "low":
@@ -233,7 +270,7 @@ def paint_auto_views(
     warnings = _overlay_warnings(
         iou, blob, angled=angled, missed=foreground is None, extra=roi_warnings, fit=alignment.get("fit")
     )
-    return _write_overlay(
+    report = _write_overlay(
         image,
         placed,
         foreground,
@@ -252,14 +289,19 @@ def paint_auto_views(
         angled=angled,
         alignment=alignment,
     )
+    report["photo_coordinate_frame"] = "rectified" if frame else "source"
+    report["rectification"] = frame
+    return report
 
 
-def search_alignment(model: np.ndarray, foreground: np.ndarray) -> dict:
+def search_alignment(model: np.ndarray, foreground: np.ndarray, *, scale_mode: str = "match") -> dict:
     """Coarse 15° search, then ±15° at 1°, including a mirror.
 
     The search runs on masks no wider than 160 px. The reported IoU is the
     full-resolution overlap of the winning pose. Ties within 0.01 IoU prefer
     no mirror and the angle closer to 0, so an axis-aligned part stays put.
+    Calibrated overlays pass ``fixed`` to preserve their pixels-per-mm scale;
+    ``match`` is only a shape comparison with size fitted to the foreground.
     """
     long_side = max(max(model.shape), max(foreground.shape))
     factor = 1.0 if long_side <= 160 else 160.0 / long_side
@@ -269,7 +311,7 @@ def search_alignment(model: np.ndarray, foreground: np.ndarray) -> dict:
 
     def consider(angle: float, mirror: bool) -> None:
         nonlocal best
-        placed = _place(small_model, small_foreground, angle, mirror, close=False)
+        placed = _place(small_model, small_foreground, angle, mirror, close=False, scale_mode=scale_mode)
         score = _iou(placed, small_foreground)
         key = _pose_key(angle, mirror)
         if best is None or score > best["score"] + 0.01 or (score >= best["score"] - 0.01 and key < best["key"]):
@@ -285,11 +327,11 @@ def search_alignment(model: np.ndarray, foreground: np.ndarray) -> dict:
             consider(center + delta, mirror)
     angle = float(best["angle"])
     mirror = bool(best["mirror"])
-    placed = _place(model, foreground, angle, mirror, close=True)
+    placed = _place(model, foreground, angle, mirror, close=True, scale_mode=scale_mode)
     full = _iou(placed, foreground)
     # A symmetric silhouette ties under a mirror. Prefer the unmirrored pose
     # when the full-resolution scores are within 0.01.
-    other = _place(model, foreground, angle, not mirror, close=True)
+    other = _place(model, foreground, angle, not mirror, close=True, scale_mode=scale_mode)
     other_iou = _iou(other, foreground)
     if other_iou + 0.01 >= full and (not mirror) is False:
         # other is mirrored; keep the current one when it is already unmirrored
@@ -309,36 +351,38 @@ def search_alignment(model: np.ndarray, foreground: np.ndarray) -> dict:
     }
 
 
-def _select_pose(model: np.ndarray, foreground: np.ndarray, image: np.ndarray, roi) -> dict:
-    """Chamfer picks the pose when image edges exist. IoU search is the fallback."""
-    iou_pose = search_alignment(model, foreground)
-    chamfer = _search_chamfer(model, image, foreground, roi)
-    iou_metrics = _chamfer_of_placed(iou_pose["placed"], image, roi)
+def _select_pose(model: np.ndarray, foreground: np.ndarray, image: np.ndarray, roi, *, valid=None) -> dict:
+    """Chamfer and fallback IoU search both preserve the calibrated raster scale."""
+    iou_pose = search_alignment(model, foreground, scale_mode="fixed")
+    chamfer = _search_chamfer(model, image, foreground, roi, valid=valid)
+    iou_metrics = _chamfer_of_placed(iou_pose["placed"], image, roi, valid=valid)
     if chamfer is None:
         iou_pose.update(iou_metrics)
-        return _ecc_pose(iou_pose, foreground, image, roi)
-    # A rectangle matches at 180°. When the chamfer scores are that close,
-    # keep the pose nearer to 0°, which is what the IoU search already picks.
+        return _ecc_pose(iou_pose, foreground, image, roi, valid=valid)
+    # A rectangle matches at 180°. Prefer the pose nearer to 0° only when
+    # both edge distance and overlap tie. A small edge-distance improvement
+    # can still locate an asymmetric feature such as a notch.
     iou_px = iou_metrics.get("chamfer_px")
-    if iou_px is not None and float(chamfer["chamfer_px"]) + 0.35 >= float(iou_px):
+    if (iou_px is not None and float(chamfer["chamfer_px"]) + 0.35 >= float(iou_px)
+            and float(chamfer["iou"]) <= float(iou_pose["iou"]) + 0.01):
         if _pose_key(float(iou_pose["rotation_deg"]), bool(iou_pose["mirror"])) <= _pose_key(
             float(chamfer["rotation_deg"]), bool(chamfer["mirror"])
         ):
             iou_pose.update(iou_metrics)
-            return _ecc_pose(iou_pose, foreground, image, roi)
+            return _ecc_pose(iou_pose, foreground, image, roi, valid=valid)
     if float(chamfer.get("chamfer_norm") or 1.0) <= 0.05 or float(chamfer["iou"]) + 0.08 >= float(iou_pose["iou"]):
-        return _ecc_pose(chamfer, foreground, image, roi)
+        return _ecc_pose(chamfer, foreground, image, roi, valid=valid)
     iou_pose.update(iou_metrics)
-    return _ecc_pose(iou_pose, foreground, image, roi)
+    return _ecc_pose(iou_pose, foreground, image, roi, valid=valid)
 
 
-def _search_chamfer(model: np.ndarray, image: np.ndarray, foreground: np.ndarray, roi) -> dict | None:
+def _search_chamfer(model: np.ndarray, image: np.ndarray, foreground: np.ndarray, roi, *, valid=None) -> dict | None:
     """Truncated chamfer on Canny edges. Scale stays at the known px/mm raster."""
     try:
         import cv2
     except ImportError:
         return None
-    edges, dist, tau, diagonal = _edge_field(image, roi)
+    edges, dist, tau, diagonal = _edge_field(image, roi, valid=valid)
     if edges is None or int(np.count_nonzero(edges)) < 20 or diagonal <= 1.0:
         return None
     contour = _contour_points(model)
@@ -388,11 +432,14 @@ def _search_chamfer(model: np.ndarray, image: np.ndarray, foreground: np.ndarray
     }
 
 
-def _edge_field(image: np.ndarray, roi):
+def _edge_field(image: np.ndarray, roi, *, valid=None):
     import cv2
 
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
     edges = cv2.Canny(gray, 40, 120)
+    if valid is not None:
+        interior = cv2.erode(valid.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+        edges[~interior] = 0
     height, width = edges.shape
     diagonal = math.hypot(width, height)
     if roi is not None:
@@ -431,6 +478,15 @@ def _mask_center(mask: np.ndarray):
     return float(xs.mean()), float(ys.mean())
 
 
+def _nearest_pixel(values) -> np.ndarray:
+    """Nearest integer, with half-integers rounding toward +inf.
+
+    ``np.rint`` breaks ties toward even. A half-pixel translation then collapses
+    alternate rows or columns. Placement and chamfer sampling share this rule.
+    """
+    return np.floor(np.asarray(values, dtype=float) + 0.5).astype(np.int32)
+
+
 def _rotated_samples(points, center, photo, angle: float, mirror: bool, dist: np.ndarray):
     mcx, mcy = center
     pcx, pcy = photo
@@ -443,8 +499,8 @@ def _rotated_samples(points, center, photo, angle: float, mirror: bool, dist: np
     sin_a = math.sin(rad)
     rx = cos_a * dx - sin_a * dy
     ry = sin_a * dx + cos_a * dy
-    qx = np.rint(pcx + rx).astype(np.int32)
-    qy = np.rint(pcy + ry).astype(np.int32)
+    qx = _nearest_pixel(pcx + rx)
+    qy = _nearest_pixel(pcy + ry)
     height, width = dist.shape
     keep = (qx >= 0) & (qy >= 0) & (qx < width) & (qy < height)
     if int(np.count_nonzero(keep)) < 8:
@@ -452,9 +508,9 @@ def _rotated_samples(points, center, photo, angle: float, mirror: bool, dist: np
     return dist[qy[keep], qx[keep]]
 
 
-def _chamfer_of_placed(placed: np.ndarray, image: np.ndarray, roi) -> dict:
+def _chamfer_of_placed(placed: np.ndarray, image: np.ndarray, roi, *, valid=None) -> dict:
     try:
-        edges, dist, _tau, diagonal = _edge_field(image, roi)
+        edges, dist, _tau, diagonal = _edge_field(image, roi, valid=valid)
     except Exception:
         return {"chamfer_px": None, "chamfer_norm": None}
     if edges is None or diagonal <= 1.0 or int(np.count_nonzero(edges)) < 20:
@@ -474,9 +530,9 @@ def _chamfer_of_placed(placed: np.ndarray, image: np.ndarray, roi) -> dict:
     return {"chamfer_px": round(chamfer_px, 4), "chamfer_norm": round(chamfer_px / diagonal, 4)}
 
 
-def _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=None) -> dict:
+def _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=None, *, valid=None) -> dict:
     gate = _segmentation_gate(image, foreground, roi, seed, exclude)
-    metrics = _chamfer_of_placed(placed, image, roi) if placed is not None else {"chamfer_px": None, "chamfer_norm": None}
+    metrics = _chamfer_of_placed(placed, image, roi, valid=valid) if placed is not None else {"chamfer_px": None, "chamfer_norm": None}
     fit = None
     if placed is not None and foreground is not None:
         fit = fit_metrics(placed, foreground, px_per_mm)
@@ -494,6 +550,11 @@ def _alignment(image, placed, foreground, roi, seed, exclude, px_per_mm=None) ->
         trust_reasons.append("overlay fit is low; do not use it to change geometry")
     if iou is None:
         trust_reasons.append("overlay fit is unavailable")
+    if valid is not None and ((placed is not None and np.any(placed & ~valid))
+                              or (foreground is not None and np.any(_dilate(foreground, 1) & ~valid))):
+        trusted = False
+        overall = "low"
+        trust_reasons.append("overlay touches unobserved rectification padding")
     return {
         "chamfer_px": metrics.get("chamfer_px"),
         "chamfer_norm": metrics.get("chamfer_norm"),
@@ -635,6 +696,8 @@ def _segmentation_gate(image, foreground, roi, seed, exclude) -> dict:
     if roi is not None or seed is not None:
         for iterations in (1, 3, 5):
             cut = grabcut_mask(image, roi=roi, seed=seed, iterations=iterations)
+            if cut is not None and any(isinstance(rect, np.ndarray) for rect in exclude or []):
+                cut = _gate_mask(cut, roi, seed, exclude)
             if cut is not None and int(np.count_nonzero(cut)) >= 16:
                 grab.append(cut.astype(bool))
     color_stability = _mean_pairwise_iou(color_masks)
@@ -807,8 +870,11 @@ def _place(
     sin_a = math.sin(rad)
     rx = cos_a * dx - sin_a * dy
     ry = sin_a * dx + cos_a * dy
-    placed_x = np.rint(pcx + rx).astype(np.int32)
-    placed_y = np.rint(pcy + ry).astype(np.int32)
+    # Same nearest-pixel rule as chamfer sampling. Round-to-even alternates
+    # ties between neighbours, collapsing rows/columns and leaving gaps when
+    # model and foreground have different pixel-count parity.
+    placed_x = _nearest_pixel(pcx + rx)
+    placed_y = _nearest_pixel(pcy + ry)
     placed = np.zeros(foreground.shape, dtype=bool)
     keep = (placed_x >= 0) & (placed_y >= 0) & (placed_x < placed.shape[1]) & (placed_y < placed.shape[0])
     placed[placed_y[keep], placed_x[keep]] = True
@@ -1077,44 +1143,51 @@ def grabcut_mask(image: np.ndarray, roi=None, seed=None, iterations: int = 3) ->
     return foreground
 
 
-def _rectify_for_measure(image: np.ndarray, measure: dict | None) -> np.ndarray:
-    """Undo a stored homography, or pre-scale a tilted coin, before the pose search."""
-    if not isinstance(measure, dict):
-        return image
-    matrix = measure.get("homography")
-    if isinstance(matrix, list) and matrix:
-        try:
-            import cv2
+def _prepare_photo(image, photo, measure, photo_scale, roi, seed, exclude):
+    """Apply one persisted metric map to pixels and all source-frame hints."""
+    from photopart.rectify import image_hash, map_points, map_rect, valid_mask, validate, warp_image, warp_mask
 
-            warp = np.asarray(matrix, dtype=np.float32)
-            if warp.shape == (3, 3):
-                height, width = image.shape[:2]
-                return cv2.warpPerspective(image, warp, (width, height))
-        except Exception:
-            return image
-    ellipse = measure.get("coin_ellipse")
-    if isinstance(ellipse, dict):
-        try:
-            ratio = float(ellipse.get("ratio") or 1.0)
-        except (TypeError, ValueError):
-            ratio = 1.0
-        if 0.2 < ratio < 0.95:
-            try:
-                import cv2
+    record = (measure or {}).get("rectification")
+    if not record:
+        if (measure or {}).get("homography"):
+            raise ValueError("legacy perspective calibration has no coordinate frame; run photo_part_measure again")
+        return image, roi, seed, exclude, None, None
+    matrix, size = validate(record)
+    if not math.isclose(float(photo_scale), float(record["px_per_mm"]), rel_tol=1e-6):
+        raise ValueError("photo_scale differs from the rectified calibration; use its px_per_mm or measure again")
+    path = Path(photo).resolve()
+    source = path == Path(record["source_image"]).resolve()
+    if not source and path != Path(record.get("rectified_image", "")).resolve():
+        raise ValueError("rectification belongs to a different photo; run photo_part_measure again")
+    expected = record["source_sha256"] if source else record["rectified_sha256"]
+    if image_hash(path) != expected:
+        raise ValueError("photo changed since calibration; run photo_part_measure again")
+    if source:
+        original_shape = image.shape[:2]
+        image, valid = warp_image(image, record)
+        roi = map_rect(matrix, roi)
+        if seed is not None:
+            seed = tuple(map_points(matrix, [seed])[0])
+        transformed = []
+        for rect in exclude or []:
+            allowed = np.ones(original_shape, dtype=bool)
+            _zero_rect(allowed, rect)
+            transformed.append(warp_mask(~allowed, record))
+        exclude = transformed
+    else:
+        if [image.shape[1], image.shape[0]] != list(size):
+            raise ValueError("rectified photo dimensions changed; run photo_part_measure again")
+        valid = valid_mask(record)
+        exclude = list(exclude or [])
+    exclude.append(~valid)
+    frame = {"coordinate_frame": "rectified", "px_per_mm": record["px_per_mm"],
+             "matrix": record["matrix"], "size": record["size"],
+             "source_image": record["source_image"], "already_rectified": not source,
+             "valid_fraction": round(float(valid.mean()), 6)}
+    return image, roi, seed, exclude, frame, valid
 
-                angle = float(ellipse.get("angle_deg") or 0.0)
-                height, width = image.shape[:2]
-                center = (width / 2.0, height / 2.0)
-                rotation = cv2.getRotationMatrix2D(center, angle, 1.0)
-                straight = cv2.warpAffine(image, rotation, (width, height))
-                scale = np.array([[1.0, 0.0, 0.0], [0.0, 1.0 / ratio, 0.0]], dtype=np.float32)
-                return cv2.warpAffine(straight, scale, (width, height))
-            except Exception:
-                return image
-    return image
 
-
-def _ecc_pose(pose: dict, foreground, image, roi) -> dict:
+def _ecc_pose(pose: dict, foreground, image, roi, *, valid=None) -> dict:
     """Affine then homography ECC, only when the chamfer is still coarse.
 
     A chamfer already inside 2 px, or a normalised chamfer of 0.05 or better,
@@ -1130,7 +1203,7 @@ def _ecc_pose(pose: dict, foreground, image, roi) -> dict:
     refined = refine_silhouette(placed, foreground)
     if refined is None:
         return pose
-    updated = _chamfer_of_placed(refined, image, roi)
+    updated = _chamfer_of_placed(refined, image, roi, valid=valid)
     new_chamfer = updated.get("chamfer_px")
     if new_chamfer is None or float(new_chamfer) + 1e-6 >= float(chamfer):
         return pose
@@ -1411,6 +1484,17 @@ def _roi_same(left, right) -> bool:
 
 
 def _zero_rect(mask: np.ndarray, rect) -> None:
+    if isinstance(rect, np.ndarray):
+        mask[rect] = False
+        return
+    if isinstance(rect, dict) and "polygon" in rect:
+        import cv2
+
+        painted = np.zeros(mask.shape, dtype=np.uint8)
+        polygon = np.rint(rect["polygon"]).astype(np.int32)
+        cv2.fillPoly(painted, [polygon], 1)
+        mask[painted > 0] = False
+        return
     y0, y1, x0, x1 = _rect_bounds(mask.shape, rect)
     if y1 > y0 and x1 > x0:
         mask[y0:y1, x0:x1] = False

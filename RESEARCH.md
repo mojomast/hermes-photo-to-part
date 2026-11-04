@@ -2,6 +2,8 @@
 
 Checked against primary docs on **2 November 2026**. This file is the design record for version 0.1.0. It is not a Hermes guarantee: the catalog page and `plugin-catalog/README.md` win if they move.
 
+Follow-up: [pipeline best practices after v0.1.17](docs/research/pipeline-best-practices-v0118.md) (4 November 2026) records reproduced calibration/alignment defects, the first development fix, and the prioritized measurement, recognition, and evaluation plan.
+
 ## 1. Hermes plugin format
 
 Sources:
