@@ -9,7 +9,7 @@ Eval marker p2p-canary-7f3a9c2e-6b14-4d88-a1e0-9c5d2f8b4a17
 
 ## In-process suite
 
-From the repository root, with the package installed:
+These files stay at the repository root. They are not part of the Hermes plugin install (`plugin/`). From the repository root, with `plugin/` installed:
 
 ```bash
 python -m evals.runner

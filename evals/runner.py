@@ -30,6 +30,11 @@ import numpy as np
 import trimesh
 from PIL import Image
 
+_REPO = Path(__file__).resolve().parents[1]
+_PLUGIN = _REPO / "plugin"
+if str(_PLUGIN) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN))
+
 from photopart.flow import OVERLAY_LOW_STEP, SKILL_ID
 from photopart.tools import TOOL_NAMES
 from photopart.heal import run_heal
@@ -107,7 +112,7 @@ class HermesV0217Context:
 
 def load_plugin_register():
     """Load the plugin entrypoint (``__init__.py`` ``register``)."""
-    spec = importlib.util.spec_from_file_location("photo_to_part_plugin", REPO / "__init__.py")
+    spec = importlib.util.spec_from_file_location("photo_to_part_plugin", REPO / "plugin" / "__init__.py")
     if spec is None or spec.loader is None:
         raise ImportError("could not load the plugin register entrypoint")
     module = importlib.util.module_from_spec(spec)

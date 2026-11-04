@@ -28,7 +28,7 @@ from photopart.tools import build_tool, template_tool
 from photopart.validate import run_validate
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL = ROOT / "skills" / "photo-to-printable-part" / "SKILL.md"
+SKILL = ROOT / "plugin" / "skills" / "photo-to-printable-part" / "SKILL.md"
 
 
 def _stl(path: Path, extents=(10, 20, 30)) -> None:

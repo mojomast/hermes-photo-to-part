@@ -852,13 +852,11 @@ def run_render(argv: list[str] | None = None) -> tuple[int, dict]:
         measure_hint = None
         if args.photo and (args.photo_scale is None or args.roi is None or args.seed is None):
             from photopart.measure import load_last_measure
-            from photopart.paths import plugin_root
+            from photopart.paths import not_a_project
 
             photo_path = Path(args.photo).expanduser()
-            root = plugin_root()
             candidates = [photo_path.resolve().parent, out_dir, Path.cwd()]
-            if root is not None:
-                candidates = [item for item in candidates if Path(item).expanduser().resolve() != root]
+            candidates = [item for item in candidates if not not_a_project(item)]
             hint = load_last_measure(*candidates)
             if hint:
                 if args.photo_scale is None and hint.get("px_per_mm"):

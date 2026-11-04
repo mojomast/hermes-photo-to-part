@@ -47,6 +47,13 @@ def reset_hooks() -> None:
     _probe_noted.clear()
 
 
+def session_project(session_id: str | None) -> Path | None:
+    """Project directory remembered for ``session_id``, if this process has one."""
+    if not session_id:
+        return None
+    return _projects.get(str(session_id))
+
+
 def hook_call_count(session_id: str | None, directory: Path | None = None) -> int | None:
     """Tool calls this process has counted for ``session_id``, or None if unknown."""
     if not session_id:
@@ -108,6 +115,11 @@ def _pre(*args, **kwargs):
         return {"action": "modify", "args": payload}
     if name.startswith("photo_part_"):
         return None
+    from photopart.build_gate import eval_read_block
+
+    blocked = eval_read_block(name, arguments if arguments else fields["args"])
+    if blocked:
+        return blocked
     if not sid or sid not in _active:
         return None
     if _is_probe(name, arguments, sid):
@@ -279,15 +291,9 @@ def _calls_path(directory: Path) -> Path:
 
 
 def _plugin_dir(directory: Path) -> bool:
-    from photopart.paths import plugin_root
+    from photopart.paths import not_a_project
 
-    root = plugin_root()
-    if root is None:
-        return False
-    try:
-        return directory.expanduser().resolve() == root
-    except OSError:
-        return False
+    return not_a_project(directory)
 
 
 def _write_budget(directory: Path, sid: str, tool_name: str) -> None:

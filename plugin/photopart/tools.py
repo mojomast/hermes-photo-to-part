@@ -435,12 +435,11 @@ def _maybe_render(args: dict, report: dict) -> None:
     out = project / "renders"
     argv = [str(mesh), "--out-dir", str(out), "--overwrite"]
     from photopart.measure import load_last_measure
-    from photopart.paths import plugin_root
+    from photopart.paths import not_a_project
 
     dirs = [project]
     cwd = Path.cwd().resolve()
-    root = plugin_root()
-    if root is None or cwd != root:
+    if not not_a_project(cwd):
         dirs.append(cwd)
     hint = load_last_measure(*dirs) or {}
     photo = _optional_str(args, "photo")
@@ -1194,6 +1193,7 @@ def tool_specs() -> list[dict]:
         "description": _lead(
             "Run one local .py build script with the plugin interpreter. "
             "Pass help or describe true for feature signatures and a minimal example script. "
+            "Do not run python build.py, cadquery, or photopart.build_run from the terminal. Use this tool. "
             "Do not open features.py or launcher.py. "
             "About 40 tool calls in total. "
             "Import photopart.features for a thread, knurl, revolve, sweep, hex screw, standoff, spur gear, or spiral scroll. "
@@ -1206,6 +1206,7 @@ def tool_specs() -> list[dict]:
             "photo_part_build",
             _lead(
                 "Run a Python file with the plugin environment interpreter and return the new files. "
+                "Do not run that file from the terminal. Use photo_part_build. "
                 "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff, spur_gear, spiral_scroll, strap_hinge, tag_faces. "
                 "Check photo_part_template first. Do not import build123d or cadquery. "
                 "Each returns one watertight trimesh in millimetres. Overlapping shells are unioned; shells_before and shells_after are in the JSON. "

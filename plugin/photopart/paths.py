@@ -18,6 +18,31 @@ def plugin_root() -> Path | None:
     return None
 
 
+def source_checkout_root() -> Path | None:
+    """Git root when this tree is the in-repo ``plugin/`` package.
+
+    ``hermes plugins install .../plugin`` publishes that directory under a
+    different name, so an install returns None. The test suite's working
+    directory is this root. It is not a user project.
+    """
+    plugin = plugin_root()
+    if plugin is None or plugin.name != "plugin":
+        return None
+    checkout = plugin.parent
+    if (checkout / "plugin" / "plugin.yaml").is_file() and (checkout / "plugin.yaml").is_file():
+        return checkout
+    return None
+
+
+def not_a_project(path: Path) -> bool:
+    """True for the plugin install directory and the source checkout root."""
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except OSError:
+        return False
+    return any(root is not None and resolved == root for root in (plugin_root(), source_checkout_root()))
+
+
 def cache_root() -> Path | None:
     raw = os.environ.get("HERMES_HOME", "").strip()
     if not raw:

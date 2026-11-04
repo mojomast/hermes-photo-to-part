@@ -368,17 +368,15 @@ def measure(payload: dict) -> dict:
 
 
 def _project_directory(payload: dict) -> Path | None:
-    """Where this project's scale file belongs. Never the plugin install root."""
-    from photopart.paths import plugin_root
-
-    root = plugin_root()
+    """Where this project's scale file belongs. Never the plugin install or the source checkout."""
+    from photopart.paths import not_a_project
 
     def _accept(path: Path) -> Path | None:
         try:
             resolved = path.expanduser().resolve()
         except OSError:
             return None
-        if root is not None and resolved == root:
+        if not_a_project(resolved):
             return None
         return resolved
 
@@ -452,10 +450,9 @@ def _write_last_measure(report: dict, payload: dict) -> Path | None:
 
 
 def load_last_measure(*dirs) -> dict | None:
-    """Scale hint for one project. Skips the plugin install directory."""
-    from photopart.paths import plugin_root
+    """Scale hint for one project. Skips the plugin install and the source checkout."""
+    from photopart.paths import not_a_project
 
-    root = plugin_root()
     for directory in dirs:
         if not directory:
             continue
@@ -463,7 +460,7 @@ def load_last_measure(*dirs) -> dict | None:
             resolved = Path(directory).expanduser().resolve()
         except OSError:
             continue
-        if root is not None and resolved == root:
+        if not_a_project(resolved):
             continue
         path = resolved / "last_measure.json"
         if not path.is_file():
