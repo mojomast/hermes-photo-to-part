@@ -16,7 +16,7 @@ from photopart.geometry import expected_extents, write_template
 from photopart.render import render_views
 from photopart.validate import evaluate
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _font(size: int) -> ImageFont.ImageFont:

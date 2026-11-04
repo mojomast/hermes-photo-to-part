@@ -189,15 +189,14 @@ def _file_name(payload: dict) -> str | None:
 
 
 def _bump(directory: Path, tool_name: str, last_file: str | None) -> dict:
-    from photopart.paths import plugin_root
+    from photopart.paths import not_a_project
 
     path = directory / ".p2p_state.json"
-    root = plugin_root()
     try:
         resolved = directory.expanduser().resolve()
     except OSError:
         resolved = directory
-    if root is not None and resolved == root:
+    if not_a_project(resolved):
         # The install directory is not a project. Do not leave state there.
         return {
             "plugin_calls": 1,

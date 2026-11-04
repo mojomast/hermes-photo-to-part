@@ -13,6 +13,7 @@ import trimesh
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
+PLUGIN = ROOT / "plugin"
 import sys
 
 sys.path.insert(0, str(ROOT))
@@ -296,7 +297,7 @@ class FlowTextTests(unittest.TestCase):
         for spec in tool_specs():
             self.assertTrue(spec["description"].startswith(SKILL_ID), spec["name"])
             self.assertTrue(spec["schema"]["description"].startswith(SKILL_ID), spec["name"])
-        text = (ROOT / "skills" / "photo-to-printable-part" / "SKILL.md").read_text(encoding="utf-8")
+        text = (PLUGIN / "skills" / "photo-to-printable-part" / "SKILL.md").read_text(encoding="utf-8")
         for phrase in (
             "name_vN.stl",
             "photo_part_build",

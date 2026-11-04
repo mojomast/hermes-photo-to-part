@@ -16,10 +16,11 @@ from PIL import Image
 from photopart.measure import measure
 
 ROOT = Path(__file__).resolve().parents[1]
+PLUGIN = ROOT / "plugin"
 
 
 def _plugin():
-    spec = importlib.util.spec_from_file_location("photo_to_part_plugin", ROOT / "__init__.py")
+    spec = importlib.util.spec_from_file_location("photo_to_part_plugin", PLUGIN / "__init__.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

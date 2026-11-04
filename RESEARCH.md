@@ -11,7 +11,7 @@ Sources:
 - Loader source on `main`, fetched 2026-11-02: https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/plugins.py and https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/plugins_content.py
 - User-facing plugin page: https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins
 
-A directory plugin needs `plugin.yaml` and an `__init__.py` with `register(ctx)`. Hermes also loads `desktop/plugin.js`, a portable `plugin.json`, or `dashboard/manifest.json`. This repo is a directory plugin at the repository root, which is the layout used by [hermes-session-warmer](https://github.com/mojomast/hermes-session-warmer). [orbit-desktop](https://github.com/mojomast/orbitdesktop) keeps the plugin in a `hermes-plugin/` subdirectory and sets `subdir` in the catalog. [afterforge](https://github.com/ussyverse/afterforge) is a tools-category entry (catalog maintainer `ussyverse`) with the same manifest shape: name, repo, full SHA, capabilities lists.
+A directory plugin needs `plugin.yaml` and an `__init__.py` with `register(ctx)`. Hermes also loads `desktop/plugin.js`, a portable `plugin.json`, or `dashboard/manifest.json`. Through 0.1.15 this repo was a directory plugin at the repository root, which is the layout used by [hermes-session-warmer](https://github.com/mojomast/hermes-session-warmer). As of 0.1.16 the installable tree is `plugin/`, the same idea as [orbit-desktop](https://github.com/mojomast/orbitdesktop), which keeps the plugin in a subdirectory and sets `subdir` in the catalog. [afterforge](https://github.com/ussyverse/afterforge) is a tools-category entry (catalog maintainer `ussyverse`) with the same manifest shape: name, repo, full SHA, capabilities lists. The install identifier is `mojomast/hermes-photo-to-part/plugin`. A catalog entry should set that subdirectory. The `plugin.yaml` at the repository root is a refusal stub (`requires_hermes >=999`, `manifest_version: 99`) so a root install does not publish `evals/` and `tests/`.
 
 Manifest v1 needs `name` and, in practice, `version` and `description`. The published examples also list `provides_tools` and `provides_hooks`. Manifest v2 (`#64165`) is additive. A file without `manifest_version` stays v1 forever. Unknown fields warn and do not refuse to load. v2 fields used here:
 
@@ -61,9 +61,11 @@ Rules that shaped this repo:
 Before catalog acceptance the install line is a git install, not the catalog name. The session-warmer README uses the same wording. This repo copies that:
 
 ```bash
-hermes plugins install mojomast/hermes-photo-to-part --no-enable
+hermes plugins install mojomast/hermes-photo-to-part/plugin --no-enable
 hermes plugins enable photo-to-part
 ```
+
+That `/plugin` suffix is the Hermes v0.21.7 subdirectory form (`owner/repo/subdir`). It sparse-checks out `plugin/` only. The clone used for that install does not keep `.git` in the published tree, so `hermes plugins update` cannot update it. Reinstall with `--force`. `hermes plugins validate . --install-deps` runs inside `plugin/`.
 
 After a maintainer merges the catalog PR:
 

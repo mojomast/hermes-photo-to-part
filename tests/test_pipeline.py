@@ -18,7 +18,8 @@ import numpy as np
 import trimesh
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
+PLUGIN = ROOT / "plugin"
+sys.path.insert(0, str(PLUGIN))
 
 from photopart.geometry import (  # noqa: E402
     build_mesh,
@@ -31,7 +32,7 @@ from photopart.heal import heal_mesh
 from photopart.render import render_views
 from photopart.validate import evaluate, main as validate_main
 
-SKILL = ROOT / "skills" / "photo-to-printable-part"
+SKILL = PLUGIN / "skills" / "photo-to-printable-part"
 SCRIPTS = SKILL / "scripts"
 
 
@@ -209,7 +210,7 @@ class PluginTests(unittest.TestCase):
     def test_register_discovers_the_skill(self):
         import importlib.util
 
-        spec = importlib.util.spec_from_file_location("photo_to_part_plugin", ROOT / "__init__.py")
+        spec = importlib.util.spec_from_file_location("photo_to_part_plugin", PLUGIN / "__init__.py")
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         found = []
@@ -263,7 +264,7 @@ class PluginTests(unittest.TestCase):
         front = text.split("---", 2)[1]
         meta = yaml.safe_load(front)
         self.assertEqual(meta["name"], "photo-to-printable-part")
-        self.assertEqual(meta["version"], "0.1.15")
+        self.assertEqual(meta["version"], "0.1.16")
         description = meta["description"].strip()
         self.assertLessEqual(len(description), 1024)
         self.assertIn("STL", description)
@@ -281,11 +282,11 @@ class PluginTests(unittest.TestCase):
         import tomllib
         import yaml
 
-        manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
-        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        manifest = yaml.safe_load((PLUGIN / "plugin.yaml").read_text(encoding="utf-8"))
+        project = tomllib.loads((PLUGIN / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "photo-to-part")
-        self.assertEqual(manifest["version"], "0.1.15")
-        self.assertEqual(project["project"]["version"], "0.1.15")
+        self.assertEqual(manifest["version"], "0.1.16")
+        self.assertEqual(project["project"]["version"], "0.1.16")
         self.assertEqual(manifest["python_dependencies"], project["project"]["dependencies"])
         from photopart.tools import TOOL_NAMES
 
@@ -299,7 +300,7 @@ class PluginTests(unittest.TestCase):
 
     def test_helpers_do_not_shell_out_or_open_the_network(self):
         banned = {"subprocess", "socket", "urllib", "requests", "httpx", "pickle", "eval", "exec"}
-        roots = [ROOT / "photopart", SCRIPTS, ROOT / "__init__.py"]
+        roots = [PLUGIN / "photopart", SCRIPTS, PLUGIN / "__init__.py"]
         files = []
         for root in roots:
             if root.is_file():
@@ -517,7 +518,7 @@ class PreviewAndOverlayTests(unittest.TestCase):
         parts = preview.split(only_watertight=False)
         largest = max(len(part.faces) for part in parts)
         self.assertGreater(largest / len(preview.faces), 0.9)
-        source = (ROOT / "photopart" / "render.py").read_text(encoding="utf-8")
+        source = (PLUGIN / "photopart" / "render.py").read_text(encoding="utf-8")
         self.assertNotIn("np.linspace", source)
         with tempfile.TemporaryDirectory() as tmp:
             render_views(preview, Path(tmp), pixels=72, samples=1)
@@ -692,7 +693,7 @@ class ToolAndLauncherTests(unittest.TestCase):
             self.assertTrue((root / "sample" / "plate_clip.stl").is_file())
 
     def test_register_module_does_not_import_trimesh_at_load(self):
-        for path in (ROOT / "__init__.py", ROOT / "photopart" / "tools.py", ROOT / "photopart" / "launcher.py"):
+        for path in (PLUGIN / "__init__.py", PLUGIN / "photopart" / "tools.py", PLUGIN / "photopart" / "launcher.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in tree.body:
                 if isinstance(node, ast.Import):
@@ -814,8 +815,8 @@ class GuidanceTests(unittest.TestCase):
         self.assertIn('build123d>=0.10,<0.14', backends)
         self.assertIn("several minutes", backends)
         self.assertNotIn("No network", backends)
-        for relative in ("README.md", "SECURITY.md", "plugin.yaml"):
-            self.assertNotIn("No network", (ROOT / relative).read_text(encoding="utf-8"), relative)
+        for path in (ROOT / "README.md", ROOT / "SECURITY.md", PLUGIN / "plugin.yaml"):
+            self.assertNotIn("No network", path.read_text(encoding="utf-8"), path.name)
 
 
 if __name__ == "__main__":

@@ -31,16 +31,25 @@ def _build_is_help(args: dict) -> bool:
     return str(args.get("mode") or "").strip().lower() in _HELP_MODES
 
 
-def approve_build(tool_name: str = "", args: dict | None = None, **_kwargs):
-    """pre_tool_call hook: ask before photo_part_build runs a script.
+def approve_build(tool_name: str = "", args: dict | None = None, **kwargs):
+    """pre_tool_call hook: ask before a photo-to-part build runs.
 
-    ``help`` and ``describe`` do not run a script, so they are not gated.
-    ``PHOTOPART_BUILD_APPROVAL=allow`` skips the prompt for an in-process
-    test or a sealed eval. The default is to ask. Hermes fails closed when
-    nobody can approve.
+    ``photo_part_build`` is gated unless the call is ``help`` or ``describe``.
+    The same ``rule_key`` (``photo_part_build``) covers a terminal or code
+    tool that runs ``python build.py``, CadQuery or build123d, or
+    ``photopart.build_run`` / ``photopart.stamp``. ``ls``, ``cat``, and
+    ``pytest`` are not builds. ``PHOTOPART_BUILD_APPROVAL=allow`` skips the
+    prompt for an in-process test or a sealed eval. The default is to ask.
+    Hermes fails closed when nobody can approve.
     """
     if str(tool_name or "") != "photo_part_build":
-        return None
+        from photopart.build_gate import terminal_build_approval
+
+        return terminal_build_approval(
+            tool_name,
+            args,
+            session_id=kwargs.get("session_id"),
+        )
     parsed = _approval_args(args)
     if _build_is_help(parsed):
         return None
@@ -73,7 +82,9 @@ def register(ctx) -> None:
     is registered. ``pre_tool_call`` still rewrites this skill's id.
     ``post_tool_call`` and ``transform_tool_result`` still count the session
     budget. A second ``pre_tool_call`` callback asks for Hermes approval
-    before ``photo_part_build`` runs a script.
+    before ``photo_part_build`` runs a script, and before a terminal or
+    code tool runs that build directly. ``pre_tool_call`` also blocks reads
+    of ``evals/`` scoring files and ``tests/regression``.
     """
     skills_dir = Path(__file__).resolve().parent / "skills"
     if skills_dir.is_dir():

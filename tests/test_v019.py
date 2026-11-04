@@ -18,6 +18,7 @@ from photopart.spec import apply_spec, count_bores, genus_report
 from photopart.tools import build_tool, measure_tool, template_tool, validate_tool
 
 ROOT = Path(__file__).resolve().parents[1]
+PLUGIN = ROOT / "plugin"
 
 
 def _box(path: Path, extents) -> None:
@@ -130,7 +131,7 @@ class BudgetAndHelpTests(unittest.TestCase):
             self.assertTrue(spec["description"].startswith(SKILL_ID), spec["name"])
             self.assertIn('skill_view("photo-to-part:photo-to-printable-part")', spec["description"])
             self.assertIn("calls_used", spec["schema"]["parameters"]["properties"])
-        text = (ROOT / "skills" / "photo-to-printable-part" / "SKILL.md").read_text(encoding="utf-8")
+        text = (PLUGIN / "skills" / "photo-to-printable-part" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("About 40 tool calls in total.", text)
         self.assertIn("Don't read the plugin's source or evals.", text)
         self.assertIn("Use the tools' help/params outputs.", text)
@@ -229,14 +230,14 @@ class EvalSealTests(unittest.TestCase):
     def test_package_excludes_evals_and_tests(self):
         from setuptools import find_packages
 
-        names = find_packages(where=str(ROOT), include=["photopart*"], exclude=["evals*", "tests*"])
+        names = find_packages(where=str(PLUGIN), include=["photopart*"], exclude=["evals*", "tests*"])
         self.assertIn("photopart", names)
         self.assertNotIn("evals", names)
         self.assertNotIn("tests", names)
-        manifest = (ROOT / "MANIFEST.in").read_text(encoding="utf-8")
+        manifest = (PLUGIN / "MANIFEST.in").read_text(encoding="utf-8")
         self.assertIn("prune evals", manifest)
         self.assertIn("prune tests", manifest)
-        project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        project = (PLUGIN / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('exclude = ["evals*", "tests*"]', project)
 
 

@@ -15,6 +15,7 @@ import trimesh
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
+PLUGIN = ROOT / "plugin"
 import sys
 
 sys.path.insert(0, str(ROOT))
@@ -271,7 +272,7 @@ class MeasureTests(unittest.TestCase):
 
 class SkillTightnessTests(unittest.TestCase):
     def test_instructions_name_the_id_tools_and_limits(self):
-        text = (ROOT / "skills" / "photo-to-printable-part" / "SKILL.md").read_text(encoding="utf-8")
+        text = (PLUGIN / "skills" / "photo-to-printable-part" / "SKILL.md").read_text(encoding="utf-8")
         front = text.split("---", 2)[1]
         self.assertIn("photo-to-part:photo-to-printable-part", front)
         self.assertLess(front.index("photo-to-part:photo-to-printable-part"), front.index("STL"))
@@ -287,7 +288,7 @@ class SkillTightnessTests(unittest.TestCase):
             "allow_size",
         ):
             self.assertIn(phrase, text)
-        plugin = (ROOT / "plugin.yaml").read_text(encoding="utf-8")
+        plugin = (PLUGIN / "plugin.yaml").read_text(encoding="utf-8")
         self.assertIn("photo-to-part:photo-to-printable-part", plugin)
         self.assertIn("photo_part_measure", plugin)
 

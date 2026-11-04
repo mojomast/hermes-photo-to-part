@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.16 — 2026-11-04
+
+- A terminal or code tool that runs a photo-to-part build asks for the same Hermes approval as `photo_part_build` (`rule_key` `photo_part_build`). That covers `python build.py`, `photo-part-build`, `python -m photopart.build_run` or `photopart.stamp`, a CadQuery or build123d export, and a Python file whose text imports those modules or writes an STL, STEP, STP, or 3MF. `ls`, `cat`, `echo`, `rg`, and `pytest` are not builds. `PHOTOPART_BUILD_APPROVAL=allow` (also `yes`, `true`, `1`, `off`, `skip`) skips the prompt. Anything else still asks, and Hermes blocks the command when nobody can approve.
+- The skill, `photo_part_build`, and the template note say to use `photo_part_build` rather than the terminal.
+- `evals/`, `tests/` (including `tests/regression`), and the runner stay at the repository root. The installable plugin is `plugin/`. `hermes plugins install mojomast/hermes-photo-to-part/plugin` sparse-checks out that directory only, so the scorer, fixtures, and regression meshes are not published. The `plugin.yaml` at the repository root refuses a root install on Hermes v0.21.7 (`requires_hermes >=999` and `manifest_version: 99`) before files are copied. A full checkout still has `evals/` on disk. `pre_tool_call` blocks a session read of `evals/` scoring files and `tests/regression`. `pytest` and `unittest` are not blocked. `python -m evals.runner` from the repository root still runs the suite.
+- `last_measure.json` and `.p2p_state.json` are not written into the plugin directory or into the source checkout root. A Hermes install is unaffected. The test suite runs with that root as its working directory.
+
 ## 0.1.15 — 2026-11-03
 
 - From @teknium1: `photo_part_build` asks for Hermes approval before it runs a script. The callback is a second `pre_tool_call` hook, so the skill-id rewrite, the session call budget, and the probe note stay. `help` and `describe` do not run a script and are not prompted. `PHOTOPART_BUILD_APPROVAL=allow` skips the prompt for a test or a sealed eval. The default is to ask.

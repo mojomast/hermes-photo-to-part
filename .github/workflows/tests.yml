@@ -17,7 +17,7 @@ jobs:
       # Three-day release quarantine, matching the Hermes dependency guidance.
       # 2026-10-30 is three days before the 2026-11-02 research date.
       - run: uv venv .venv
-      - run: uv pip install --python .venv/bin/python --exclude-newer 2026-10-30 -e ".[dev]"
+      - run: uv pip install --python .venv/bin/python --exclude-newer 2026-10-30 -e "plugin[dev]"
       # discover includes tests/test_regression_rounds.py (live meshes under
       # tests/regression). A failure there blocks the pull request.
       - run: .venv/bin/python -m unittest discover -s tests -v
@@ -38,12 +38,13 @@ jobs:
           git clone --depth 1 --branch v0.21.7 https://github.com/NousResearch/hermes-agent.git "${{ runner.temp }}/hermes-agent"
           python -m pip install -e "${{ runner.temp }}/hermes-agent"
       - name: Validate and doctor with a temporary HERMES_HOME
+        working-directory: plugin
         run: |
           set -euo pipefail
           export HERMES_HOME="${{ runner.temp }}/hermes-home"
           mkdir -p "$HERMES_HOME"
           export PYTHONPATH="$PWD${PYTHONPATH:+:$PYTHONPATH}"
-          hermes plugins validate .
+          hermes plugins validate . --install-deps
           doctor_out="$(hermes plugins doctor . --ci)"
           printf '%s\n' "$doctor_out"
           printf '%s\n' "$doctor_out" | grep -q "6 tool"
