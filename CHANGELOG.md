@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- Docs: test-round reports and harness in [docs/test-rounds](docs/test-rounds/README.md), research in docs/research, and [HANDOFF.md](HANDOFF.md).
+
 ## 0.1.16 — 2026-11-04
 
 - A terminal or code tool that runs a photo-to-part build asks for the same Hermes approval as `photo_part_build` (`rule_key` `photo_part_build`). That covers `python build.py`, `photo-part-build`, `python -m photopart.build_run` or `photopart.stamp`, a CadQuery or build123d export, and a Python file whose text imports those modules or writes an STL, STEP, STP, or 3MF. `ls`, `cat`, `echo`, `rg`, and `pytest` are not builds. `PHOTOPART_BUILD_APPROVAL=allow` (also `yes`, `true`, `1`, `off`, `skip`) skips the prompt. Anything else still asks, and Hermes blocks the command when nobody can approve.
