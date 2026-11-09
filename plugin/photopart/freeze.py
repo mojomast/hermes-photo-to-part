@@ -133,12 +133,104 @@ def apply_answers(rows: list[dict], spec_rows, prior: dict | None, overrides: li
     return rows
 
 
-def apply_freeze(spec_source, raw: dict, reason: str | None) -> tuple[list[str], dict]:
-    """Return failures and a report fragment. A dict spec is not frozen."""
+def user_axis_values(raw: dict) -> dict:
+    """Plain x/y/z numbers. A ``source`` other than user is not locked."""
+    if not isinstance(raw, dict):
+        return {}
+    nested = raw.get("dims") if isinstance(raw.get("dims"), dict) else {}
+    found = {}
+    for name in ("x", "y", "z"):
+        item = raw.get(name, nested.get(name) if isinstance(nested, dict) else None)
+        if isinstance(item, dict) and str(item.get("source") or "user") != "user":
+            continue
+        value = _number(item.get("value") if isinstance(item, dict) else item)
+        if value is None:
+            continue
+        found[name] = value
+    return found
+
+
+def measured_lengths(mesh_path) -> list[float]:
+    """Millimetres from ``last_measure.json`` beside the mesh, if that file exists."""
+    if not mesh_path:
+        return []
+    try:
+        directory = Path(mesh_path).expanduser().resolve().parent
+    except OSError:
+        return []
+    path = directory / "last_measure.json"
+    if not path.is_file():
+        return []
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return []
+    if not isinstance(loaded, dict):
+        return []
+    values = []
+    bbox = loaded.get("part_bbox_mm")
+    if isinstance(bbox, (list, tuple)):
+        for item in bbox:
+            number = _number(item)
+            if number is not None and number > 0:
+                values.append(number)
+    measurements = loaded.get("measurements")
+    if isinstance(measurements, list):
+        for item in measurements:
+            if not isinstance(item, dict):
+                continue
+            for key in ("mm", "length_mm", "value"):
+                number = _number(item.get(key))
+                if number is not None and number > 0:
+                    values.append(number)
+                    break
+    return values
+
+
+def axis_overrides(stored: dict, current: dict, measured: list) -> list[dict]:
+    """User axis values rewritten to a nearby photo measurement."""
+    rows = []
+    if not isinstance(stored, dict) or not isinstance(current, dict):
+        return rows
+    for name, old in stored.items():
+        if name not in current:
+            continue
+        old_value = _number(old)
+        new_value = _number(current.get(name))
+        if old_value is None or new_value is None or abs(old_value - new_value) <= 1e-6:
+            continue
+        for length in measured or []:
+            measured_value = _number(length)
+            if measured_value is None or measured_value <= 0:
+                continue
+            band = max(1.0, 0.02 * abs(measured_value))
+            if abs(new_value - measured_value) <= band and abs(old_value - measured_value) > band:
+                rows.append(
+                    {
+                        "name": str(name),
+                        "user": old_value,
+                        "edited": new_value,
+                        "measured": measured_value,
+                    }
+                )
+                break
+    return rows
+
+
+def apply_freeze(spec_source, raw: dict, reason: str | None, measured: list | None = None) -> tuple[list[str], dict]:
+    """Return failures and a report fragment. A dict spec is not frozen.
+
+    A frozen user x/y/z that is rewritten to a photo measurement stays at
+    the user's number. The freeze hash is not advanced. A reason still
+    allows a checklist edit or a number that does not track a measurement.
+    """
     info = {
         "frozen_sha256": fingerprint(raw) if isinstance(raw, dict) else None,
         "checklist": checklist(raw) if isinstance(raw, dict) else [],
         "spec_edits": [],
+        "user_dimension_conflicts": [],
+        "user_dimension_changes": [],
+        "locked_axes": {},
     }
     path = freeze_path(spec_source)
     if path is None or not isinstance(raw, dict):
@@ -146,9 +238,26 @@ def apply_freeze(spec_source, raw: dict, reason: str | None) -> tuple[list[str],
     current = fingerprint(raw)
     info["frozen_sha256"] = current
     prior = _read(path)
+    current_axes = user_axis_values(raw)
     if prior is None:
-        _write(path, {"sha256": current, "edits": []})
+        _write(path, {"sha256": current, "edits": [], "user_axes": current_axes})
         return [], info
+    stored = prior.get("user_axes") if isinstance(prior.get("user_axes"), dict) else {}
+    overrides = axis_overrides(stored, current_axes, measured or [])
+    if overrides:
+        info["user_dimension_conflicts"] = overrides
+        info["locked_axes"] = {row["name"]: row["user"] for row in overrides}
+        info["spec_edits"] = list(prior.get("edits") or [])
+        info["frozen_sha256"] = prior.get("sha256")
+        messages = [
+            (
+                f"user {row['name']} {row['user']:g} mm was replaced with measured {row['edited']:g} mm "
+                f"(photo measurement {row['measured']:g} mm). Keep {row['user']:g}. "
+                "Do not edit spec.json to the measured value."
+            )
+            for row in overrides
+        ]
+        return messages, info
     if prior.get("sha256") == current:
         info["spec_edits"] = list(prior.get("edits") or [])
         return [], info
@@ -166,8 +275,18 @@ def apply_freeze(spec_source, raw: dict, reason: str | None) -> tuple[list[str],
     }
     edits = [item for item in (prior.get("edits") or []) if isinstance(item, dict)]
     edits.append(edit)
-    _write(path, {"sha256": current, "edits": edits[-20:]})
+    kept_axes = dict(stored)
+    kept_axes.update(current_axes)
+    changes = []
+    for name, old in stored.items():
+        old_value = _number(old)
+        new_value = _number(current_axes.get(name))
+        if old_value is None or new_value is None or abs(old_value - new_value) <= 1e-6:
+            continue
+        changes.append({"name": str(name), "from": old_value, "to": new_value})
+    _write(path, {"sha256": current, "edits": edits[-20:], "user_axes": kept_axes})
     info["spec_edits"] = edits[-20:]
+    info["user_dimension_changes"] = changes
     return [], info
 
 
@@ -215,6 +334,19 @@ def _feature(item) -> dict:
             row["answer"] = token
         return row
     return {"item": str(item), "expected": "yes"}
+
+
+def _number(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def _read(path: Path) -> dict | None:

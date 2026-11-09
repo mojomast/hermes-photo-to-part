@@ -385,7 +385,7 @@ def measure(payload: dict) -> dict:
         )
     else:
         report["last_measure"] = str(directory / "last_measure.json")
-    return attach_flow(report, step_measure())
+    return attach_flow(report, step_measure(report))
 
 
 def _project_directory(payload: dict) -> Path | None:

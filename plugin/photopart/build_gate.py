@@ -5,7 +5,9 @@ Hermes v0.21.7 asks for approval when a ``pre_tool_call`` hook returns
 covers the terminal and the code tool. ``PHOTOPART_BUILD_APPROVAL=allow``
 (and the other off values used by the build tool) skips the prompt. Any
 other value, including an empty one, still asks. Hermes blocks the command
-when nobody can approve.
+when nobody can approve. Hermes ``--yolo`` (and ``HERMES_YOLO_MODE``)
+auto-approves this action by Hermes design. The plugin still returns it.
+That flag is separate from ``PHOTOPART_BUILD_APPROVAL``.
 
 The check looks at the command text and, when a ``.py`` path is readable and
 is not a test, at the first 64KB of that file. It does not execute the
@@ -207,6 +209,20 @@ def eval_read_block(tool_name: str = "", args=None) -> dict | None:
     if _EVAL_PATH.search(folded) or _EVAL_IMPORT.search(blob) or "p2p-canary-" in blob:
         return {"action": "block", "message": BLOCK_MESSAGE}
     return None
+
+
+def protected_read_text(blob: str) -> bool:
+    """True when raw tool text names a protected eval or regression path.
+
+    Used only after the read check itself raises. ``pytest`` and
+    ``unittest`` stay allowed. An ordinary README path does not match.
+    """
+    if not blob:
+        return False
+    if re.search(r"\b(?:pytest|py\.test|unittest|nose2?|tox)\b", blob):
+        return False
+    folded = blob.replace("\\", "/")
+    return bool(_EVAL_PATH.search(folded) or _EVAL_IMPORT.search(blob) or "p2p-canary-" in blob)
 
 
 def _needs_approval(command: str, *, workdir: str | None, session_id: str | None, code_only: bool) -> bool:

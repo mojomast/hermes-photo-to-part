@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.19 — 2026-11-09
+
+- Overlay refinement no longer treats truncated chamfer (capped near 0.03 of the diagonal) as a finished fit. A silhouette refines only when the untruncated symmetric contour distance is above 2 px. The warp is Euclidean (rotation and translation). A result that changes mask area, or that does not improve that distance, is discarded. Nonconvergence keeps the prior pose. Pose choice uses overlap and edge distance. A saturated chamfer score cannot replace a better-overlap pose. A fully observed photo keeps border edges. Padding seams are still dropped. Half-pixel nearest-pixel rounding stays.
+- A frozen user x, y, or z that is rewritten to a nearby photo measurement fails validation. The message names both numbers. The mesh is scored against the user's number, and the freeze hash is not advanced. A checklist edit, or a number that does not track a measurement, still updates when `--reason` is set.
+- The stability reason and the 0.85 comparison use the same two-decimal value, so a score that prints as 0.85 is not reported as under 0.85.
+- Stability GrabCut samples stop once the first two agree. The primary part mask stays full resolution. A measurement `next_step` reports `part_bbox_mm` and says to stop when the request was only a measurement. Template and build text point at `bottle_cap`, `strap_hinge`, and `spur_gear` instead of reading plugin source.
+- A `pre_tool_call` error still blocks a read of eval scoring files and `tests/regression`. An ordinary read still proceeds. `pytest` and `unittest` stay allowed.
+- Docs state that Hermes `--yolo` auto-approves the build prompt. The plugin still returns the approve action and does not block that flag. `PHOTOPART_BUILD_APPROVAL=allow` remains the test and sealed-eval skip.
+
 ## 0.1.18 — 2026-11-04
 
 - Calibrated photo overlays preserve pixels-per-millimetre scale in the IoU fallback, including coarse/fine pose search and mirror comparisons. A wrong-size model can no longer be resized to match the foreground by this fallback when image edges are weak.

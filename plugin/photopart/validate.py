@@ -281,9 +281,35 @@ def run_validate(
             holes=hole_specs,
         )
         if spec or dims:
+            from photopart.freeze import axis_overrides, measured_lengths, user_axis_values
             from photopart.spec import apply_spec
 
-            spec_failures, spec_rows = apply_spec(mesh, spec=spec, dims=dims, tolerance=tolerance)
+            scoring_spec = spec
+            raw_for_lock = None
+            if spec:
+                from photopart.spec import load_spec
+
+                raw_for_lock = load_spec(spec)
+                from photopart.freeze import freeze_path
+
+                prior_path = freeze_path(spec)
+                prior_freeze = None
+                if prior_path is not None and prior_path.is_file():
+                    try:
+                        prior_freeze = json.loads(prior_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError, UnicodeError):
+                        prior_freeze = None
+                stored = prior_freeze.get("user_axes") if isinstance(prior_freeze, dict) else None
+                overrides = axis_overrides(
+                    stored if isinstance(stored, dict) else {},
+                    user_axis_values(raw_for_lock),
+                    measured_lengths(mesh_path),
+                )
+                if overrides and isinstance(raw_for_lock, dict):
+                    scoring_spec = dict(raw_for_lock)
+                    for row in overrides:
+                        scoring_spec[row["name"]] = row["user"]
+            spec_failures, spec_rows = apply_spec(mesh, spec=scoring_spec, dims=dims, tolerance=tolerance)
             report["spec"] = spec_rows
             report["failures"].extend(spec_failures)
             report["ok"] = not report["failures"]
@@ -301,12 +327,13 @@ def run_validate(
             report["failures"].extend(dropped)
             report["template_checks_missing"] = True
             report["ok"] = False
-        from photopart.freeze import apply_answers, apply_freeze
+        from photopart.freeze import apply_answers, apply_freeze, measured_lengths
         from photopart.spec import load_spec
         from photopart.stamp import read_sidecar
 
         raw_spec = load_spec(spec) if spec else {}
-        freeze_failures, freeze_info = apply_freeze(spec, raw_spec, spec_reason)
+        measured = measured_lengths(mesh_path) if spec else []
+        freeze_failures, freeze_info = apply_freeze(spec, raw_spec, spec_reason, measured)
         prior_side = read_sidecar(Path(mesh_path).expanduser())
         prior_answers = prior_side.get("answers") if isinstance(prior_side, dict) else None
         checklist_rows = apply_answers(
@@ -321,6 +348,10 @@ def run_validate(
         }
         report["frozen_sha256"] = freeze_info["frozen_sha256"]
         report["spec_edits"] = freeze_info["spec_edits"]
+        if freeze_info.get("user_dimension_conflicts"):
+            report["user_dimension_conflicts"] = freeze_info["user_dimension_conflicts"]
+        if freeze_info.get("user_dimension_changes"):
+            report["user_dimension_changes"] = freeze_info["user_dimension_changes"]
         if freeze_failures:
             report["failures"].extend(freeze_failures)
             report["ok"] = False
