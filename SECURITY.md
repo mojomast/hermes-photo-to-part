@@ -14,6 +14,7 @@ What it does:
 - They do not open sockets, read `.env` files, or read Hermes credential stores.
 - If a helper script is started with a Python that cannot import trimesh, it re-executes itself with the plugin environment's Python. It finds that interpreter from `HERMES_HOME` install metadata (`facts.json` and the install venv layout). It does not run a shell string and it does not install packages.
 - There is no telemetry and no self-updater.
+- Hermes Desktop 0.23 or newer can load `desktop/plugin.js`, an optional Part studio pane. The pane calls `GET /api/plugins/photo-to-part/` on the gateway (`dashboard/plugin_api.py`). Those routes read `<project>/.photopart/pane.json` and an index at `$HERMES_HOME/.photopart/pane-index.json`, and they return JPEG data URLs for images already written inside that project. They refuse `..`, absolute paths, files outside the project, and any path under `evals/` or `tests/regression`, including a file that contains the eval canary. The pane does not add a tool, a hook, a socket, or a credential read. `broadcast_plugin_event` is used when that Hermes module imports, and a missing module is ignored. Progress recording cannot change a tool result or the approval decision. On Hermes without the desktop pane, `desktop/` and `dashboard/` are unused and the six tools behave as before.
 
 Photos you attach in a Hermes chat are still sent to whatever model provider you use. This plugin does not add a second upload. A mesh you point the tools at stays on disk.
 

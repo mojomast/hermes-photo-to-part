@@ -13,6 +13,8 @@ description: >-
   go to your model provider. Install this plugin/ directory.
   A user-stated millimetre value is not replaced by a photo measurement.
   Hermes --yolo auto-approves a build prompt; this plugin does not block that flag.
+  Hermes Desktop 0.23 or newer can show an optional Part studio pane while a
+  run is in progress. The six tools still install and run when that pane is unavailable.
 author: mojomast
 license: MIT
 homepage: https://github.com/mojomast/hermes-photo-to-part

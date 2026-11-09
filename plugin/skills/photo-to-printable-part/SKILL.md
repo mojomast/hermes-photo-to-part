@@ -151,6 +151,10 @@ Change named parameters, then one validate and one render of the new `name_vN.st
 
 Model the measured nominal size. Add clearance only on mating faces. See `references/print-tolerances.md`. Thickness and depth that a flat photo cannot show stay marked assumed.
 
+## Desktop pane
+
+Hermes Desktop 0.23 or newer may show a Part studio pane while these tools run. The pane is optional. It is not a tool and it has no arguments. Keep calling `photo_part_measure`, `photo_part_template` or `photo_part_build`, `photo_part_validate`, and `photo_part_render` the same way when the pane is closed or the desktop app is not installed. Do not wait on the pane, and do not describe it as a seventh tool.
+
 ## Deliver
 
 Validate the exact file you will deliver with `spec.json`, then inspect its returned sheet and photo comparison. Reuse the automatic render. If a missing comparison needs another render, or a different best version is selected, use `photo_part_render` with `final` true. Any render of a `name_vN` with no fresh `<file>.validate.json` is refused (`unvalidated: true`). If `stale_validation` is true, or validate `ok` is false, do not deliver. List spec deviations in the final answer: every validate failure, including a template check removed from `spec.json`. Do not ship a file that failed the spec.

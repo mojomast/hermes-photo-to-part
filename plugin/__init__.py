@@ -31,6 +31,20 @@ def _build_is_help(args: dict) -> bool:
     return str(args.get("mode") or "").strip().lower() in _HELP_MODES
 
 
+def _note_gate(decision, project):
+    """Record an approval wait for the pane. The decision dict is unchanged."""
+    if not isinstance(decision, dict) or decision.get("action") != "approve":
+        return decision
+    try:
+        from photopart.progress import note_approval
+
+        where = project if isinstance(project, str) else None
+        note_approval(where, str(decision.get("message") or ""), str(decision.get("rule_key") or "photo_part_build"))
+    except Exception:
+        return decision
+    return decision
+
+
 def approve_build(tool_name: str = "", args: dict | None = None, **kwargs):
     """pre_tool_call hook: ask before a photo-to-part build runs.
 
@@ -46,11 +60,14 @@ def approve_build(tool_name: str = "", args: dict | None = None, **kwargs):
     if str(tool_name or "") != "photo_part_build":
         from photopart.build_gate import terminal_build_approval
 
-        return terminal_build_approval(
+        decision = terminal_build_approval(
             tool_name,
             args,
             session_id=kwargs.get("session_id"),
         )
+        parsed = _approval_args(args)
+        project = parsed.get("cwd") if isinstance(parsed.get("cwd"), str) else parsed.get("workdir")
+        return _note_gate(decision, project)
     parsed = _approval_args(args)
     if _build_is_help(parsed):
         return None
@@ -64,7 +81,11 @@ def approve_build(tool_name: str = "", args: dict | None = None, **kwargs):
     script = "" if script is None else str(script)
     cwd = parsed.get("cwd") or "."
     message = f"Run {script} {extra}".rstrip() + f" in {cwd}"
-    return {"action": "approve", "message": message, "rule_key": "photo_part_build"}
+    decision = {"action": "approve", "message": message, "rule_key": "photo_part_build"}
+    project = parsed.get("cwd") if isinstance(parsed.get("cwd"), str) else None
+    if not project and script:
+        project = str(Path(script).expanduser().parent)
+    return _note_gate(decision, project)
 
 
 def register(ctx) -> None:
