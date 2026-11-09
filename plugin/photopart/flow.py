@@ -35,15 +35,34 @@ def failed(message: str, step: str | None = None) -> dict:
     return attach_flow({"ok": False, "error": text}, step or _ERROR_STEP)
 
 
-def step_measure() -> str:
+def step_measure(report: dict | None = None) -> str:
+    """Next action after a measurement. A size-only request stops here."""
+    box = None if not isinstance(report, dict) else report.get("part_bbox_mm")
+    measured = ""
+    if isinstance(box, (list, tuple)) and box:
+        shown = " x ".join(f"{float(item):.2f}" for item in box if _is_number(item))
+        if shown:
+            measured = (
+                f"Report part_bbox_mm {shown} mm. "
+                "If the request was only a measurement, stop. "
+                "Do not invent a quad for a tilted coin. "
+                "Do not replace a user-stated dimension with this box. "
+            )
     return (
-        "Next: write spec.json from the user's dimensions, then photo_part_template "
-        "(try spur_gear, scroll, strap_hinge, thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, l_bracket, "
-        "hinge, plate, countersink, revolve, or ribs before custom code) or "
-        "photo_part_build. A build script imports photopart.features. "
-        "Write <shape>_v1.stl in an absolute project directory. Then photo_part_validate "
-        "that file with the spec. Do not write into HERMES_HOME/cache. Do not delete an STL or 3MF."
+        f"{measured}"
+        "Do not open the plugin source, features.py, or evals. "
+        "If a printable part was requested: write spec.json from the user's numbers "
+        "(a measured box does not overwrite those numbers), then one photo_part_template "
+        "(bottle_cap, strap_hinge, spur_gear, hinge, and the other shapes; "
+        "pass help true instead of reading source) or one photo_part_build, "
+        "then photo_part_validate. "
+        "Write <shape>_v1.stl in an absolute project directory. "
+        "Do not write into HERMES_HOME/cache. Do not delete an STL or 3MF."
     )
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def step_model(path: str) -> str:

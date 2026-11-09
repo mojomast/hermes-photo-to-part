@@ -352,25 +352,41 @@ def search_alignment(model: np.ndarray, foreground: np.ndarray, *, scale_mode: s
 
 
 def _select_pose(model: np.ndarray, foreground: np.ndarray, image: np.ndarray, roi, *, valid=None) -> dict:
-    """Chamfer and fallback IoU search both preserve the calibrated raster scale."""
+    """Chamfer and fallback IoU search both preserve the calibrated raster scale.
+
+    Truncated chamfer_norm is capped near 0.03, so it is not evidence that a
+    pose is close. Prefer the chamfer pose when its overlap is better, or
+    when its edges are better and the overlap is not worse. When those tie,
+    the more upright pose wins. Otherwise keep the IoU pose.
+    """
     iou_pose = search_alignment(model, foreground, scale_mode="fixed")
     chamfer = _search_chamfer(model, image, foreground, roi, valid=valid)
     iou_metrics = _chamfer_of_placed(iou_pose["placed"], image, roi, valid=valid)
     if chamfer is None:
         iou_pose.update(iou_metrics)
         return _ecc_pose(iou_pose, foreground, image, roi, valid=valid)
-    # A rectangle matches at 180°. Prefer the pose nearer to 0° only when
-    # both edge distance and overlap tie. A small edge-distance improvement
-    # can still locate an asymmetric feature such as a notch.
     iou_px = iou_metrics.get("chamfer_px")
-    if (iou_px is not None and float(chamfer["chamfer_px"]) + 0.35 >= float(iou_px)
-            and float(chamfer["iou"]) <= float(iou_pose["iou"]) + 0.01):
+    chamfer_iou = float(chamfer["iou"])
+    iou_iou = float(iou_pose["iou"])
+    if chamfer_iou > iou_iou + 0.01:
+        return _ecc_pose(chamfer, foreground, image, roi, valid=valid)
+    edges_better = (
+        iou_px is not None
+        and float(chamfer["chamfer_px"]) + 0.35 < float(iou_px)
+        and chamfer_iou + 0.01 >= iou_iou
+    )
+    if edges_better:
+        return _ecc_pose(chamfer, foreground, image, roi, valid=valid)
+    edges_tie = iou_px is None or float(chamfer["chamfer_px"]) + 0.35 >= float(iou_px)
+    overlap_not_worse = chamfer_iou + 0.01 >= iou_iou
+    if edges_tie and overlap_not_worse:
+        # A rectangle matches at 180°. Prefer the pose nearer to 0° only when
+        # both edge distance and overlap tie.
         if _pose_key(float(iou_pose["rotation_deg"]), bool(iou_pose["mirror"])) <= _pose_key(
             float(chamfer["rotation_deg"]), bool(chamfer["mirror"])
         ):
             iou_pose.update(iou_metrics)
             return _ecc_pose(iou_pose, foreground, image, roi, valid=valid)
-    if float(chamfer.get("chamfer_norm") or 1.0) <= 0.05 or float(chamfer["iou"]) + 0.08 >= float(iou_pose["iou"]):
         return _ecc_pose(chamfer, foreground, image, roi, valid=valid)
     iou_pose.update(iou_metrics)
     return _ecc_pose(iou_pose, foreground, image, roi, valid=valid)
@@ -437,9 +453,12 @@ def _edge_field(image: np.ndarray, roi, *, valid=None):
 
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if image.ndim == 3 else image
     edges = cv2.Canny(gray, 40, 120)
-    if valid is not None:
-        interior = cv2.erode(valid.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
-        edges[~interior] = 0
+    if valid is not None and not bool(np.all(valid)):
+        # Drop the seam where padding meets observed pixels. A fully observed
+        # photo keeps border edges; eroding an all-true mask deletes a part
+        # that touches the frame.
+        seam = cv2.dilate((~np.asarray(valid, dtype=bool)).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+        edges[seam] = 0
     height, width = edges.shape
     diagonal = math.hypot(width, height)
     if roi is not None:
@@ -519,8 +538,8 @@ def _chamfer_of_placed(placed: np.ndarray, image: np.ndarray, roi, *, valid=None
     if points is None:
         return {"chamfer_px": None, "chamfer_norm": None}
     height, width = dist.shape
-    qx = np.rint(points[:, 0]).astype(np.int32)
-    qy = np.rint(points[:, 1]).astype(np.int32)
+    qx = _nearest_pixel(points[:, 0])
+    qy = _nearest_pixel(points[:, 1])
     keep = (qx >= 0) & (qy >= 0) & (qx < width) & (qy < height)
     if int(np.count_nonzero(keep)) < 8:
         return {"chamfer_px": None, "chamfer_norm": None}
@@ -700,9 +719,15 @@ def _segmentation_gate(image, foreground, roi, seed, exclude) -> dict:
                 cut = _gate_mask(cut, roi, seed, exclude)
             if cut is not None and int(np.count_nonzero(cut)) >= 16:
                 grab.append(cut.astype(bool))
+            # The primary mask stays full resolution. These extra samples only
+            # score stability, so stop once the first two already agree.
+            if len(grab) >= 2 and _mean_pairwise_iou(grab) >= 0.97:
+                break
     color_stability = _mean_pairwise_iou(color_masks)
     grab_stability = _mean_pairwise_iou(grab)
-    if grab and grab_stability >= 0.85:
+    # Compare the same two-decimal value the reason text prints. A raw
+    # 0.849 is "0.85" on the page and is not under 0.85.
+    if grab and _shown_score(grab_stability) >= 0.85:
         stability = grab_stability
     elif color_masks:
         stability = color_stability
@@ -714,8 +739,9 @@ def _segmentation_gate(image, foreground, roi, seed, exclude) -> dict:
     if foreground is None:
         reasons.append("no part mask")
     else:
-        if stability < 0.85:
-            reasons.append(f"stability {stability:.2f} is under 0.85")
+        shown = _shown_score(stability)
+        if shown < 0.85:
+            reasons.append(f"stability {shown:.2f} is under 0.85")
             low = True
         # The 5% floor applies inside an explicit roi. A part that is small in
         # the full frame is still a real segmentation; cropping it out of the
@@ -759,6 +785,11 @@ def _gate_mask(mask, roi, seed, exclude):
     if component is None or int(component.sum()) < 16:
         return None
     return component
+
+
+def _shown_score(value: float) -> float:
+    """Score rounded the same way ``{value:.2f}`` prints it."""
+    return float(f"{float(value):.2f}")
 
 
 def _mean_pairwise_iou(masks: list) -> float:
@@ -1188,42 +1219,41 @@ def _prepare_photo(image, photo, measure, photo_scale, roi, seed, exclude):
 
 
 def _ecc_pose(pose: dict, foreground, image, roi, *, valid=None) -> dict:
-    """Affine then homography ECC, only when the chamfer is still coarse.
+    """Euclidean ECC when the silhouette is still coarse.
 
-    A chamfer already inside 2 px, or a normalised chamfer of 0.05 or better,
-    is left as it is. ECC does not move a fit that is already good.
+    Truncated chamfer_norm is capped near 0.03, so it is not a skip signal.
+    A good fit is an untruncated symmetric contour distance of 2 px or less.
+    The warp is rotation and translation. A result that changes mask area,
+    or that does not reduce that distance, is discarded.
     """
-    chamfer = pose.get("chamfer_px")
     placed = pose.get("placed")
-    norm = pose.get("chamfer_norm")
-    if chamfer is None or placed is None or float(chamfer) <= 2.0:
+    if placed is None or foreground is None:
         return pose
-    if norm is not None and float(norm) <= 0.05:
+    distance = _mask_chamfer(placed, foreground)
+    if distance <= 2.0:
         return pose
     refined = refine_silhouette(placed, foreground)
     if refined is None:
         return pose
-    updated = _chamfer_of_placed(refined, image, roi, valid=valid)
-    new_chamfer = updated.get("chamfer_px")
-    if new_chamfer is None or float(new_chamfer) + 1e-6 >= float(chamfer):
+    if _mask_chamfer(refined, foreground) + 1e-6 >= distance or not _area_preserved(placed, refined):
         return pose
+    updated = _chamfer_of_placed(refined, image, roi, valid=valid)
     pose = dict(pose)
     pose["placed"] = refined
     pose["iou"] = float(_iou(refined, foreground))
-    pose["chamfer_px"] = new_chamfer
+    pose["chamfer_px"] = updated.get("chamfer_px")
     pose["chamfer_norm"] = updated.get("chamfer_norm")
     pose["note"] = f"{pose.get('note') or ''} ECC refined.".strip()
     return pose
 
 
 def refine_silhouette(source: np.ndarray, target: np.ndarray) -> np.ndarray | None:
-    """Warp ``source`` onto ``target`` with ECC. Reject a wild affine or homography.
+    """Translate and rotate ``source`` onto ``target``. Scale stays put.
 
-    The affine step runs first, on a mask no wider than 360 px. A homography
-    is kept only when the affine step is still coarse, its perspective terms
-    stay small, and the chamfer to ``target`` improves. The winning warp is
-    applied at the original resolution. Returns None when OpenCV cannot
-    improve the overlap.
+    Euclidean ECC only, estimated on a mask no wider than 360 px. A fit
+    already within 2 px is left alone. Nonconvergence, a scale change, or a
+    warp that does not reduce the untruncated contour distance returns None
+    so the caller keeps the prior pose.
     """
     try:
         import cv2
@@ -1232,6 +1262,9 @@ def refine_silhouette(source: np.ndarray, target: np.ndarray) -> np.ndarray | No
     if source is None or target is None:
         return None
     if source.shape != target.shape or int(source.sum()) < 16 or int(target.sum()) < 16:
+        return None
+    before = _mask_chamfer(source, target)
+    if before <= 2.0:
         return None
     long_side = max(source.shape)
     limit = 360
@@ -1242,58 +1275,21 @@ def refine_silhouette(source: np.ndarray, target: np.ndarray) -> np.ndarray | No
     dst = np.where(work_dst, np.float32(1), np.float32(0))
     src = cv2.GaussianBlur(src, (5, 5), 0)
     dst = cv2.GaussianBlur(dst, (5, 5), 0)
-    before = _mask_chamfer(work_src, work_dst)
-    # Twelve iterations is enough for a few degrees. Forty on a full photo dominates render time.
-    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 12, 1e-3)
-    best_kind = None
-    best_matrix = None
-    best_chamfer = before
-    affine = np.eye(2, 3, dtype=np.float32)
+    # Enough for a few degrees or a short translation. A long ECC search dominates render time.
+    criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 1e-3)
+    matrix = np.eye(2, 3, dtype=np.float32)
     try:
-        _cc, affine = cv2.findTransformECC(dst, src, affine, cv2.MOTION_AFFINE, criteria)
+        _cc, matrix = cv2.findTransformECC(dst, src, matrix, cv2.MOTION_EUCLIDEAN, criteria)
     except cv2.error:
-        affine = None
-    if affine is not None and _warp_is_sane(affine):
-        warped = cv2.warpAffine(
-            np.where(work_src, np.uint8(255), np.uint8(0)),
-            affine,
-            (work_src.shape[1], work_src.shape[0]),
-            flags=cv2.WARP_INVERSE_MAP,
-        )
-        mask = warped > 127
-        chamfer = _mask_chamfer(mask, work_dst)
-        if chamfer + 1e-6 < best_chamfer:
-            best_kind = "affine"
-            best_matrix = affine
-            best_chamfer = chamfer
-    # Skip the homography when the affine chamfer is already tight.
-    if best_chamfer > 1.5:
-        homography = np.eye(3, dtype=np.float32)
-        try:
-            _cc, homography = cv2.findTransformECC(dst, src, homography, cv2.MOTION_HOMOGRAPHY, criteria)
-        except cv2.error:
-            homography = None
-        if homography is not None and _warp_is_sane(homography):
-            warped = cv2.warpPerspective(
-                np.where(work_src, np.uint8(255), np.uint8(0)),
-                homography,
-                (work_src.shape[1], work_src.shape[0]),
-                flags=cv2.WARP_INVERSE_MAP,
-            )
-            mask = warped > 127
-            chamfer = _mask_chamfer(mask, work_dst)
-            if chamfer + 1e-6 < best_chamfer:
-                best_kind = "homography"
-                best_matrix = homography
-                best_chamfer = chamfer
-    if best_matrix is None:
         return None
-    full = _apply_ecc(source, best_kind, best_matrix, factor)
-    if full is None:
+    if not _euclidean_is_sane(matrix):
         return None
-    if factor == 1.0:
-        return full
-    if _mask_chamfer(full, target) + 1e-6 >= _mask_chamfer(source, target):
+    full = _apply_ecc(source, "euclidean", matrix, factor)
+    if full is None or int(full.sum()) < 16:
+        return None
+    if not _area_preserved(source, full):
+        return None
+    if _mask_chamfer(full, target) + 1e-6 >= before:
         return None
     return full
 
@@ -1315,32 +1311,34 @@ def _apply_ecc(source: np.ndarray, kind: str, matrix: np.ndarray, factor: float)
             shrink = np.array([[factor, 0.0, 0.0], [0.0, factor, 0.0], [0.0, 0.0, 1.0]], dtype=np.float32)
             warp = zoom @ warp @ shrink
     canvas = np.where(source, np.uint8(255), np.uint8(0))
-    if kind == "affine":
+    if kind in {"affine", "euclidean"} or warp.shape == (2, 3):
         warped = cv2.warpAffine(canvas, warp, (source.shape[1], source.shape[0]), flags=cv2.WARP_INVERSE_MAP)
     else:
         warped = cv2.warpPerspective(canvas, warp, (source.shape[1], source.shape[0]), flags=cv2.WARP_INVERSE_MAP)
     return warped > 127
 
 
-def _warp_is_sane(matrix: np.ndarray) -> bool:
+def _euclidean_is_sane(matrix: np.ndarray) -> bool:
+    """Rotation plus translation. Axis scale stays inside 2%."""
     warp = np.asarray(matrix, dtype=float)
-    if warp.shape == (2, 3):
-        linear = warp[:, :2]
-    elif warp.shape == (3, 3):
-        if abs(float(warp[2, 0])) > 1e-3 or abs(float(warp[2, 1])) > 1e-3:
-            return False
-        scale = float(warp[2, 2]) if abs(float(warp[2, 2])) > 1e-9 else 1.0
-        linear = warp[:2, :2] / scale
-    else:
+    if warp.shape != (2, 3):
         return False
+    linear = warp[:, :2]
     sx = float(np.linalg.norm(linear[:, 0]))
     sy = float(np.linalg.norm(linear[:, 1]))
-    if sx < 1e-6 or sy < 1e-6:
+    if abs(sx - 1.0) > 0.02 or abs(sy - 1.0) > 0.02:
         return False
-    if abs(sx - 1.0) > 0.15 or abs(sy - 1.0) > 0.15:
+    det = float(linear[0, 0] * linear[1, 1] - linear[0, 1] * linear[1, 0])
+    return det >= 0.96
+
+
+def _area_preserved(before: np.ndarray, after: np.ndarray, tolerance: float = 0.03) -> bool:
+    """Reject a warp that grows or shrinks the calibrated silhouette."""
+    left = int(np.count_nonzero(before))
+    right = int(np.count_nonzero(after))
+    if left < 16:
         return False
-    shear = abs(float(np.dot(linear[:, 0], linear[:, 1])) / (sx * sy))
-    return shear <= 0.1
+    return abs(right - left) / float(left) <= tolerance
 
 
 def _mask_chamfer(left: np.ndarray, right: np.ndarray) -> float:

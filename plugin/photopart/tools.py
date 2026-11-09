@@ -61,6 +61,11 @@ def _lead(text: str) -> str:
     )
 
 
+def _schema_lead(text: str) -> str:
+    """Shorter schema text. The tool description already carries the skill-id rules."""
+    return f"{SKILL_ID}. {text}"
+
+
 _CONCISE_DROP = {"history", "overlay_poses", "stdout", "stderr", "versions"}
 
 # PluginContext.register_tool on Hermes v0.21.7 (NousResearch/hermes-agent
@@ -1067,26 +1072,24 @@ def tool_specs() -> list[dict]:
     template = {
         "name": "photo_part_template",
         "description": _lead(
-            "Write a building block such as l_bracket before any custom script. "
-            "Pass help or describe true for shape parameters and a minimal example script. "
-            "Do not open parts.py, features.py, or launcher.py. "
+            "Finish the part here. bottle_cap, strap_hinge, spur_gear, and hinge are shapes. "
+            "One template, then photo_part_validate, then stop. "
+            "Pass help or describe true for parameters. Do not open parts.py, features.py, or launcher.py. "
             "About 40 tool calls in total. "
             "out_dir defaults to the working directory and must not be HERMES_HOME/cache. "
             "Returns the absolute STL path and the plugin interpreter."
         ),
         "schema": _schema(
             "photo_part_template",
-            _lead(
-                "Write a watertight building block. shape defaults to plate_clip, the sample plate. "
-                "Other shapes: plate, countersink, revolve, ribs, l_bracket, hinge, "
+            _schema_lead(
+                "Write one watertight block, then validate and stop. "
+                "shape: plate_clip, plate, countersink, revolve, ribs, l_bracket, hinge, "
                 "thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, "
                 "spur_gear, scroll, strap_hinge. "
-                "Pass help or describe true (or mode help) for every parameter and an example script. "
-                "Do not open parts.py. "
-                "Try these before photo_part_build. "
-                "hinge is a print-in-place part with two shells. "
-                "Reject a countersink deeper than the sheet before calling this. "
-                "out_dir is an absolute project path. Refuses HERMES_HOME/cache and refuses to overwrite unless overwrite is set."
+                "A bottle cap is bottle_cap. Do not read features.py to invent a thread. "
+                "Pass help or describe true for parameters. Do not open parts.py. "
+                "User millimetres go in params and stay there. "
+                "hinge has two shells. out_dir is an absolute project path."
             ),
             {
                 "out_dir": {
@@ -1132,21 +1135,21 @@ def tool_specs() -> list[dict]:
     measure = {
         "name": "photo_part_measure",
         "description": _lead(
-            "Pixel-to-millimetre scale from a coin, ruler, or a user-given part dimension. Returns reference_bbox so render can exclude a separate reference, and absolute paths. "
-            "Pass auto, part_seed, or part_roi to size the part. Do not open the photo with cv2 or PIL."
+            "Measure, then stop if the user only asked for a size. Report part_bbox_mm. "
+            "Do not replace a user-stated millimetre value with the measured box. "
+            "Do not invent a quad for a tilted coin. Do not open the photo with cv2 or PIL, and do not read plugin source. "
+            "Pixel-to-millimetre scale from a coin, ruler, or a user-given part dimension. "
+            "Pass auto, part_seed, or part_roi to size the part. Returns reference_bbox and absolute paths."
         ),
         "schema": _schema(
             "photo_part_measure",
-            _lead(
-                "Measure px_per_mm from a coin (coin id or diameter_mm, plus diameter_px or two points, "
-                "or image alone to detect the circle) "
-                "or a ruler (ruler_mm plus two points). "
-                "auto, part_seed [x, y], or part_roi [x0, y0, x1, y1] also returns part_bbox_mm. "
-                "Optional quad of four pixels TL, TR, BR, BL plus width_mm, height_mm, and image "
-                "writes a rectified PNG in the working directory, never HERMES_HOME/cache. "
-                "With a quad, input hints and measurement points are source-image pixels; returned px_per_mm is for the rectified frame. "
-                "Returns reference_bbox and absolute paths. Same-plane, straight-on, unless a quad was given. "
-                "Do not open the photo with cv2 or PIL. Do not write a perspective script. Returns JSON."
+            _schema_lead(
+                "Return part_bbox_mm and stop when the request is only a measurement. "
+                "Do not overwrite a user-stated dimension. Do not invent a quad for a tilted coin. "
+                "Coin id or diameter_mm, or ruler_mm plus two points. "
+                "auto, part_seed [x, y], or part_roi [x0, y0, x1, y1] sizes the part. "
+                "A real quad is four source pixels TL, TR, BR, BL plus width_mm and height_mm. "
+                "Do not open the photo with cv2 or PIL. Do not read plugin source."
             ),
             {
                 "coin": {"type": "string", "description": "euro_1, euro_2, euro_50c, us_quarter, us_penny, us_nickel, us_dime, us_half, gbp_1, cad_quarter, cad_loonie."},
@@ -1192,29 +1195,23 @@ def tool_specs() -> list[dict]:
     build = {
         "name": "photo_part_build",
         "description": _lead(
-            "Run one local .py build script with the plugin interpreter. "
-            "Pass help or describe true for feature signatures and a minimal example script. "
+            "One local .py only after photo_part_template has no matching shape. "
+            "bottle_cap, strap_hinge, and spur_gear are templates. Do not read features.py to invent them. "
+            "Pass help or describe true for signatures. Do not open features.py or launcher.py. "
             "Do not run python build.py, cadquery, or photopart.build_run from the terminal. Use this tool. "
-            "Do not open features.py or launcher.py. "
-            "About 40 tool calls in total. "
-            "Import photopart.features for a thread, knurl, revolve, sweep, hex screw, standoff, spur gear, or spiral scroll. "
-            "Check photo_part_template first, including strap_hinge. "
-            "Do not import build123d or cadquery, and do not install or patch around a missing CAD library. "
-            "Overlapping shells are unioned. The error field is the exception, not a status line. "
-            "No shell. Try photo_part_template first."
+            "About 40 tool calls in total. Then photo_part_validate and stop. "
+            "Do not import build123d or cadquery. No shell."
         ),
         "schema": _schema(
             "photo_part_build",
-            _lead(
-                "Run a Python file with the plugin environment interpreter and return the new files. "
-                "Do not run that file from the terminal. Use photo_part_build. "
-                "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, sweep_path, hex_screw, hex_standoff, spur_gear, spiral_scroll, strap_hinge, tag_faces. "
-                "Check photo_part_template first. Do not import build123d or cadquery. "
-                "Each returns one watertight trimesh in millimetres. Overlapping shells are unioned; shells_before and shells_after are in the JSON. "
-                "tag_faces(mesh, thread=indices, path=stl) excludes those faces from the wall check. "
-                "On failure the error field starts with the exception. "
-                "Pass cwd as an absolute project path. Do not write into HERMES_HOME/cache. "
-                "Do not delete an STL or 3MF. The interpreter path is in the JSON."
+            _schema_lead(
+                "One script, then validate, then stop. Call photo_part_template first. "
+                "Do not read features.py. Do not run the script from the terminal. "
+                "help or describe returns signatures. "
+                "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, "
+                "sweep_path, hex_screw, hex_standoff, spur_gear, spiral_scroll, strap_hinge, tag_faces. "
+                "Do not import build123d or cadquery. "
+                "cwd is an absolute project path. Do not delete an STL or 3MF."
             ),
             {
                 "script": {

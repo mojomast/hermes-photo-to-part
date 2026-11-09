@@ -40,7 +40,8 @@ def approve_build(tool_name: str = "", args: dict | None = None, **kwargs):
     ``photopart.build_run`` / ``photopart.stamp``. ``ls``, ``cat``, and
     ``pytest`` are not builds. ``PHOTOPART_BUILD_APPROVAL=allow`` skips the
     prompt for an in-process test or a sealed eval. The default is to ask.
-    Hermes fails closed when nobody can approve.
+    Hermes fails closed when nobody can approve. Hermes ``--yolo``
+    auto-approves the returned action. This plugin does not block that flag.
     """
     if str(tool_name or "") != "photo_part_build":
         from photopart.build_gate import terminal_build_approval

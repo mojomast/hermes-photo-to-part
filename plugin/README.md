@@ -6,4 +6,4 @@ This directory is what Hermes installs:
 hermes plugins install mojomast/hermes-photo-to-part/plugin --no-enable
 ```
 
-Version 0.1.18. The repository README, changelog, security notes, evals, and tests live one directory up and are not part of this install.
+Version 0.1.19. The repository README, changelog, security notes, evals, and tests live one directory up and are not part of this install. From this directory, `hermes plugins doctor .` reports the six `photo_part_*` tools.

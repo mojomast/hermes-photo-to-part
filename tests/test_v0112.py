@@ -219,7 +219,7 @@ class OverlayRefineTests(unittest.TestCase):
         canvas = np.zeros((220, 220), dtype=np.uint8)
         cv2.rectangle(canvas, (20, 96), (200, 124), 255, thickness=-1)
         source = canvas > 0
-        # A 10° tilt is a homography (rotation embedded in 3×3).
+        # A 10° tilt is a rotation. Euclidean ECC can recover it without rescaling.
         matrix = cv2.getRotationMatrix2D((110, 110), 10, 1.0)
         homography = np.vstack([matrix, [0.0, 0.0, 1.0]])
         warped = cv2.warpPerspective(canvas, homography, (220, 220))

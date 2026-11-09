@@ -4,6 +4,8 @@ Hermes v0.21.7 calls these for every tool, not only photo_part_*. Each hook
 acts only after this plugin has been used in that ``session_id`` (a
 ``photo_part_*`` call or ``skill_view`` of this skill). Any other session is
 left untouched. Exceptions are swallowed so an unrelated tool still runs.
+A read of an eval scoring file or ``tests/regression`` stays blocked when
+this hook raises.
 """
 
 from __future__ import annotations
@@ -71,7 +73,31 @@ def on_pre_tool_call(*args, **kwargs):
     try:
         return _pre(*args, **kwargs)
     except Exception:
+        return _block_protected_read(args, kwargs)
+
+
+def _block_protected_read(args, kwargs):
+    """Fail closed for eval and regression paths. A normal read still proceeds."""
+    try:
+        from photopart.build_gate import eval_read_block
+
+        fields = _fields(args, kwargs)
+        return eval_read_block(fields.get("tool_name") or "", fields.get("args"))
+    except Exception:
+        try:
+            from photopart.build_gate import BLOCK_MESSAGE, protected_read_text
+
+            if protected_read_text(_raw_blob(args, kwargs)):
+                return {"action": "block", "message": BLOCK_MESSAGE}
+        except Exception:
+            return None
         return None
+
+
+def _raw_blob(args, kwargs) -> str:
+    parts = [str(item) for item in args]
+    parts.extend(f"{key} {value}" for key, value in kwargs.items())
+    return "\n".join(parts)
 
 
 def on_post_tool_call(*args, **kwargs):
