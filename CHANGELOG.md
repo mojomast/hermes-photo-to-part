@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.20 — 2026-11-09
+
+- The Part studio pane always ends in a terminal state. A passing validate is Ready even without a photo comparison. A measure-only run becomes Measured when the session ends. A turn cap or an interrupted session goes stale, then Ready, Measured, or Incomplete. The iteration strip highlights the headline version, not a later failed build. A Ready frame no longer leaves the render well on Waiting when no mesh view exists; automatic validate renders now include front views.
+- Tool descriptions, the bundled skill, and template help say to call `photo_part_template` with shape `spur_gear` before any custom involute script, and to use the six `photo_part_*` tools.
+- At 95% of the session cap, `next_step` and hook notes tell the agent to deliver the best validated file. Exploratory template, build, measure, and heal calls are refused when a passing file already exists, so the last turns can run a final render.
+- An overlay IoU below 0.5 is labelled `untrusted` even on an angled photo, with guidance not to treat it as a successful match. Usable angled fits stay `guide_only`.
+- Frozen user-stated axes stay exact (0.01 mm). Assumed dimensions in `sources` are not locked. Template and build outputs are scaled to those axes, and validate fails if a refine still nudges them.
+- Noisy hole-probe and knuckle-probe warnings stay in the tool JSON but are folded into one pane note, because they do not block delivery.
+
 ## 0.1.19 — 2026-11-09
 
 - Overlay refinement no longer treats truncated chamfer (capped near 0.03 of the diagonal) as a finished fit. A silhouette refines only when the untruncated symmetric contour distance is above 2 px. The warp is Euclidean (rotation and translation). A result that changes mask area, or that does not improve that distance, is discarded. Nonconvergence keeps the prior pose. Pose choice uses overlap and edge distance. A saturated chamfer score cannot replace a better-overlap pose. A fully observed photo keeps border edges. Padding seams are still dropped. Half-pixel nearest-pixel rounding stays.

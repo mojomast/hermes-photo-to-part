@@ -68,6 +68,7 @@ def run_build(
     ok = completed.returncode == 0
     shells = []
     if ok:
+        _snap_outputs(work, outputs)
         shells = _union_outputs(outputs)
         outputs = _changed(work, before)
     missing = []
@@ -97,6 +98,19 @@ def run_build(
     from photopart.spec import note_missing_spec
 
     return note_missing_spec(attach_flow(report, step_build(outputs, ok=ok)), work)
+
+
+def _snap_outputs(work: Path, outputs: list) -> None:
+    """Scale new STLs so frozen user axes in spec.json stay exact."""
+    spec = work / "spec.json"
+    if not spec.is_file():
+        return
+    from photopart.freeze import snap_path_to_spec
+
+    for item in outputs:
+        path = Path(item)
+        if path.suffix.lower() == ".stl":
+            snap_path_to_spec(path, spec)
 
 
 def _workdir(cwd: str | Path | None) -> Path:

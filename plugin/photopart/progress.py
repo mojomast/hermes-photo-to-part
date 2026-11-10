@@ -141,6 +141,7 @@ def _apply_start(state: dict, tool: str, args: dict) -> None:
         state["status"] = "running"
     state["tool"] = tool
     state["title"] = _title(Path(state["project"]), args) or state.get("title")
+    _remember_session(state)
     _event(state, tool, state["stage"], state["message"], ok=True)
 
 
@@ -207,16 +208,27 @@ def _apply_result(state: dict, tool: str, payload: dict) -> None:
     state["stage"] = stage
     state["tool"] = tool
     state["title"] = _title(Path(state["project"]), payload) or state.get("title")
+    if tool == "photo_part_measure" and ok:
+        state["measure_complete"] = True
+    _remember_session(state)
     if not ok:
         state["status"] = "error"
         state["message"] = (state.get("errors") or ["The step failed."])[0]
-    elif state.get("validated") and "compare" in (state.get("done_stages") or []) and tool in {
+    elif state.get("validated") and tool in {
         "photo_part_validate",
         "photo_part_render",
     }:
         state["status"] = "ready"
         _mark_done(state, "refine" if iteration >= 2 else "")
-        state["message"] = "Ready to deliver. The latest check passed."
+        if _overlay_failed(state):
+            iou = (state.get("metrics") or {}).get("iou")
+            iou_text = "n/a" if not isinstance(iou, (int, float)) else f"{float(iou):.2f}"
+            state["message"] = (
+                f"Ready to deliver the mesh. Overlay fit failed (IoU {iou_text}); "
+                "do not treat it as a successful photo match."
+            )
+        else:
+            state["message"] = "Ready to deliver. The latest check passed."
         if iteration >= 2:
             state["refining"] = False
     else:
@@ -347,31 +359,55 @@ def _upsert_iteration(state: dict, tool: str, payload: dict, *, ok: bool) -> Non
     if number is None:
         number = max([int(item.get("n") or 0) for item in iterations] + [0]) + 1
     images = state.get("images") if isinstance(state.get("images"), dict) else {}
-    metrics = state.get("metrics") if isinstance(state.get("metrics"), dict) else {}
+    this_iou = _iou(layers)
+    this_trust = _trust(layers, state.get("metrics") if isinstance(state.get("metrics"), dict) else {})
+    this_overlay = _accept_image(Path(state["project"]), _first_text(layers, "overlay", "mask_png")) or (
+        images.get("overlay") if this_iou is not None else None
+    )
+    this_render = _accept_image(Path(state["project"]), _front_view(layers))
+    this_compare = _accept_image(Path(state["project"]), _first_text(layers, "compare_front"))
+    this_photo = _accept_image(Path(state["project"]), _first_text(layers, "image", "photo")) or images.get("photo")
     card = {
         "n": number,
         "label": f"v{number}",
         "tool": tool,
         "ok": bool(ok),
         "mesh": mesh,
-        "iou": metrics.get("iou"),
-        "trust": metrics.get("trust"),
-        "photo": images.get("photo"),
-        "overlay": images.get("overlay"),
-        "render": images.get("render"),
-        "compare": images.get("compare"),
+        "iou": this_iou,
+        "trust": this_trust if this_iou is not None else None,
+        "photo": this_photo,
+        "overlay": this_overlay,
+        "render": this_render,
+        "compare": this_compare,
         "at": _now(),
     }
     replaced = False
     for index, item in enumerate(iterations):
         if isinstance(item, dict) and item.get("n") == number:
+            if this_iou is None:
+                card["iou"] = item.get("iou")
+                card["trust"] = item.get("trust")
+            if not card["overlay"]:
+                card["overlay"] = item.get("overlay")
+            if not card["render"]:
+                card["render"] = item.get("render")
+            if not card["compare"]:
+                card["compare"] = item.get("compare")
+            if not card["photo"]:
+                card["photo"] = item.get("photo")
+            if not card["mesh"]:
+                card["mesh"] = item.get("mesh")
             iterations[index] = card
             replaced = True
             break
     if not replaced:
         iterations.append(card)
     state["iterations"] = iterations[-12:]
-    state["iteration"] = number
+    if ok or not state.get("iteration"):
+        state["iteration"] = number
+    elif not ok:
+        # Keep the headline on the last successful version, not a failed build.
+        pass
 
 
 def _peek_iteration(state: dict, args: dict) -> int:
@@ -668,7 +704,10 @@ def _front_view(layers: list[dict]) -> str | None:
             for item in views:
                 if isinstance(item, str) and item.replace("\\", "/").endswith("/front.png"):
                     return item
-        for key in ("render", "front"):
+            for item in views:
+                if isinstance(item, str) and item.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+                    return item
+        for key in ("front", "render", "sheet"):
             value = source.get(key)
             if isinstance(value, str) and value.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
                 return value
@@ -941,3 +980,158 @@ def _write_json(path: Path, body: dict) -> None:
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary, path)
+
+
+_TERMINAL = {"ready", "measured", "error", "incomplete", "done"}
+_STALE_AFTER = 300
+
+
+def _remember_session(state: dict) -> None:
+    try:
+        from photopart.budget import session_id_var
+
+        sid = session_id_var.get()
+    except Exception:
+        sid = None
+    if isinstance(sid, str) and sid.strip():
+        state["session_id"] = sid.strip()
+
+
+def _overlay_failed(state: dict) -> bool:
+    metrics = state.get("metrics") if isinstance(state.get("metrics"), dict) else {}
+    iou = metrics.get("iou")
+    trust = str(metrics.get("trust") or metrics.get("iou_label") or "").lower()
+    if isinstance(iou, (int, float)) and float(iou) < 0.5:
+        return True
+    return "untrusted" in trust
+
+
+def _has_deliverable(state: dict) -> bool:
+    if state.get("validated"):
+        return True
+    for item in state.get("iterations") or []:
+        if isinstance(item, dict) and item.get("ok") and item.get("mesh"):
+            return True
+    for item in state.get("outputs") or []:
+        if isinstance(item, dict) and str(item.get("kind") or "").upper() in {"STL", "3MF"}:
+            return True
+    return False
+
+
+def _has_measurement(state: dict) -> bool:
+    if state.get("measure_complete"):
+        return True
+    metrics = state.get("metrics") if isinstance(state.get("metrics"), dict) else {}
+    return metrics.get("px_per_mm") is not None or bool(metrics.get("scale_source"))
+
+
+def stale_after_seconds() -> int:
+    raw = os.environ.get("PHOTOPART_PANE_STALE_AFTER", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = _STALE_AFTER
+        if value >= 0:
+            return value
+    return _STALE_AFTER
+
+
+def settle_project(directory, *, ended=None, now=None, stale_after=None, force=False) -> dict | None:
+    """Persist a terminal pane state when the session ended or went stale.
+
+    A running session first becomes ``stale``, then ``ready``, ``measured``,
+    or ``incomplete``. Failures are swallowed by callers.
+    """
+    try:
+        path = Path(directory).expanduser().resolve()
+    except OSError:
+        return None
+    pane = path / ".photopart" / "pane.json"
+    if not pane.is_file() or _blocked(path):
+        return None
+    with _LOCK:
+        state = _load(path)
+        changed = _settle(state, ended=ended, now=now, stale_after=stale_after, force=force)
+        if changed:
+            _save(path, state)
+        return state
+
+
+def _session_has_ended(state: dict) -> bool:
+    sid = state.get("session_id")
+    if not isinstance(sid, str) or not sid.strip():
+        return False
+    try:
+        from photopart.sessions import session_ended
+
+        return bool(session_ended(sid))
+    except Exception:
+        return False
+
+
+def _settle(state: dict, *, ended=None, now=None, stale_after=None, force=False) -> bool:
+    status = str(state.get("status") or "")
+    if status in _TERMINAL:
+        return False
+    if ended is None:
+        ended = _session_has_ended(state)
+    limit = _STALE_AFTER if stale_after is None else int(stale_after)
+    when = now or datetime.now(timezone.utc)
+    if isinstance(when, str):
+        parsed = _parse_time(when)
+        when = parsed or datetime.now(timezone.utc)
+    updated = _parse_time(state.get("updated"))
+    age = None if updated is None else max(0.0, (when - updated).total_seconds())
+    quiet = force or ended or (age is not None and age >= limit)
+    if not quiet:
+        return False
+    if status in {"running", "waiting"} and not (ended or force):
+        state["status"] = "stale"
+        state["message"] = "Session went quiet. Waiting to confirm the final state."
+        _event(state, state.get("tool") or "", state.get("stage") or "", state["message"], ok=True)
+        return True
+    # Session ended, forced, or already stale long enough / ended while stale.
+    if status == "stale" and not (ended or force) and age is not None and age < limit + 15:
+        return False
+    return _promote_terminal(state, ended=bool(ended or force))
+
+
+def _promote_terminal(state: dict, *, ended: bool) -> bool:
+    prefix = "Session ended. " if ended else "Run went stale. "
+    if _has_deliverable(state):
+        state["status"] = "ready"
+        if _overlay_failed(state):
+            iou = (state.get("metrics") or {}).get("iou")
+            iou_text = "n/a" if not isinstance(iou, (int, float)) else f"{float(iou):.2f}"
+            state["message"] = (
+                f"{prefix}Ready to deliver the mesh. Overlay fit failed (IoU {iou_text}); "
+                "do not treat it as a successful photo match."
+            )
+        else:
+            state["message"] = f"{prefix}Ready to deliver the best version."
+        if int(state.get("iteration") or 0) >= 2:
+            _mark_done(state, "refine")
+            state["refining"] = False
+    elif _has_measurement(state) and not _has_deliverable(state):
+        state["status"] = "measured"
+        state["stage"] = "segment" if "segment" in (state.get("done_stages") or []) else state.get("stage") or "scale"
+        state["message"] = f"{prefix}Measurement complete. No part was built."
+        _mark_done(state, "scale")
+    else:
+        state["status"] = "incomplete"
+        state["message"] = f"{prefix}The run finished before a part was delivered."
+    _event(state, state.get("tool") or "", state.get("stage") or "", state["message"], ok=state["status"] != "incomplete")
+    return True
+
+
+def _parse_time(value) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None

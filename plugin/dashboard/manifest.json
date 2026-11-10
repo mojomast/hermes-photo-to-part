@@ -3,6 +3,6 @@
   "label": "Part studio",
   "description": "Live photo-to-part run: stages, overlay, renders, trust, and output paths. Optional on Hermes Desktop 0.23+.",
   "icon": "Box",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "api": "plugin_api.py"
 }

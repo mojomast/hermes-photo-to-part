@@ -355,6 +355,17 @@ def run_validate(
         if freeze_failures:
             report["failures"].extend(freeze_failures)
             report["ok"] = False
+        from photopart.freeze import FROZEN_AXIS_TOLERANCE_MM, frozen_axis_failures, locked_axes_from_spec
+
+        locked = locked_axes_from_spec(spec, raw_spec) if spec else {}
+        if freeze_info.get("locked_axes"):
+            locked.update(freeze_info["locked_axes"])
+        axis_failures = frozen_axis_failures(mesh, locked, tolerance=FROZEN_AXIS_TOLERANCE_MM)
+        if axis_failures:
+            report["frozen_axis_failures"] = axis_failures
+            report["locked_axes"] = locked
+            report["failures"].extend(axis_failures)
+            report["ok"] = False
         from photopart.features import load_face_tags
         from photopart.printability import check_printability
 

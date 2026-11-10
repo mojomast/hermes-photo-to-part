@@ -15,6 +15,7 @@ _NOTE = (
     "Do not run python build.py, cadquery, or photopart.build_run from the terminal. "
     "Use photo_part_build. "
     "Check photo_part_template before a custom script. "
+    "A spur gear is shape spur_gear; do not write an involute script. "
     "Do not import build123d or cadquery, and do not install or patch around a missing CAD library. "
     "These parameters and the example script are enough."
 )
@@ -95,7 +96,7 @@ SHAPES: dict[str, dict] = {
         "params": {"diameter_mm": 20.0, "pitch_mm": 3.0, "length_mm": 8.0, "outer_diameter_mm": 26.0, "knurl_count": 16, "top_thickness_mm": 1.2},
     },
     "spur_gear": {
-        "summary": "Involute gear. Tip diameter is module_mm * (teeth + 2). Root diameter is module_mm * (teeth - 2.5).",
+        "summary": "Involute gear. Call photo_part_template with shape spur_gear; do not write a custom involute script. Tip diameter is module_mm * (teeth + 2). Root diameter is module_mm * (teeth - 2.5).",
         "params": {
             "module_mm": 1.0,
             "teeth": 20,

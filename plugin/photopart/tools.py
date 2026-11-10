@@ -251,6 +251,90 @@ def _best_name(mesh: str) -> str:
     return "the best validated file"
 
 
+def _front_from_views(views) -> str | None:
+    if not isinstance(views, list):
+        return None
+    for item in views:
+        if isinstance(item, str) and item.replace("\\", "/").endswith("/front.png"):
+            return item
+    for item in views:
+        if isinstance(item, str) and item.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
+            return item
+    return None
+
+
+def _best_in_project(directory) -> str | None:
+    """Name of the highest-scoring fresh passing STL in ``directory``, if any."""
+    try:
+        root = Path(directory).expanduser()
+    except (TypeError, ValueError):
+        return None
+    if not root.is_dir():
+        return None
+    best = None
+    best_score = None
+    from photopart.stamp import mesh_hash, read_sidecar
+
+    try:
+        names = list(root.iterdir())
+    except OSError:
+        return None
+    for path in names:
+        if path.suffix.lower() != ".stl" or not path.is_file():
+            continue
+        side = read_sidecar(path)
+        if not isinstance(side, dict) or side.get("ok") is not True:
+            continue
+        try:
+            if side.get("sha256") != mesh_hash(path):
+                continue
+        except OSError:
+            continue
+        score = side.get("score")
+        try:
+            number = float(score)
+        except (TypeError, ValueError):
+            number = 0.0
+        if best is None or number > best_score:
+            best = path.name
+            best_score = number
+    return best
+
+
+def _over_reserve(args: dict, *, kind: str, directory=None):
+    """Refuse exploratory work at 95% of the cap when a validated file already exists."""
+    if not isinstance(args, dict):
+        return None
+    if kind in {"template", "build"} and _wants_help(args):
+        return None
+    from photopart.budget import consumption, past_reserve_wall, project_dir
+
+    payload = dict(args)
+    if directory:
+        payload.setdefault("cwd", str(directory))
+        payload.setdefault("out_dir", str(directory))
+    info = consumption(payload, _calls_used(args))
+    if not past_reserve_wall(info):
+        return None
+    root = directory or project_dir(payload)
+    best = _best_in_project(root)
+    if not best:
+        return None
+    text = (
+        f"Budget: deliver {best} now; {kind} refused. "
+        "Call photo_part_render with final true, then stop. Do not start a new version."
+    )
+    return {
+        "ok": False,
+        "refused": True,
+        "budget_refused": kind,
+        "file": best,
+        "error": text,
+        "next_step": text,
+        "skill_id": SKILL_ID,
+    }
+
+
 def _wants_help(args: dict) -> bool:
     if not isinstance(args, dict):
         return False
@@ -507,10 +591,16 @@ def _maybe_render(args: dict, report: dict) -> None:
 
     _code, manifest = run_render(argv)
     alignment = manifest.get("alignment") if isinstance(manifest, dict) else None
+    views = None if not isinstance(manifest, dict) else manifest.get("views")
     report["render"] = {
         "sheet": None if not isinstance(manifest, dict) else manifest.get("sheet"),
         "overlay": None if not isinstance(manifest, dict) else manifest.get("overlay"),
+        "compare_front": None if not isinstance(manifest, dict) else manifest.get("compare_front"),
+        "views": views,
+        "front": _front_from_views(views),
         "overlay_status": None if not isinstance(manifest, dict) else manifest.get("overlay_status"),
+        "overlay_iou": None if not isinstance(manifest, dict) else manifest.get("overlay_iou"),
+        "overlay_iou_label": None if not isinstance(manifest, dict) else manifest.get("overlay_iou_label"),
         "next_step": None if not isinstance(manifest, dict) else manifest.get("next_step"),
         "alignment": alignment,
         "photo": photo,
@@ -648,6 +738,16 @@ def heal_tool(params, **_kwargs) -> str:
             argv.extend(["--max-bytes", str(int(args["max_bytes"]))])
         from photopart.heal import run_heal
 
+        blocked = _over_reserve(args, kind="heal", directory=Path(str(args.get("out") or args.get("mesh") or ".")).expanduser().parent)
+        if blocked:
+            return _emit(
+                blocked,
+                blocked["next_step"],
+                plain_error=True,
+                response_format=mode,
+                tool_name="photo_part_heal",
+                calls_used=_calls_used(args),
+            )
         _watch("photo_part_heal", args)
         _code, report = run_heal(argv)
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -684,6 +784,16 @@ def template_tool(params, **_kwargs) -> str:
             return _emit(
                 described,
                 step_model("the STL from this template"),
+                response_format=mode,
+                tool_name="photo_part_template",
+                calls_used=_calls_used(args),
+            )
+        blocked = _over_reserve(args, kind="template", directory=args.get("out_dir"))
+        if blocked:
+            return _emit(
+                blocked,
+                blocked["next_step"],
+                plain_error=True,
                 response_format=mode,
                 tool_name="photo_part_template",
                 calls_used=_calls_used(args),
@@ -775,6 +885,16 @@ def measure_tool(params, **_kwargs) -> str:
         mode = _format(args)
         from photopart.measure import measure
 
+        blocked = _over_reserve(args, kind="measure", directory=args.get("out_dir") or args.get("out"))
+        if blocked:
+            return _emit(
+                blocked,
+                blocked["next_step"],
+                plain_error=True,
+                response_format=mode,
+                tool_name="photo_part_measure",
+                calls_used=_calls_used(args),
+            )
         _watch("photo_part_measure", args)
         report = measure(args)
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -817,6 +937,16 @@ def build_tool(params, **_kwargs) -> str:
             )
         if not args.get("script"):
             raise ValueError("script is required unless help or describe is true")
+        blocked = _over_reserve(args, kind="build", directory=args.get("cwd"))
+        if blocked:
+            return _emit(
+                blocked,
+                blocked["next_step"],
+                plain_error=True,
+                response_format=mode,
+                tool_name="photo_part_build",
+                calls_used=_calls_used(args),
+            )
         from photopart.build_run import run_build
 
         extra = args.get("args") or []
@@ -870,7 +1000,8 @@ def _schema(name: str, description: str, properties: dict, required: list[str]) 
             "Tool calls already used in this Hermes session, including skill_view and other tools. "
             "Pass it on every call. Hermes v0.21.7 also supplies session_id; when that session "
             "is on disk the count comes from state.db or HERMES_HOME/sessions. The larger number wins. "
-            "The cap is about 40 (PHOTO_PART_MAX_CALLS). Omit both and remaining is estimated high."
+            "The cap is about 40 (PHOTO_PART_MAX_CALLS). Omit both and remaining is estimated high. "
+            "At 95% of the cap, deliver the best validated file; do not start a new version."
         ),
     }
     return {
@@ -993,7 +1124,7 @@ def tool_specs() -> list[dict]:
                 "Pass roi or seed, and measure_json, so a coin is not the blob. "
                 "An roi that crops the silhouette is expanded. "
                 "Writes overlay_iou, overlay_iou_label, and overlay_poses. "
-                "An angled photo is still scored and the label is guide_only. "
+                "An angled photo with a usable fit is labelled guide_only. An overlay IoU below 0.5 is untrusted, not a success. "
                 "Also writes compare_front.png when photo is set. Do not write an overlay script. "
                 "Reports stale_validation against <file>.validate.json."
             ),
@@ -1098,7 +1229,9 @@ def tool_specs() -> list[dict]:
     template = {
         "name": "photo_part_template",
         "description": _lead(
-            "Finish the part here. bottle_cap, strap_hinge, spur_gear, and hinge are shapes. "
+            "Finish the part here. Call this before any custom script. "
+            "A spur gear is shape spur_gear; do not write an involute script. "
+            "bottle_cap, strap_hinge, and hinge are shapes too. "
             "One template, then photo_part_validate, then stop. "
             "Pass help or describe true for parameters. Do not open parts.py, features.py, or launcher.py. "
             "About 40 tool calls in total. "
@@ -1109,6 +1242,7 @@ def tool_specs() -> list[dict]:
             "photo_part_template",
             _schema_lead(
                 "Write one watertight block, then validate and stop. "
+                "Call this before any custom script. A spur gear is spur_gear; do not write involute code. "
                 "shape: plate_clip, plate, countersink, revolve, ribs, l_bracket, hinge, "
                 "thread, knurl, sweep, hex_screw, hex_standoff, bottle_cap, "
                 "spur_gear, scroll, strap_hinge. "
@@ -1222,6 +1356,7 @@ def tool_specs() -> list[dict]:
         "name": "photo_part_build",
         "description": _lead(
             "One local .py only after photo_part_template has no matching shape. "
+            "For a gear call photo_part_template with shape spur_gear first; do not write an involute script. "
             "bottle_cap, strap_hinge, and spur_gear are templates. Do not read features.py to invent them. "
             "Pass help or describe true for signatures. Do not open features.py or launcher.py. "
             "Do not run python build.py, cadquery, or photopart.build_run from the terminal. Use this tool. "
@@ -1231,8 +1366,8 @@ def tool_specs() -> list[dict]:
         "schema": _schema(
             "photo_part_build",
             _schema_lead(
-                "One script, then validate, then stop. Call photo_part_template first. "
-                "Do not read features.py. Do not run the script from the terminal. "
+                "One script, then validate, then stop. Call photo_part_template first, including spur_gear. "
+                "Do not write an involute script. Do not read features.py. Do not run the script from the terminal. "
                 "help or describe returns signatures. "
                 "from photopart.features import external_thread, internal_thread, knurl, revolve_profile, "
                 "sweep_path, hex_screw, hex_standoff, spur_gear, spiral_scroll, strap_hinge, tag_faces. "

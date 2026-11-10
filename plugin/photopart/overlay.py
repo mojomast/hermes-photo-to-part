@@ -946,7 +946,9 @@ def _write_overlay(
     Image.fromarray(diff, mode="RGB").save(diff_destination, format="PNG")
     label = None
     if iou is not None:
-        if angled:
+        if float(iou) < 0.5:
+            label = "untrusted"
+        elif angled:
             label = "guide_only"
         elif isinstance(alignment, dict) and alignment.get("iou_trusted") is False:
             label = "untrusted"
@@ -1095,17 +1097,23 @@ def _overlay_warnings(iou, blob, *, angled: bool, missed: bool, extra: list | No
             where = " The largest object in the photo was used."
         warnings.append(
             f"overlay IoU {iou:.2f} is below 0.5.{where} "
+            "overlay_iou_label is untrusted: do not treat this as a successful photo match. "
             "Pass roi or seed on the part, and exclude the coin with measure JSON or exclude_roi."
         )
     elif missed:
         warnings.append(
             "overlay could not find the part. Pass roi or seed, and exclude the coin. IoU was not computed."
         )
-    if angled:
+    if angled and (iou is None or iou >= 0.5):
         warnings.append(
             "The photo was flagged as angled. overlay_iou_label is guide_only: "
             "the fit was still computed, but perspective can move the outline. "
             "Rectify with photo_part_measure before treating the IoU as a measurement."
+        )
+    elif angled and iou is not None and iou < 0.5:
+        warnings.append(
+            "The photo was flagged as angled, and the overlay fit is too low to use even as a guide. "
+            "Do not treat this IoU as a successful photo match."
         )
     return warnings
 

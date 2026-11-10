@@ -104,9 +104,18 @@ def write_shape(
         written = write_template(out_dir, params, ascii_stl=ascii_stl, write_3mf=write_3mf)
         written["shape"] = "plate_clip"
         written["shells"] = 1
+        if written.get("stl"):
+            from photopart.freeze import snap_path_to_spec
+
+            snap_path_to_spec(written["stl"], Path(out_dir) / "spec.json")
         _record_template_spec(written)
         return written
     mesh, doc = build_shape(name, params)
+    mesh, snapped = _snap_to_spec(mesh, out_dir)
+    if snapped:
+        doc = dict(doc)
+        extents = [float(v) for v in mesh.extents[:3]]
+        doc["expected_extents_mm"] = {"x": extents[0], "y": extents[1], "z": extents[2]}
     out_dir.mkdir(parents=True, exist_ok=True)
     from photopart.geometry import export_3mf, export_stl
 
@@ -142,6 +151,25 @@ def write_shape(
     }
     _record_template_spec(result)
     return result
+
+
+def _snap_to_spec(mesh, out_dir: Path):
+    """Keep frozen user axes exact before the template is written."""
+    spec_path = Path(out_dir) / "spec.json"
+    if not spec_path.is_file():
+        return mesh, False
+    try:
+        import json
+
+        raw = json.loads(spec_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return mesh, False
+    if not isinstance(raw, dict):
+        return mesh, False
+    from photopart.freeze import locked_axes_from_spec, snap_mesh_to_locked_axes
+
+    locked = locked_axes_from_spec(spec_path, raw)
+    return snap_mesh_to_locked_axes(mesh, locked)
 
 
 def default_stl_name(shape: str, out_dir: Path, requested: str | None = None) -> str | None:

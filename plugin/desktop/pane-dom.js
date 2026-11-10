@@ -60,7 +60,10 @@ function header(run) {
 
 function statusLabel(status, stage) {
   if (status === "waiting") return "Approval";
-  if (status === "ready") return "Ready";
+  if (status === "ready" || status === "done") return "Ready";
+  if (status === "measured") return "Measured";
+  if (status === "stale") return "Stale";
+  if (status === "incomplete") return "Incomplete";
   if (status === "error") return "Error";
   if (status === "running") return stage || "Live";
   return "Idle";
@@ -84,12 +87,15 @@ function compare(run) {
   const leftLabel = images.overlay ? "Photo + overlay" : "Photo";
   const right = images.render || images.compare || "";
   const version = run.iteration ? "Render v" + run.iteration : "Render";
+  const emptyRight = (run.status === "ready" || run.status === "measured" || run.status === "done")
+    ? "No mesh render"
+    : "Waiting";
   grid.appendChild(shot(left, leftLabel, "Input photo"));
-  grid.appendChild(shot(right, version, "Latest render"));
+  grid.appendChild(shot(right, version, "Latest render", emptyRight));
   return grid;
 }
 
-function shot(src, caption, alt) {
+function shot(src, caption, alt, emptyText) {
   const figure = el("figure", "p2p-shot");
   if (imageSrc(src)) {
     const img = el("img");
@@ -97,7 +103,7 @@ function shot(src, caption, alt) {
     img.alt = alt;
     figure.appendChild(img);
   } else {
-    figure.appendChild(el("div", "p2p-fallback", "Waiting"));
+    figure.appendChild(el("div", "p2p-fallback", emptyText || "Waiting"));
   }
   figure.appendChild(el("figcaption", "", caption));
   return figure;
