@@ -12,6 +12,8 @@ calls per plugin call) and capped, so ``remaining`` stays conservative.
 
 ``next_step`` says deliver now at 60 percent and at 80 percent of the cap.
 Past 80 percent the tools refuse a non-final render and a repeat validate.
+Past 95 percent, exploratory template, build, measure, and heal calls are
+refused if a validated file already exists, so the last turns can deliver it.
 ``PHOTO_PART_MAX_CALLS`` overrides the default of 40.
 """
 
@@ -78,6 +80,12 @@ def attach_budget(payload: dict, tool_name: str, calls_used=None, session_id=Non
         hint = f"Budget: deliver now. {remaining} of {cap} tool calls remain."
         if fraction >= 0.80 - 1e-9:
             hint = f"{hint} Stop exploring."
+        if past_reserve_wall({"max_calls": cap, "calls_used": used, "remaining": remaining}):
+            hint = (
+                f"Budget: deliver the best validated version now. {remaining} of {cap} "
+                "tool calls remain. Call photo_part_render with final true, then stop. "
+                "Do not start a new version. Stop exploring."
+            )
         step = str(payload.get("next_step") or "")
         if not step.startswith("Budget:"):
             payload["next_step"] = f"{hint} {step}".rstrip()
@@ -128,6 +136,14 @@ def past_soft_wall(info: dict) -> bool:
     if cap < 1:
         return True
     return float(info.get("calls_used") or 0) / float(cap) >= 0.80 - 1e-9
+
+
+def past_reserve_wall(info: dict) -> bool:
+    """True at 95 percent of the cap, where the last turns are reserved to deliver."""
+    cap = int(info.get("max_calls") or 0)
+    if cap < 1:
+        return True
+    return float(info.get("calls_used") or 0) / float(cap) >= 0.95 - 1e-9
 
 
 def _resolve_used(

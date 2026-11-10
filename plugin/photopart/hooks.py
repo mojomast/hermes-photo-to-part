@@ -23,7 +23,7 @@ _PROBE = re.compile(r"\b(?:cv2|PIL|Image\.open|imread)\b")
 _TERMINALS = {"terminal", "execute_code", "code_execution", "bash", "shell", "python"}
 _PATH_KEYS = ("path", "file_path", "file", "image", "mesh", "script", "pattern", "command", "cmd", "code")
 _LEVELS = ((0.60, "60"), (0.80, "80"), (0.95, "95"))
-_NOTE = "[photo-to-part] {used} of {cap} tool calls used; next: photo_part_measure / photo_part_build."
+_NOTE = "[photo-to-part] {used} of {cap} tool calls used; {advice}"
 _PROBE_NOTE = (
     "[photo-to-part] photo_part_measure already measures this photo: "
     "pass seed=[x,y] or roi=[x0,y0,x1,y1] to get the part size in mm."
@@ -201,7 +201,14 @@ def _transform(*args, **kwargs):
         for label in crossed:
             sent.add(label)
         _persist_notes(sid, sent)
-        lines.append(_NOTE.format(used=used, cap=cap))
+        highest = max(crossed, key=int)
+        if highest == "95":
+            advice = "deliver the best validated version now with photo_part_render final=true; do not start a new version."
+        elif highest == "80":
+            advice = "deliver now; stop exploring."
+        else:
+            advice = "deliver soon; prefer photo_part_template or photo_part_measure / photo_part_build, then validate."
+        lines.append(_NOTE.format(used=used, cap=cap, advice=advice))
     if _is_probe(name, arguments, sid) and sid not in _probe_noted:
         _probe_noted.add(sid)
         lines.append(_PROBE_NOTE)

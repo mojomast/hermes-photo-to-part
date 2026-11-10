@@ -133,21 +133,195 @@ def apply_answers(rows: list[dict], spec_rows, prior: dict | None, overrides: li
     return rows
 
 
+FROZEN_AXIS_TOLERANCE_MM = 0.01
+
+
+def _source_is_user(source) -> bool:
+    """True when a dimension came from the user, or when no source was given."""
+    if source is None or source == "":
+        return True
+    text = str(source).strip().lower()
+    if not text:
+        return True
+    if text.startswith("user"):
+        return True
+    if text in {"stated", "given"}:
+        return True
+    return False
+
+
 def user_axis_values(raw: dict) -> dict:
-    """Plain x/y/z numbers. A ``source`` other than user is not locked."""
+    """Plain x/y/z numbers. A ``source`` other than user is not locked.
+
+    A top-level ``sources`` map (for example ``{"z": "assumed from the photo"}``)
+    is honoured the same way as a nested ``{value, source}`` object. Bare
+    numbers with no source stay locked, which matches older specs.
+    """
     if not isinstance(raw, dict):
         return {}
     nested = raw.get("dims") if isinstance(raw.get("dims"), dict) else {}
+    sources = raw.get("sources") if isinstance(raw.get("sources"), dict) else {}
     found = {}
     for name in ("x", "y", "z"):
         item = raw.get(name, nested.get(name) if isinstance(nested, dict) else None)
-        if isinstance(item, dict) and str(item.get("source") or "user") != "user":
+        source = sources.get(name)
+        if isinstance(item, dict):
+            if source is None:
+                source = item.get("source")
+            value = _number(item.get("value"))
+        else:
+            value = _number(item)
+        if not _source_is_user(source):
             continue
-        value = _number(item.get("value") if isinstance(item, dict) else item)
         if value is None:
             continue
         found[name] = value
     return found
+
+
+def locked_axes_from_spec(spec_source, raw: dict | None = None) -> dict:
+    """User axes from a freeze file, else from the spec itself."""
+    current = user_axis_values(raw) if isinstance(raw, dict) else {}
+    path = freeze_path(spec_source)
+    prior = _read(path) if path is not None else None
+    stored = prior.get("user_axes") if isinstance(prior, dict) and isinstance(prior.get("user_axes"), dict) else {}
+    locked = {}
+    # Freeze may predate sources-aware locking. Drop axes the current spec
+    # marks as assumed, and keep explicit user axes from the spec.
+    for name, value in stored.items():
+        if name not in {"x", "y", "z"}:
+            continue
+        number = _number(value)
+        if number is None:
+            continue
+        if isinstance(raw, dict) and name not in current and name in (raw.get("sources") or {}):
+            continue
+        locked[name] = number
+    locked.update(current)
+    return locked
+
+
+def frozen_axis_failures(mesh, locked: dict, *, tolerance: float = FROZEN_AXIS_TOLERANCE_MM) -> list[str]:
+    """Fail when a frozen user axis drifted, even if the general bbox tolerance would allow it."""
+    if not locked:
+        return []
+    extents = _mesh_extents(mesh)
+    if extents is None:
+        return []
+    messages = []
+    limit = max(0.0, float(tolerance))
+    for name, expected in locked.items():
+        if name not in extents:
+            continue
+        actual = extents[name]
+        if abs(actual - expected) <= limit + 1e-9:
+            continue
+        messages.append(
+            f"frozen user {name} {expected:g} mm must stay exact; the mesh is {actual:g} mm. "
+            "Do not nudge a user-stated dimension during refine."
+        )
+    return messages
+
+
+def snap_mesh_to_locked_axes(mesh, locked: dict, *, tolerance: float = FROZEN_AXIS_TOLERANCE_MM):
+    """Scale a mesh so frozen user axes match exactly. Returns ``(mesh, changed)``."""
+    if mesh is None or not locked:
+        return mesh, False
+    extents = _mesh_extents(mesh)
+    if extents is None:
+        return mesh, False
+    scales = [1.0, 1.0, 1.0]
+    index = {"x": 0, "y": 1, "z": 2}
+    changed = False
+    xy_same = (
+        "x" in locked
+        and "y" in locked
+        and abs(locked["x"] - locked["y"]) <= max(tolerance, 1e-9)
+    )
+    if xy_same:
+        current = max(float(extents["x"]), float(extents["y"]), 1e-12)
+        factor = float(locked["x"]) / current
+        if abs(factor - 1.0) > 1e-12 and (
+            abs(extents["x"] - locked["x"]) > tolerance or abs(extents["y"] - locked["y"]) > tolerance
+        ):
+            scales[0] = factor
+            scales[1] = factor
+            changed = True
+    for name, expected in locked.items():
+        if name not in index:
+            continue
+        if xy_same and name in {"x", "y"}:
+            continue
+        current = float(extents[name])
+        if current <= 1e-12:
+            continue
+        if abs(current - expected) <= tolerance + 1e-9:
+            continue
+        scales[index[name]] = float(expected) / current
+        changed = True
+    if not changed:
+        return mesh, False
+    mesh.apply_scale(scales)
+    return mesh, True
+
+
+def snap_path_to_spec(mesh_path, spec_source=None) -> dict:
+    """Rewrite an STL so frozen user axes stay exact. No-op when nothing is locked."""
+    info = {"ok": True, "changed": False, "path": None, "locked": {}}
+    if not mesh_path:
+        return info
+    path = Path(mesh_path).expanduser()
+    info["path"] = str(path)
+    if not path.is_file() or path.suffix.lower() != ".stl":
+        return info
+    spec_path = Path(spec_source).expanduser() if spec_source else path.parent / "spec.json"
+    if not spec_path.is_file():
+        return info
+    try:
+        raw = json.loads(spec_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return info
+    if not isinstance(raw, dict):
+        return info
+    locked = locked_axes_from_spec(spec_path, raw)
+    info["locked"] = locked
+    if not locked:
+        return info
+    try:
+        import trimesh
+
+        loaded = trimesh.load(str(path), force="mesh", process=False)
+    except Exception:
+        info["ok"] = False
+        return info
+    mesh = loaded if not isinstance(loaded, list) else (loaded[0] if loaded else None)
+    if mesh is None:
+        return info
+    mesh, changed = snap_mesh_to_locked_axes(mesh, locked)
+    if not changed:
+        return info
+    try:
+        mesh.export(str(path))
+    except Exception:
+        info["ok"] = False
+        return info
+    info["changed"] = True
+    return info
+
+
+def _mesh_extents(mesh) -> dict | None:
+    if mesh is None:
+        return None
+    extents = getattr(mesh, "extents", None)
+    if extents is None:
+        return None
+    try:
+        values = [float(item) for item in extents[:3]]
+    except (TypeError, ValueError, IndexError):
+        return None
+    if len(values) < 3:
+        return None
+    return {"x": values[0], "y": values[1], "z": values[2]}
 
 
 def measured_lengths(mesh_path) -> list[float]:

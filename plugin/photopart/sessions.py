@@ -33,6 +33,34 @@ def hermes_home() -> Path | None:
     return None
 
 
+def session_ended(session_id: str | None, *, home: Path | None = None) -> bool:
+    """True when Hermes recorded ``ended_at`` or ``end_reason`` for this session."""
+    if session_id is None or not str(session_id).strip():
+        return False
+    root = home if home is not None else hermes_home()
+    if root is None:
+        return False
+    db = Path(root) / "state.db"
+    if not db.is_file():
+        return False
+    sid = str(session_id).strip()
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                "SELECT ended_at, end_reason FROM sessions WHERE id = ? OR session_key = ? LIMIT 1",
+                (sid, sid),
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    if not row:
+        return False
+    ended_at, end_reason = row
+    return bool(ended_at) or (isinstance(end_reason, str) and bool(end_reason.strip()))
+
+
 def session_call_count(session_id: str | None, *, home: Path | None = None) -> int | None:
     """How many tool calls that session has recorded. None when no record exists."""
     loaded = load_session_calls(session_id, home=home)

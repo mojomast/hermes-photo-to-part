@@ -89,8 +89,15 @@
   animation: p2p-pulse 1.4s ease-in-out infinite;
 }
 
-.p2p-live.is-ready .p2p-dot {
+.p2p-live.is-ready .p2p-dot,
+.p2p-live.is-measured .p2p-dot,
+.p2p-live.is-done .p2p-dot {
   background: var(--ui-accent);
+}
+
+.p2p-live.is-stale .p2p-dot,
+.p2p-live.is-incomplete .p2p-dot {
+  background: var(--ui-text-quaternary);
 }
 
 .p2p-live.is-error .p2p-dot {

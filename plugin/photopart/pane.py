@@ -106,10 +106,23 @@ def view_state(state: dict) -> dict:
                 "active": False,
             }
         )
+    active_n = _active_iteration(state, iterations, latest_n)
     for item in iterations:
-        item["active"] = item["n"] == latest_n and latest_n > 0
+        item["active"] = item["n"] == active_n and active_n > 0
     stage = str(state.get("stage") or "ingest")
     status = str(state.get("status") or "idle")
+    images_out = {
+        "photo": _url(project, images.get("photo")),
+        "overlay": _url(project, images.get("overlay")),
+        "render": _url(project, images.get("render")),
+        "compare": _url(project, images.get("compare")),
+    }
+    if not images_out["render"] and not images_out["compare"]:
+        chosen = next((item for item in iterations if item.get("active")), None)
+        if chosen:
+            images_out["render"] = _url(project, chosen.get("render") or chosen.get("compare"))
+            if not images_out["overlay"]:
+                images_out["overlay"] = _url(project, chosen.get("overlay"))
     return {
         "id": state.get("id"),
         "title": state.get("title") or project.name,
@@ -119,7 +132,7 @@ def view_state(state: dict) -> dict:
         "message": state.get("message") or "",
         "tool": state.get("tool") or "",
         "updated": state.get("updated") or "",
-        "iteration": int(state.get("iteration") or latest_n or 0),
+        "iteration": int(active_n or state.get("iteration") or latest_n or 0),
         "stages": _stage_rows(state),
         "metrics": {
             "iou": metrics.get("iou"),
@@ -137,14 +150,9 @@ def view_state(state: dict) -> dict:
             "message": approval.get("message") or "",
             "rule_key": approval.get("rule_key") or "photo_part_build",
         },
-        "warnings": [item for item in state.get("warnings") or [] if isinstance(item, str)][:6],
+        "warnings": _pane_warnings(state),
         "errors": [item for item in state.get("errors") or [] if isinstance(item, str)][:6],
-        "images": {
-            "photo": _url(project, images.get("photo")),
-            "overlay": _url(project, images.get("overlay")),
-            "render": _url(project, images.get("render")),
-            "compare": _url(project, images.get("compare")),
-        },
+        "images": images_out,
         "iterations": iterations,
         "outputs": [
             {"kind": item.get("kind") or "FILE", "path": _display_path(project, item.get("path") or "")}
@@ -208,11 +216,11 @@ def _stage_rows(state: dict) -> list[dict]:
     for key, label in _STAGES:
         if key == active and status == "error":
             flag = "error"
-        elif key == active and status in {"running", "waiting"}:
+        elif key == active and status in {"running", "waiting", "stale"}:
             flag = "active"
-        elif key == "refine" and refining and status == "running":
+        elif key == "refine" and refining and status in {"running", "stale"}:
             flag = "active"
-        elif key in done:
+        elif key in done or status in {"ready", "measured", "done"} and key == active:
             flag = "done"
         else:
             flag = "pending"
@@ -276,6 +284,14 @@ def _load_project(project: Path) -> dict | None:
         return None
     if state.get("id") != run_id(resolved):
         return None
+    try:
+        from photopart.progress import settle_project
+
+        settled = settle_project(resolved)
+        if isinstance(settled, dict) and settled.get("id") == state.get("id"):
+            state = settled
+    except Exception:
+        pass
     return state
 
 
@@ -317,3 +333,67 @@ def _relative(project: Path, raw) -> str:
         return str(path.relative_to(project.resolve())).replace("\\", "/")
     except ValueError:
         return ""
+
+
+def _active_iteration(state: dict, iterations: list[dict], latest_n: int) -> int:
+    """Highlight the version that matches the headline, not a later failed build."""
+    if not iterations:
+        return 0
+    metrics = state.get("metrics") if isinstance(state.get("metrics"), dict) else {}
+    headline = metrics.get("iou")
+    stored = 0
+    try:
+        stored = int(state.get("iteration") or 0)
+    except (TypeError, ValueError):
+        stored = 0
+    ok_items = [item for item in iterations if item.get("ok")]
+
+    def _iou_close(item) -> bool:
+        if headline is None or item.get("iou") is None:
+            return False
+        try:
+            return abs(float(item["iou"]) - float(headline)) < 1e-4
+        except (TypeError, ValueError):
+            return False
+
+    if headline is not None and ok_items:
+        matches = [item for item in ok_items if _iou_close(item)]
+        if matches:
+            for item in matches:
+                if item["n"] == stored:
+                    return stored
+            return matches[-1]["n"]
+    if stored and any(item["n"] == stored for item in iterations):
+        current = next(item for item in iterations if item["n"] == stored)
+        if current.get("ok") or not ok_items:
+            return stored
+        return max(ok_items, key=lambda item: ((item.get("iou") is not None), item.get("iou") or 0, item["n"]))["n"]
+    if ok_items:
+        return ok_items[-1]["n"]
+    return stored or latest_n
+
+
+def _pane_warnings(state: dict) -> list[str]:
+    """Drop noisy hole and knuckle probe notes from the pane; keep them in tool JSON."""
+    quiet_needles = (
+        "per-hole probe disagrees",
+        "knuckle probe is unreliable",
+        "knuckle ring count",
+        "the check is reported as a warning",
+        "does not fail validation and does not block delivery",
+        "by rings, 0 cylinders",
+    )
+    visible: list[str] = []
+    quiet = 0
+    for item in state.get("warnings") or []:
+        if not isinstance(item, str):
+            continue
+        lower = item.lower()
+        if any(needle in lower for needle in quiet_needles):
+            quiet += 1
+            continue
+        visible.append(item)
+    if quiet:
+        noun = "note" if quiet == 1 else "notes"
+        visible.append(f"{quiet} hole or knuckle probe {noun} hidden. They do not block delivery.")
+    return visible[:6]

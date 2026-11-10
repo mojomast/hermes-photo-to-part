@@ -1,5 +1,5 @@
 name: photo-to-part
-version: "0.1.19"
+version: "0.1.20"
 description: >-
   Skill id photo-to-part:photo-to-printable-part. Pass that exact string
   only to skill_view. Do not pass it to skills_list, and do not add a
