@@ -452,6 +452,16 @@ def _record_template_spec(written: dict) -> None:
         "shape": written.get("shape"),
         "spec_checks": checks,
     }
+    if written.get("shape") == "spur_gear":
+        params = written.get("params") or {}
+        outer = params.get("outer_diameter_mm")
+        if not isinstance(outer, (int, float)) or float(outer) <= 0:
+            module = params.get("module")
+            teeth = params.get("teeth")
+            if isinstance(module, (int, float)) and isinstance(teeth, (int, float)):
+                outer = float(module) * (int(teeth) + 2)
+        if isinstance(outer, (int, float)) and float(outer) > 0:
+            payload["outer_diameter_mm"] = float(outer)
     sidecar.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     params_path = stl_path.parent / "params.json"
     if not params_path.is_file():

@@ -15,7 +15,7 @@ description: >-
   for a spur gear. Do not write an involute script. A hook blocks handwritten gear scripts until that template is tried. Read next_step.
   About 40 tool calls in total. Deliver as soon as validate passes.
   Reserve the last turns to deliver the best version.
-version: "0.1.21"
+version: "0.1.22"
 author: mojomast
 license: MIT
 compatibility: >-
