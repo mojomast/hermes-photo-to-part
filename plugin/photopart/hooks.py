@@ -1,11 +1,15 @@
 """Session-scoped Hermes hooks for budget, skill ids, and photo probes.
 
-Hermes v0.21.7 calls these for every tool, not only photo_part_*. Each hook
-acts only after this plugin has been used in that ``session_id`` (a
-``photo_part_*`` call or ``skill_view`` of this skill). Any other session is
-left untouched. Exceptions are swallowed so an unrelated tool still runs.
-A read of an eval scoring file or ``tests/regression`` stays blocked when
-this hook raises.
+Hermes v0.21.7 calls these for every tool, not only photo_part_*. Budget
+and probe hooks act only after this plugin has been used in that
+``session_id`` (a ``photo_part_*`` call or ``skill_view`` of this skill).
+A photo-to-part gear request is also steered before the first plugin
+call: handwritten gear or involute scripts are blocked until
+``photo_part_template`` shape ``spur_gear`` has been tried. Unrelated
+sessions are left untouched. Exceptions are swallowed so an unrelated
+tool still runs. A read of an eval scoring file or ``tests/regression``
+stays blocked when this hook raises. ``on_session_end`` settles the
+Part studio pane so a CLI oneshot does not stay ``running``.
 """
 
 from __future__ import annotations
@@ -47,6 +51,12 @@ def reset_hooks() -> None:
     _notes.clear()
     _probes.clear()
     _probe_noted.clear()
+    try:
+        from photopart.gear_steer import reset as reset_gear_steer
+
+        reset_gear_steer()
+    except Exception:
+        pass
 
 
 def session_project(session_id: str | None) -> Path | None:
@@ -116,10 +126,28 @@ def on_transform_tool_result(*args, **kwargs):
         return None
 
 
+def on_pre_llm_call(*args, **kwargs):
+    """Remember a photo-to-part gear request. Never injects context."""
+    try:
+        return _pre_llm(*args, **kwargs)
+    except Exception:
+        return None
+
+
+def on_session_end(*args, **kwargs):
+    """Settle pane.json to Ready, Measured, or Incomplete when a turn ends."""
+    try:
+        return _session_end(*args, **kwargs)
+    except Exception:
+        return None
+
+
 HOOKS = (
     ("pre_tool_call", on_pre_tool_call),
     ("post_tool_call", on_post_tool_call),
     ("transform_tool_result", on_transform_tool_result),
+    ("pre_llm_call", on_pre_llm_call),
+    ("on_session_end", on_session_end),
 )
 
 
@@ -139,6 +167,14 @@ def _pre(*args, **kwargs):
                 _log(sid, arguments, {"tool": tool, "rewrite_from": original, "paths": []})
         payload = json.dumps(updated) if was_string else updated
         return {"action": "modify", "args": payload}
+    try:
+        from photopart.gear_steer import steer_pre_tool
+
+        steered = steer_pre_tool(name, arguments if isinstance(arguments, dict) else {}, sid)
+        if steered:
+            return steered
+    except Exception:
+        pass
     if name.startswith("photo_part_"):
         return None
     from photopart.build_gate import eval_read_block
@@ -161,6 +197,12 @@ def _post(*args, **kwargs):
     name = fields["tool_name"]
     arguments = fields["args"] if isinstance(fields["args"], dict) else {}
     sid = fields["session_id"]
+    try:
+        from photopart.gear_steer import note_tool
+
+        note_tool(name, arguments, sid)
+    except Exception:
+        pass
     if not sid:
         return None
     if name.startswith("photo_part_") or (name == "skill_view" and _is_our_skill(arguments)):
@@ -220,6 +262,50 @@ def _transform(*args, **kwargs):
     if result is None:
         return extra
     return str(result) + "\n" + extra
+
+
+def _pre_llm(*args, **kwargs):
+    sid = kwargs.get("session_id")
+    if sid is None and args:
+        sid = args[0]
+    message = kwargs.get("user_message")
+    if message is None and len(args) > 1:
+        message = args[1]
+    history = kwargs.get("conversation_history")
+    if history is None and len(args) > 2:
+        history = args[2]
+    from photopart.gear_steer import note_user_message
+
+    note_user_message(sid, message)
+    if history and not message:
+        note_user_message(sid, history)
+    return None
+
+
+def _session_end(*args, **kwargs):
+    names = ("session_id", "completed", "interrupted", "model", "platform")
+    fields = {name: kwargs.get(name) for name in names}
+    for name, value in zip(names, args):
+        if fields.get(name) is None:
+            fields[name] = value
+    sid = fields.get("session_id")
+    sid = "" if sid is None else str(sid).strip()
+    if not sid:
+        return None
+    extras = []
+    remembered = _projects.get(sid)
+    if remembered is not None:
+        extras.append(remembered)
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        cwd = None
+    if cwd is not None and (cwd / ".photopart" / "pane.json").is_file():
+        extras.append(cwd)
+    from photopart.progress import settle_session
+
+    settle_session(sid, directories=extras, ended=True)
+    return None
 
 
 def _fields(args, kwargs) -> dict:

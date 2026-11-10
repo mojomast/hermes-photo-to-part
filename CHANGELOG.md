@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.21 — 2026-11-10
+
+- When a photo-to-part request looks like a gear (gear, spur, teeth, involute, sprocket), a `pre_tool_call` hook blocks handwritten gear or involute code in `write_file`, `terminal`, `execute_code`, or `photo_part_build`, and blocks other CAD scripting, until `photo_part_template` with shape `spur_gear` has been tried. A failed template call also lifts the block. Non-gear parts and sessions that are not photo-to-part work are not blocked. `pre_llm_call` only classifies the request; it does not inject context.
+- `on_session_end` settles `<project>/.photopart/pane.json` to Ready, Measured, or Incomplete when a session ends, so a CLI `--oneshot` run no longer stays `running` until a pane poll loads the project.
+
 ## 0.1.20 — 2026-11-09
 
 - The Part studio pane always ends in a terminal state. A passing validate is Ready even without a photo comparison. A measure-only run becomes Measured when the session ends. A turn cap or an interrupted session goes stale, then Ready, Measured, or Incomplete. The iteration strip highlights the headline version, not a later failed build. A Ready frame no longer leaves the render well on Waiting when no mesh view exists; automatic validate renders now include front views.

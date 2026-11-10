@@ -106,7 +106,11 @@ def register(ctx) -> None:
     budget. A second ``pre_tool_call`` callback asks for Hermes approval
     before ``photo_part_build`` runs a script, and before a terminal or
     code tool runs that build directly. ``pre_tool_call`` also blocks reads
-    of ``evals/`` scoring files and ``tests/regression``.
+    of ``evals/`` scoring files and ``tests/regression``, and blocks a
+    handwritten gear or involute script until ``photo_part_template``
+    shape ``spur_gear`` has been tried. ``pre_llm_call`` only classifies
+    that request and does not inject context. ``on_session_end`` settles
+    the Part studio pane to a terminal state when a session ends.
     """
     skills_dir = Path(__file__).resolve().parent / "skills"
     if skills_dir.is_dir():

@@ -258,7 +258,7 @@ class PaneContractTests(unittest.TestCase):
                 "photo_part_build",
             ],
         )
-        self.assertEqual([name for name, _callback in HOOKS], ["pre_tool_call", "post_tool_call", "transform_tool_result"])
+        self.assertEqual([name for name, _callback in HOOKS], ["pre_tool_call", "post_tool_call", "transform_tool_result", "pre_llm_call", "on_session_end"])
         for spec in tool_specs():
             properties = spec["schema"]["parameters"]["properties"]
             for key in properties:

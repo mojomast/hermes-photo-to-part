@@ -246,12 +246,12 @@ class PackagingTests(unittest.TestCase):
     def test_root_manifest_refuses_a_root_install(self):
         stub = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
         self.assertEqual(stub["name"], "photo-to-part-repo-root")
-        self.assertEqual(stub["version"], "0.1.20")
+        self.assertEqual(stub["version"], "0.1.21")
         self.assertEqual(stub["manifest_version"], 99)
         self.assertEqual(stub["requires_hermes"], ">=999.0.0")
         plugin = yaml.safe_load((PLUGIN / "plugin.yaml").read_text(encoding="utf-8"))
         self.assertEqual(plugin["name"], "photo-to-part")
-        self.assertEqual(plugin["version"], "0.1.20")
+        self.assertEqual(plugin["version"], "0.1.21")
         self.assertEqual(plugin["manifest_version"], 2)
 
     def test_skill_frontmatter_stays_within_the_length_cap(self):

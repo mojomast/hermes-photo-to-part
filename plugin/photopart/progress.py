@@ -600,16 +600,17 @@ def _touch_index(state: dict) -> None:
     data = _read_json(path)
     runs = [row for row in data.get("runs", []) if isinstance(row, dict)]
     runs = [row for row in runs if row.get("id") != state.get("id")]
-    runs.append(
-        {
-            "id": state.get("id"),
-            "project": state.get("project"),
-            "updated": state.get("updated"),
-            "title": state.get("title"),
-            "stage": state.get("stage"),
-            "status": state.get("status"),
-        }
-    )
+    row = {
+        "id": state.get("id"),
+        "project": state.get("project"),
+        "updated": state.get("updated"),
+        "title": state.get("title"),
+        "stage": state.get("stage"),
+        "status": state.get("status"),
+    }
+    if state.get("session_id"):
+        row["session_id"] = state.get("session_id")
+    runs.append(row)
     runs.sort(key=lambda row: str(row.get("updated") or ""), reverse=True)
     try:
         _write_json(path, {"runs": runs[:40]})
@@ -1056,6 +1057,58 @@ def settle_project(directory, *, ended=None, now=None, stale_after=None, force=F
         if changed:
             _save(path, state)
         return state
+
+
+def settle_session(session_id, *, directories=None, ended=True) -> list:
+    """Settle every pane that belongs to ``session_id``.
+
+    ``directories`` are extra project roots (the hook's remembered cwd).
+    A missing pane file is skipped. Failures are swallowed.
+    """
+    if session_id is None or not str(session_id).strip():
+        return []
+    sid = str(session_id).strip()
+    seen: set[str] = set()
+    settled: list = []
+    candidates: list[Path] = []
+    for item in directories or []:
+        try:
+            candidates.append(Path(item).expanduser().resolve())
+        except OSError:
+            continue
+    path = index_path()
+    if path is not None:
+        data = _read_json(path)
+        for row in data.get("runs") or []:
+            if not isinstance(row, dict):
+                continue
+            project = row.get("project")
+            if not isinstance(project, str) or not project.strip():
+                continue
+            try:
+                folder = Path(project).expanduser().resolve()
+            except OSError:
+                continue
+            if row.get("session_id") == sid:
+                candidates.append(folder)
+                continue
+            body = _read_json(folder / ".photopart" / "pane.json")
+            if body.get("session_id") == sid:
+                candidates.append(folder)
+    for folder in candidates:
+        key = str(folder)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not (folder / ".photopart" / "pane.json").is_file():
+            continue
+        try:
+            state = settle_project(folder, ended=ended)
+        except Exception:
+            continue
+        if state is not None:
+            settled.append(state)
+    return settled
 
 
 def _session_has_ended(state: dict) -> bool:
