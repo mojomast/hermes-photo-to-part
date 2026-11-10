@@ -136,7 +136,27 @@ def _emit(
 
     payload["skill_view"] = f'skill_view("{SKILL_ID}")'
     attach_budget(payload, tool_name, calls_used=calls_used)
+    _watch_result(tool_name, payload)
     return _dump(payload)
+
+
+def _watch(tool: str, args: dict) -> None:
+    """Tell the optional pane that a tool has started. Never changes the tool result."""
+    try:
+        from photopart.progress import note_start
+
+        note_start(tool, args if isinstance(args, dict) else {})
+    except Exception:
+        return
+
+
+def _watch_result(tool: str, payload: dict) -> None:
+    try:
+        from photopart.progress import note_result
+
+        note_result(tool, payload)
+    except Exception:
+        return
 
 
 def _calls_used(args: dict):
@@ -333,6 +353,7 @@ def validate_tool(params, **_kwargs) -> str:
             )
         from photopart.validate import run_validate
 
+        _watch("photo_part_validate", args)
         _code, report = run_validate(
             str(args["mesh"]),
             size=_size(args),
@@ -574,6 +595,7 @@ def render_tool(params, **_kwargs) -> str:
             argv.extend(["--max-bytes", str(int(args["max_bytes"]))])
         from photopart.render import run_render
 
+        _watch("photo_part_render", args)
         _code, report = run_render(argv, measure_payload=measure_json if isinstance(measure_json, dict) else None)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _emit(
@@ -626,6 +648,7 @@ def heal_tool(params, **_kwargs) -> str:
             argv.extend(["--max-bytes", str(int(args["max_bytes"]))])
         from photopart.heal import run_heal
 
+        _watch("photo_part_heal", args)
         _code, report = run_heal(argv)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _emit(
@@ -684,6 +707,7 @@ def template_tool(params, **_kwargs) -> str:
             if existing:
                 joined = ", ".join(existing)
                 raise ValueError(f"refusing to overwrite {joined}. Pass --overwrite.")
+        _watch("photo_part_template", args)
         written = write_shape(
             out_dir,
             shape,
@@ -751,6 +775,7 @@ def measure_tool(params, **_kwargs) -> str:
         mode = _format(args)
         from photopart.measure import measure
 
+        _watch("photo_part_measure", args)
         report = measure(args)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _emit(
@@ -799,6 +824,7 @@ def build_tool(params, **_kwargs) -> str:
             extra = []
         if isinstance(extra, str):
             raise ValueError("args must be a list of strings")
+        _watch("photo_part_build", args)
         report = run_build(
             str(args["script"]),
             cwd=args.get("cwd"),

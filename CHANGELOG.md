@@ -8,6 +8,9 @@
 - Stability GrabCut samples stop once the first two agree. The primary part mask stays full resolution. A measurement `next_step` reports `part_bbox_mm` and says to stop when the request was only a measurement. Template and build text point at `bottle_cap`, `strap_hinge`, and `spur_gear` instead of reading plugin source.
 - A `pre_tool_call` error still blocks a read of eval scoring files and `tests/regression`. An ordinary read still proceeds. `pytest` and `unittest` stay allowed.
 - Docs state that Hermes `--yolo` auto-approves the build prompt. The plugin still returns the approve action and does not block that flag. `PHOTOPART_BUILD_APPROVAL=allow` remains the test and sealed-eval skip.
+- Optional Part studio pane for Hermes Desktop 0.23 or newer (`plugin/desktop/plugin.js`). While a run is in progress it shows the stage, the photo and overlay, each render beside the photo, iteration history, overlay IoU, scale source and confidence, trust, dimensions, the approval gate, warnings and errors, and the STL and CAD paths.
+- Tools write `<project>/.photopart/pane.json` and, when `HERMES_HOME` is set, `$HERMES_HOME/.photopart/pane-index.json`. The pane polls `GET /api/plugins/photo-to-part/` and also listens for `plugin.photo-to-part.run.updated` when the gateway can broadcast it. No tool schema changed.
+- The pane is not required. Hermes versions without it, including the 0.21.7 doctor check, still install the same six tools and the same hooks. The build approval decision and the eval read block are unchanged. Progress writes are skipped for the plugin directory, the source checkout, `evals/`, and `tests/regression`.
 
 ## 0.1.18 — 2026-11-04
 
