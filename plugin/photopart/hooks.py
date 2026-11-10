@@ -57,6 +57,12 @@ def reset_hooks() -> None:
         reset_gear_steer()
     except Exception:
         pass
+    try:
+        from photopart.deliver_steer import reset as reset_deliver_steer
+
+        reset_deliver_steer()
+    except Exception:
+        pass
 
 
 def session_project(session_id: str | None) -> Path | None:
@@ -175,6 +181,25 @@ def _pre(*args, **kwargs):
             return steered
     except Exception:
         pass
+    try:
+        from photopart.deliver_steer import steer_pre_tool as steer_deliver
+
+        directory = None
+        if sid:
+            try:
+                directory = _directory(sid, arguments if isinstance(arguments, dict) else {})
+            except Exception:
+                directory = None
+        steered = steer_deliver(
+            name,
+            arguments if isinstance(arguments, dict) else {},
+            sid,
+            directory=directory,
+        )
+        if steered:
+            return steered
+    except Exception:
+        pass
     if name.startswith("photo_part_"):
         return None
     from photopart.build_gate import eval_read_block
@@ -201,6 +226,24 @@ def _post(*args, **kwargs):
         from photopart.gear_steer import note_tool
 
         note_tool(name, arguments, sid)
+    except Exception:
+        pass
+    try:
+        from photopart.deliver_steer import note_tool as note_deliver
+
+        directory = None
+        if sid:
+            try:
+                directory = _directory(sid, arguments if isinstance(arguments, dict) else {})
+            except Exception:
+                directory = None
+        note_deliver(
+            name,
+            arguments,
+            sid,
+            result=fields.get("result"),
+            directory=directory,
+        )
     except Exception:
         pass
     if not sid:

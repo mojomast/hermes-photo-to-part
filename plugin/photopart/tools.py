@@ -464,6 +464,13 @@ def validate_tool(params, **_kwargs) -> str:
             answers=_answers(args),
         )
         _maybe_render(args, report)
+        if report.get("ok"):
+            from photopart.deliver_steer import deliver_hint, is_template_mesh, note_validated
+
+            mesh_path = report.get("file") or args.get("mesh")
+            if mesh_path and is_template_mesh(mesh_path):
+                note_validated(mesh_path, Path(str(mesh_path)).expanduser().resolve().parent)
+                report["next_step"] = deliver_hint(mesh_path)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _emit(
             {"ok": False, "error": str(exc), "mesh": args.get("mesh") if isinstance(args.get("mesh"), str) else None},
@@ -521,6 +528,77 @@ def _seed_arg(seed) -> str | None:
     return None
 
 
+
+def _discover_photo(args: dict, project, last=None, mesh=None):
+    """Photo path from the tool args, last measure, or a project photo.* file."""
+    last = last or {}
+    candidates = [
+        args.get("photo") if isinstance(args, dict) else None,
+        args.get("image") if isinstance(args, dict) else None,
+        last.get("image") if isinstance(last, dict) else None,
+        last.get("source_image") if isinstance(last, dict) else None,
+    ]
+    roots = []
+    if project:
+        roots.append(Path(project))
+    if mesh:
+        roots.append(Path(mesh).expanduser().parent)
+    for root in roots:
+        candidates.extend(str(root / name) for name in ("photo.jpg", "photo.jpeg", "photo.png", "photo.webp"))
+    seen: set[str] = set()
+    for raw in candidates:
+        if not raw or not isinstance(raw, str):
+            continue
+        path = Path(raw).expanduser()
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.is_file():
+            return path
+    return None
+
+
+def _stated_scale(mesh, photo):
+    try:
+        from photopart.stated_scale import scale_for_mesh
+
+        return scale_for_mesh(mesh, photo)
+    except Exception:
+        return None
+
+
+def _annotate_stated_scale(report: dict, stated: dict, dest) -> None:
+    """Label an official overlay as scale-from-stated-OD, not a coin measure."""
+    if not isinstance(report, dict) or not isinstance(stated, dict):
+        return
+    report["photo_scale_source"] = stated.get("source") or "stated_outer_diameter"
+    report["photo_scale_note"] = stated.get("note") or ""
+    report["photo_scale_label"] = stated.get("label") or "scale from stated OD"
+    if report.get("overlay_iou_label") == "measured":
+        report["overlay_iou_label"] = "guide_only"
+    folder = Path(dest) if dest else None
+    manifest = (folder / "manifest.json") if folder is not None else None
+    if manifest is None or not manifest.is_file():
+        return
+    try:
+        doc = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(doc, dict):
+        return
+    doc["photo_scale_source"] = report["photo_scale_source"]
+    doc["photo_scale_note"] = report["photo_scale_note"]
+    doc["photo_scale_label"] = report["photo_scale_label"]
+    if doc.get("overlay_iou_label") == "measured":
+        doc["overlay_iou_label"] = "guide_only"
+        report["overlay_iou_label"] = "guide_only"
+    try:
+        manifest.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except OSError:
+        return
+
+
 def _maybe_render(args: dict, report: dict) -> None:
     """Render in-process after a passing validate that was given a spec.
 
@@ -532,13 +610,18 @@ def _maybe_render(args: dict, report: dict) -> None:
     if not isinstance(report, dict) or report.get("error"):
         return
     flag = args.get("render", None)
+    mesh = report.get("file") or args.get("mesh")
     if flag is None:
-        wanted = bool(report.get("ok") and args.get("spec"))
+        has_spec = bool(args.get("spec"))
+        if not has_spec and mesh:
+            from photopart.deliver_steer import is_template_mesh
+
+            has_spec = is_template_mesh(mesh)
+        wanted = bool(report.get("ok") and has_spec)
     else:
         wanted = bool(flag) and bool(report.get("ok"))
     if not wanted:
         return
-    mesh = report.get("file") or args.get("mesh")
     if not mesh:
         return
     project = Path(str(mesh)).expanduser().resolve().parent
@@ -557,6 +640,10 @@ def _maybe_render(args: dict, report: dict) -> None:
         candidate = Path(hint["image"])
         if candidate.is_file():
             photo = str(candidate)
+    if not photo:
+        discovered = _discover_photo(args, project, hint, mesh)
+        if discovered is not None:
+            photo = str(discovered)
     if photo:
         argv.extend(["--photo", photo])
     scale = _optional_float(args, "photo_scale")
@@ -565,6 +652,11 @@ def _maybe_render(args: dict, report: dict) -> None:
             scale = float(hint["px_per_mm"])
         except (TypeError, ValueError):
             scale = None
+    stated = None
+    if scale is None and photo:
+        stated = _stated_scale(mesh, photo)
+        if stated:
+            scale = float(stated["px_per_mm"])
     if scale is not None:
         argv.extend(["--photo-scale", str(scale)])
     fit = _optional_str(args, "overlay_fit") or _optional_str(args, "views")
@@ -609,6 +701,16 @@ def _maybe_render(args: dict, report: dict) -> None:
         "ok": bool(isinstance(manifest, dict) and manifest.get("ok")),
         "error": None if not isinstance(manifest, dict) else manifest.get("error"),
     }
+    if stated and isinstance(manifest, dict) and manifest.get("ok"):
+        _annotate_stated_scale(manifest, stated, out)
+        _annotate_stated_scale(report["render"], stated, out)
+        report["photo_scale_source"] = report["render"].get("photo_scale_source")
+        report["photo_scale_label"] = report["render"].get("photo_scale_label")
+        report["photo_scale_note"] = report["render"].get("photo_scale_note")
+        if "overlay_iou" in report["render"]:
+            report["overlay_iou"] = report["render"]["overlay_iou"]
+        if "overlay_iou_label" in report["render"]:
+            report["overlay_iou_label"] = report["render"]["overlay_iou_label"]
     if report["render"].get("overlay_status") == "missing_scale":
         report["next_step"] = report["render"]["next_step"]
 
@@ -633,11 +735,22 @@ def render_tool(params, **_kwargs) -> str:
             )
         argv = [str(args["mesh"]), "--out-dir", str(args["out_dir"])]
         photo = _optional_str(args, "photo")
+        photo_scale = _optional_float(args, "photo_scale")
+        stated = None
+        if not photo or photo_scale is None:
+            discovered = _discover_photo(args, Path(str(args["mesh"])).expanduser().resolve().parent, {}, args.get("mesh"))
+            if not photo and discovered is not None:
+                photo = str(discovered)
+            if photo and photo_scale is None:
+                stated = _stated_scale(args.get("mesh"), photo)
+                if stated:
+                    photo_scale = float(stated["px_per_mm"])
         if photo:
             argv.extend(["--photo", photo])
-        photo_scale = _optional_float(args, "photo_scale")
         if photo_scale is not None:
             argv.extend(["--photo-scale", str(photo_scale)])
+            if not _optional_str(args, "overlay_fit"):
+                argv.extend(["--overlay-fit", "auto"])
         origin = args.get("overlay_origin")
         if isinstance(origin, (list, tuple)) and len(origin) == 2:
             argv.extend(["--overlay-origin", f"{float(origin[0])},{float(origin[1])}"])
@@ -687,6 +800,9 @@ def render_tool(params, **_kwargs) -> str:
 
         _watch("photo_part_render", args)
         _code, report = run_render(argv, measure_payload=measure_json if isinstance(measure_json, dict) else None)
+        if stated and isinstance(report, dict) and report.get("ok"):
+            dest = Path(args["out_dir"]) if args.get("out_dir") else Path(str(args["mesh"])).expanduser().parent / "renders"
+            _annotate_stated_scale(report, stated, dest)
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return _emit(
             {"ok": False, "error": str(exc)},

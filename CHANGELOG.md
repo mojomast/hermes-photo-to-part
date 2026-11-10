@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.22 — 2026-11-10
+
+- If a validated STL exists, the Part studio pane settles to Ready and points at the best validated version, even when the last state was error. That includes a delivery-budget refusal of a non-final render. The refusal is recorded as a note, not a scary error.
+- After a template mesh passes `photo_part_validate`, the tool result tells the agent to deliver it with `photo_part_render final=true`, or do at most one measured refine (`photo_part_measure`, then one `photo_part_build`). Vision loops and further refine or CAD calls are blocked so the run can deliver before the 95% budget wall.
+- A spur-gear template render with a photo but no coin scale can still produce an official overlay IoU by scaling from the stated outer diameter (template `outer_diameter_mm` or the spec tip span). The metric is labelled `scale from stated OD` and `guide_only`.
+
+
 ## 0.1.21 — 2026-11-10
 
 - When a photo-to-part request looks like a gear (gear, spur, teeth, involute, sprocket), a `pre_tool_call` hook blocks handwritten gear or involute code in `write_file`, `terminal`, `execute_code`, or `photo_part_build`, and blocks other CAD scripting, until `photo_part_template` with shape `spur_gear` has been tried. A failed template call also lifts the block. Non-gear parts and sessions that are not photo-to-part work are not blocked. `pre_llm_call` only classifies the request; it does not inject context.

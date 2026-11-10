@@ -157,7 +157,9 @@ def _apply_result(state: dict, tool: str, payload: dict) -> None:
         kept = [item for item in kept if "overlay fit" not in item.lower()]
     if warnings or _iou(layers) is not None:
         state["warnings"] = _unique(kept + warnings)[:8]
-    if ok:
+    budget_note = _budget_refusal_note(payload)
+    keep_ready = bool(budget_note) and bool(state.get("validated") or _has_deliverable(state))
+    if ok or keep_ready:
         state["errors"] = []
     else:
         state["errors"] = _errors(payload)[:6]
@@ -200,9 +202,9 @@ def _apply_result(state: dict, tool: str, payload: dict) -> None:
     mesh = _mesh_path(layers)
     if mesh or _image_map(state):
         if tool in {"photo_part_render", "photo_part_template", "photo_part_build", "photo_part_heal"} or _nested_render(layers):
-            _upsert_iteration(state, tool, payload, ok=ok)
+            _upsert_iteration(state, tool, payload, ok=ok or keep_ready)
     iteration = int(state.get("iteration") or 0)
-    if iteration >= 2 and ok and tool in {"photo_part_render", "photo_part_validate", "photo_part_build", "photo_part_template"}:
+    if iteration >= 2 and (ok or keep_ready) and tool in {"photo_part_render", "photo_part_validate", "photo_part_build", "photo_part_template"}:
         state["refining"] = True
     stage = _result_stage(state, tool, ok, layers)
     state["stage"] = stage
@@ -211,7 +213,21 @@ def _apply_result(state: dict, tool: str, payload: dict) -> None:
     if tool == "photo_part_measure" and ok:
         state["measure_complete"] = True
     _remember_session(state)
-    if not ok:
+    if keep_ready:
+        _note_warning(state, budget_note)
+        _point_at_best(state)
+        state["status"] = "ready"
+        _mark_done(state, "validate")
+        _mark_done(state, "refine" if iteration >= 2 else "")
+        if iteration >= 2:
+            state["refining"] = False
+        best = _best_mesh_name(state)
+        if best:
+            state["message"] = f"Ready to deliver {best}. {budget_note}"
+        else:
+            state["message"] = f"Ready to deliver the best validated version. {budget_note}"
+        ok = True
+    elif not ok:
         state["status"] = "error"
         state["message"] = (state.get("errors") or ["The step failed."])[0]
     elif state.get("validated") and tool in {
@@ -825,7 +841,50 @@ def _format_box(value) -> str | None:
     return None
 
 
+def _budget_refusal_note(payload: dict) -> str | None:
+    if not (payload.get("budget_refused") or payload.get("refused")):
+        return None
+    text = payload.get("error") or payload.get("next_step") or "Budget: deliver the best validated version now."
+    return _clip(str(text).strip(), 240)
+
+
+def _note_warning(state: dict, text) -> None:
+    if not isinstance(text, str) or not text.strip():
+        return
+    warnings = [item for item in (state.get("warnings") or []) if isinstance(item, str)]
+    clipped = _clip(text.strip(), 240)
+    if clipped not in warnings:
+        warnings.append(clipped)
+    state["warnings"] = warnings[-8:]
+
+
+def _best_iteration(state: dict) -> dict | None:
+    best = None
+    for item in state.get("iterations") or []:
+        if not isinstance(item, dict) or not item.get("ok") or not item.get("mesh"):
+            continue
+        number = int(item.get("n") or 0)
+        if best is None or number >= int(best.get("n") or 0):
+            best = item
+    return best
+
+
+def _best_mesh_name(state: dict) -> str | None:
+    best = _best_iteration(state)
+    if best is None or not best.get("mesh"):
+        return None
+    return Path(best["mesh"]).name
+
+
+def _point_at_best(state: dict) -> None:
+    best = _best_iteration(state)
+    if best is None:
+        return
+    state["iteration"] = int(best.get("n") or 0)
+
+
 def _warnings(layers: list[dict]) -> list[str]:
+
     found: list[str] = []
 
     def add(value) -> None:
@@ -1125,7 +1184,9 @@ def _session_has_ended(state: dict) -> bool:
 
 def _settle(state: dict, *, ended=None, now=None, stale_after=None, force=False) -> bool:
     status = str(state.get("status") or "")
-    if status in _TERMINAL:
+    if status in {"ready", "measured", "incomplete", "done"}:
+        return False
+    if status == "error" and not (_has_deliverable(state) or state.get("validated")):
         return False
     if ended is None:
         ended = _session_has_ended(state)
@@ -1152,7 +1213,13 @@ def _settle(state: dict, *, ended=None, now=None, stale_after=None, force=False)
 
 def _promote_terminal(state: dict, *, ended: bool) -> bool:
     prefix = "Session ended. " if ended else "Run went stale. "
+    was_error = state.get("status") == "error"
     if _has_deliverable(state):
+        if was_error:
+            for item in list(state.get("errors") or []):
+                _note_warning(state, item)
+            state["errors"] = []
+        _point_at_best(state)
         state["status"] = "ready"
         if _overlay_failed(state):
             iou = (state.get("metrics") or {}).get("iou")
@@ -1162,7 +1229,11 @@ def _promote_terminal(state: dict, *, ended: bool) -> bool:
                 "do not treat it as a successful photo match."
             )
         else:
-            state["message"] = f"{prefix}Ready to deliver the best version."
+            best = _best_mesh_name(state)
+            if best:
+                state["message"] = f"{prefix}Ready to deliver {best}."
+            else:
+                state["message"] = f"{prefix}Ready to deliver the best version."
         if int(state.get("iteration") or 0) >= 2:
             _mark_done(state, "refine")
             state["refining"] = False
