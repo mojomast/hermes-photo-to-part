@@ -1,0 +1,428 @@
+{
+  "sourceCommit": "be886d0f57f803e4ef9019db03af7014f67c2b4f",
+  "files": [
+    {
+      "file": "delivery/photo-to-part-1080p.mp4",
+      "sha256": "4c73ee0a546c80592f226a812e60c16d7d96076460ad45f26bba79d1f116dee2",
+      "bytes": 10071379,
+      "videoCodec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "fps": "30/1",
+      "frames": 1800,
+      "videoDuration": 60.0,
+      "containerDuration": 60.0,
+      "expectedPictureDuration": 60.0,
+      "audioStreams": 1,
+      "loudness": {
+        "integratedLufs": -14.06,
+        "truePeakDbtp": -1.12,
+        "rangeLu": 2.8,
+        "scope": "first encoded audio stream"
+      },
+      "fullDecode": true,
+      "passed": true,
+      "errors": []
+    },
+    {
+      "file": "previews/photo-to-part-720p.mp4",
+      "sha256": "c21f6a021aa0abe6a318a726d5e11a8bde71743c71c2e9ca2b17796f7d174d4b",
+      "bytes": 3632019,
+      "videoCodec": "h264",
+      "width": 1280,
+      "height": 720,
+      "fps": "30/1",
+      "frames": 1800,
+      "videoDuration": 60.0,
+      "containerDuration": 60.01,
+      "expectedPictureDuration": 60.0,
+      "audioStreams": 1,
+      "loudness": {
+        "integratedLufs": -14.09,
+        "truePeakDbtp": -1.17,
+        "rangeLu": 2.8,
+        "scope": "first encoded audio stream"
+      },
+      "fullDecode": true,
+      "passed": true,
+      "errors": []
+    },
+    {
+      "file": "delivery/photo-to-part-square.mp4",
+      "sha256": "c489c0e9be7680e2a7be5e042fd3995b18804d579ae689dc1317251b18dd53c1",
+      "bytes": 8029993,
+      "videoCodec": "h264",
+      "width": 1080,
+      "height": 1080,
+      "fps": "30/1",
+      "frames": 1800,
+      "videoDuration": 60.0,
+      "containerDuration": 60.0,
+      "expectedPictureDuration": 60.0,
+      "audioStreams": 1,
+      "loudness": {
+        "integratedLufs": -14.06,
+        "truePeakDbtp": -1.12,
+        "rangeLu": 2.8,
+        "scope": "first encoded audio stream"
+      },
+      "fullDecode": true,
+      "passed": true,
+      "errors": []
+    },
+    {
+      "file": "previews/photo-to-part-square-720p.mp4",
+      "sha256": "0e037c8bf583a54d91f0cc2bb12190caf35fb812497aa6c27ffa99e9a5cce212",
+      "bytes": 3047745,
+      "videoCodec": "h264",
+      "width": 720,
+      "height": 720,
+      "fps": "30/1",
+      "frames": 1800,
+      "videoDuration": 60.0,
+      "containerDuration": 60.01,
+      "expectedPictureDuration": 60.0,
+      "audioStreams": 1,
+      "loudness": {
+        "integratedLufs": -14.09,
+        "truePeakDbtp": -1.17,
+        "rangeLu": 2.8,
+        "scope": "first encoded audio stream"
+      },
+      "fullDecode": true,
+      "passed": true,
+      "errors": []
+    }
+  ],
+  "cleanReproductionExact": true,
+  "subjectiveListening": false,
+  "render-build": {
+    "sha256": "a895c53fb336e914a87340c27be4a7548ee929e233791481a7a5a18a5e792ed7",
+    "width": 1920,
+    "height": 1080,
+    "frames": 1800,
+    "fps": 30,
+    "duration": 60
+  },
+  "encoded-review": {
+    "source": "photo-to-part-1080p.mp4",
+    "stills": [
+      2,
+      7,
+      14,
+      19,
+      24,
+      29,
+      35,
+      41,
+      43.5,
+      46,
+      48.5,
+      53,
+      58
+    ],
+    "cutFrames": [
+      150,
+      360,
+      510,
+      660,
+      810,
+      930,
+      1200,
+      1275,
+      1350,
+      1425,
+      1500,
+      1680
+    ],
+    "motion": [
+      {
+        "time": 0,
+        "changedChannelValues": 17702
+      },
+      {
+        "time": 5,
+        "changedChannelValues": 13158
+      },
+      {
+        "time": 12,
+        "changedChannelValues": 18743
+      },
+      {
+        "time": 17,
+        "changedChannelValues": 12420
+      },
+      {
+        "time": 22,
+        "changedChannelValues": 17949
+      },
+      {
+        "time": 27,
+        "changedChannelValues": 13701
+      },
+      {
+        "time": 31,
+        "changedChannelValues": 8831
+      },
+      {
+        "time": 40,
+        "changedChannelValues": 12254
+      },
+      {
+        "time": 42.5,
+        "changedChannelValues": 5752
+      },
+      {
+        "time": 45,
+        "changedChannelValues": 7231
+      },
+      {
+        "time": 47.5,
+        "changedChannelValues": 6605
+      },
+      {
+        "time": 50,
+        "changedChannelValues": 5181
+      }
+    ],
+    "endHoldMeanDifference": 0.0001286008230452675
+  },
+  "seek": {
+    "frames": [
+      0,
+      1,
+      75,
+      149,
+      150,
+      151,
+      255,
+      359,
+      360,
+      361,
+      509,
+      510,
+      511,
+      585,
+      659,
+      660,
+      661,
+      809,
+      810,
+      811,
+      929,
+      930,
+      931,
+      1005,
+      1199,
+      1200,
+      1201,
+      1274,
+      1275,
+      1276,
+      1349,
+      1350,
+      1351,
+      1424,
+      1425,
+      1426,
+      1499,
+      1500,
+      1501,
+      1590,
+      1679,
+      1680,
+      1681,
+      1740,
+      1799
+    ],
+    "reverseMatches": 45,
+    "shuffledMatches": 45,
+    "motion": true,
+    "effectSensitive": true,
+    "typography": {
+      "checks": 737,
+      "errors": []
+    },
+    "pageErrors": [],
+    "build": {
+      "sha256": "a895c53fb336e914a87340c27be4a7548ee929e233791481a7a5a18a5e792ed7",
+      "width": 1920,
+      "height": 1080,
+      "frames": 1800,
+      "fps": 30,
+      "duration": 60
+    },
+    "browser": "HeadlessChrome/152.0.7977.30"
+  },
+  "render-build-square": {
+    "sha256": "13c9a14ebd5f98a08ee922d32ab3510e18a36ef51eea71a8f683e01f8634ee6e",
+    "width": 1080,
+    "height": 1080,
+    "frames": 1800,
+    "fps": 30,
+    "duration": 60
+  },
+  "encoded-review-square": {
+    "source": "photo-to-part-square.mp4",
+    "stills": [
+      2,
+      7,
+      14,
+      19,
+      24,
+      29,
+      35,
+      41,
+      43.5,
+      46,
+      48.5,
+      53,
+      58
+    ],
+    "cutFrames": [
+      150,
+      360,
+      510,
+      660,
+      810,
+      930,
+      1200,
+      1275,
+      1350,
+      1425,
+      1500,
+      1680
+    ],
+    "motion": [
+      {
+        "time": 0,
+        "changedChannelValues": 18390
+      },
+      {
+        "time": 5,
+        "changedChannelValues": 17385
+      },
+      {
+        "time": 12,
+        "changedChannelValues": 17043
+      },
+      {
+        "time": 17,
+        "changedChannelValues": 17283
+      },
+      {
+        "time": 22,
+        "changedChannelValues": 16363
+      },
+      {
+        "time": 27,
+        "changedChannelValues": 14760
+      },
+      {
+        "time": 31,
+        "changedChannelValues": 10547
+      },
+      {
+        "time": 40,
+        "changedChannelValues": 13612
+      },
+      {
+        "time": 42.5,
+        "changedChannelValues": 6713
+      },
+      {
+        "time": 45,
+        "changedChannelValues": 8465
+      },
+      {
+        "time": 47.5,
+        "changedChannelValues": 7801
+      },
+      {
+        "time": 50,
+        "changedChannelValues": 4217
+      }
+    ],
+    "endHoldMeanDifference": 0.0
+  },
+  "seek-square": {
+    "frames": [
+      0,
+      1,
+      75,
+      149,
+      150,
+      151,
+      255,
+      359,
+      360,
+      361,
+      509,
+      510,
+      511,
+      585,
+      659,
+      660,
+      661,
+      809,
+      810,
+      811,
+      929,
+      930,
+      931,
+      1005,
+      1199,
+      1200,
+      1201,
+      1274,
+      1275,
+      1276,
+      1349,
+      1350,
+      1351,
+      1424,
+      1425,
+      1426,
+      1499,
+      1500,
+      1501,
+      1590,
+      1679,
+      1680,
+      1681,
+      1740,
+      1799
+    ],
+    "reverseMatches": 45,
+    "shuffledMatches": 45,
+    "motion": true,
+    "effectSensitive": true,
+    "typography": {
+      "checks": 661,
+      "errors": []
+    },
+    "pageErrors": [],
+    "build": {
+      "sha256": "13c9a14ebd5f98a08ee922d32ab3510e18a36ef51eea71a8f683e01f8634ee6e",
+      "width": 1080,
+      "height": 1080,
+      "frames": 1800,
+      "fps": 30,
+      "duration": 60
+    },
+    "browser": "HeadlessChrome/152.0.7977.30"
+  },
+  "playback": {
+    "passed": true,
+    "duration": 60.01,
+    "ended": true,
+    "muted": false,
+    "error": null,
+    "frames": 1800,
+    "dropped": 0,
+    "waitingEvents": 0,
+    "seek45Passed": true,
+    "pageErrors": [],
+    "subjectiveListening": false
+  }
+}

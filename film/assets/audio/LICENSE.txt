@@ -1,0 +1,6 @@
+PRECISION — original 120 BPM instrumental score and effects.
+Original composition, synthesis and arrangement for the photo-to-part showcase.
+No samples, commercial recordings or voice synthesis are used.
+Dedicated under CC0 1.0 Universal:
+https://creativecommons.org/publicdomain/zero/1.0/
+Reproduction source: scripts/music.py. Seed: 12224828.

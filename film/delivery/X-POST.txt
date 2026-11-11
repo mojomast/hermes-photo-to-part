@@ -1,0 +1,8 @@
+Snap a photo. Get a printable part.
+
+photo-to-part v0.1.22: gear IoU 0.94 in under 5 minutes. A 70 mm hinge, exactly as measured.
+
+248 tests · 28/28 sealed evals · CI green.
+
+Built for Hermes Agent by @NousResearch
+https://github.com/mojomast/hermes-photo-to-part

@@ -1,0 +1,5 @@
+import * as D from './draw.js';const assets={gear:'gear-photo.jpg',hinge:'hinge-photo.jpg',gearPane:'gear-pane-ready.png',hingePane:'strap-hinge-pane-ready.png',weakPane:'strap-hinge-pane-ready-2.png',banner:'catalog-banner.png',views:'screenshot-views.png'},cache=new Map();
+export async function get(id){if(cache.has(id))return cache.get(id);const p=fetch(window.__hyperframes.assetUrl('assets/images/'+assets[id])).then(r=>{if(!r.ok)throw Error('Missing '+id);return r.blob()}).then(createImageBitmap);cache.set(id,p);return p}
+export const ready=()=>Promise.all(Object.keys(assets).map(get));
+export async function picture(g,id,x,y,w,h,{crop=null,push=1,fill=D.P.panel,round=8,alpha=1}={}){const im=await get(id),s=crop||[0,0,im.width,im.height],k=Math.min(w/s[2],h/s[3])*push,dw=s[2]*k,dh=s[3]*k;g.save();g.globalAlpha=alpha;D.box(g,x,y,w,h,fill,round);D.clip(g,x,y,w,h,round);g.drawImage(im,...s,x+(w-dw)/2,y+(h-dh)/2,dw,dh);g.restore()}
+export async function backdrop(g,t,W,H,alpha=.14){await picture(g,'banner',W*.55,120,W*.45,H-200,{crop:[659,40,493,520],alpha,round:0,fill:D.P.background})}

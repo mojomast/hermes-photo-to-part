@@ -1,0 +1,50 @@
+1
+00:00:00,000 --> 00:00:05,000
+Snap a photo. Get a printable part.
+
+2
+00:00:05,000 --> 00:00:12,000
+photo-to-part, a Hermes plugin
+make me a printable replacement
+
+3
+00:00:12,000 --> 00:00:17,000
+Spots a spur gear and uses a parametric template
+
+4
+00:00:17,000 --> 00:00:22,000
+Matches the photo: IoU 0.94
+
+5
+00:00:22,000 --> 00:00:27,000
+Delivered in under 5 minutes
+
+6
+00:00:27,000 --> 00:00:40,000
+Strap hinge: 70 mm, exactly as measured
+
+7
+00:00:40,000 --> 00:00:42,500
+A validated STL every time
+
+8
+00:00:42,500 --> 00:00:45,000
+Your measurements stay locked
+
+9
+00:00:45,000 --> 00:00:47,500
+Weak photo matches flagged untrusted
+
+10
+00:00:47,500 --> 00:00:50,000
+Live progress in the Part studio pane
+
+11
+00:00:50,000 --> 00:00:56,000
+248 tests · 28/28 sealed evals · CI green
+
+12
+00:00:56,000 --> 00:01:00,000
+photo-to-part v0.1.22
+github.com/mojomast/hermes-photo-to-part
+Built for Hermes Agent by @NousResearch
