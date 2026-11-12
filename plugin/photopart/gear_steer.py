@@ -466,9 +466,9 @@ def _mark_tried_dir(directory: Path) -> None:
         return
     _tried_dirs.add(str(path))
     try:
-        from photopart.paths import not_a_project
+        from photopart.paths import writable_project
 
-        if not_a_project(path):
+        if writable_project(path) is None:
             return
     except Exception:
         return

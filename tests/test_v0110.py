@@ -9,6 +9,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import sys as _sys
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hermes_stub import install as _install_hermes_stub, restore as _restore_hermes_stub  # noqa: E402
+
 import trimesh
 
 from evals.runner import registration_report, score_hermes_session, score_transcript
@@ -74,6 +79,12 @@ class ProbeWarningTests(unittest.TestCase):
 
 
 class SessionBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self._stub = _install_hermes_stub()
+
+    def tearDown(self):
+        _restore_hermes_stub(self._stub)
+
     def _home(self, root: Path, session_id: str, count: int) -> None:
         db = root / "state.db"
         conn = sqlite3.connect(db)

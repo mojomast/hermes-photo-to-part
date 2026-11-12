@@ -264,7 +264,7 @@ class PluginTests(unittest.TestCase):
         front = text.split("---", 2)[1]
         meta = yaml.safe_load(front)
         self.assertEqual(meta["name"], "photo-to-printable-part")
-        self.assertEqual(meta["version"], "0.1.22")
+        self.assertEqual(meta["version"], "0.1.23")
         description = meta["description"].strip()
         self.assertLessEqual(len(description), 1024)
         self.assertIn("STL", description)
@@ -285,8 +285,8 @@ class PluginTests(unittest.TestCase):
         manifest = yaml.safe_load((PLUGIN / "plugin.yaml").read_text(encoding="utf-8"))
         project = tomllib.loads((PLUGIN / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "photo-to-part")
-        self.assertEqual(manifest["version"], "0.1.22")
-        self.assertEqual(project["project"]["version"], "0.1.22")
+        self.assertEqual(manifest["version"], "0.1.23")
+        self.assertEqual(project["project"]["version"], "0.1.23")
         self.assertEqual(manifest["python_dependencies"], project["project"]["dependencies"])
         from photopart.tools import TOOL_NAMES
 

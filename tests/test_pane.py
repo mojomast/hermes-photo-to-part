@@ -14,6 +14,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import sys as _sys
+
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hermes_stub import install as _install_hermes_stub, restore as _restore_hermes_stub  # noqa: E402
+
 from PIL import Image
 
 from photopart.build_gate import eval_read_block
@@ -44,11 +49,13 @@ def _builder():
 
 class ProgressTests(unittest.TestCase):
     def setUp(self):
+        self._stub = _install_hermes_stub()
         self._saved_home = os.environ.get("HERMES_HOME")
         self._saved_approval = os.environ.get("PHOTOPART_BUILD_APPROVAL")
         os.environ.pop("PHOTOPART_BUILD_APPROVAL", None)
 
     def tearDown(self):
+        _restore_hermes_stub(self._stub)
         if self._saved_home is None:
             os.environ.pop("HERMES_HOME", None)
         else:

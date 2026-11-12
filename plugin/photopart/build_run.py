@@ -3,11 +3,18 @@
 ``cwd`` is the project directory. stdout and stderr are captured. The argument
 list is passed without a shell. Timeout defaults to 60 seconds and cannot
 exceed 300. This module does not open a socket and does not add credentials.
+
+The child never inherits the Hermes environment. It gets an explicit
+allowlist (``CHILD_ENV_NAMES``: PATH, HOME, locale, temp dirs, the Windows
+system variables, and the venv's VIRTUAL_ENV / PYTHONPATH) plus this
+plugin's own directory on PYTHONPATH so ``photopart.features`` imports.
+Provider keys and every other variable stay in the Hermes process.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -17,6 +24,55 @@ from photopart.paths import absolute_path, under_cache
 
 _OUTPUT_CAP = 20_000
 _MAX_OUTPUTS = 200
+
+# Exact names only. No prefix match, no NODE_OPTIONS, no provider keys.
+CHILD_ENV_NAMES = (
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "LC_COLLATE",
+    "LC_MONETARY",
+    "LC_MESSAGES",
+    "TZ",
+    "TMPDIR",
+    "TEMP",
+    "TMP",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "VIRTUAL_ENV",
+    "PYTHONPATH",
+)
+
+
+def child_env(source: dict | None = None) -> dict:
+    """Minimal environment for a build script. Never the inherited mapping."""
+    base = os.environ if source is None else source
+    env = {}
+    for name in CHILD_ENV_NAMES:
+        value = base.get(name)
+        if isinstance(value, str) and value:
+            env[name] = value
+    root = Path(__file__).resolve().parents[1]
+    paths = [str(root)]
+    if env.get("PYTHONPATH"):
+        paths.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(paths)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
 
 
 def run_build(
@@ -44,6 +100,7 @@ def run_build(
         completed = subprocess.run(
             argv,
             cwd=str(work),
+            env=child_env(),
             timeout=limit,
             capture_output=True,
             check=False,

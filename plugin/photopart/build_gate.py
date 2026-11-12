@@ -2,12 +2,10 @@
 
 Hermes v0.21.7 asks for approval when a ``pre_tool_call`` hook returns
 ``{"action": "approve", "rule_key": "photo_part_build"}``. The same rule
-covers the terminal and the code tool. ``PHOTOPART_BUILD_APPROVAL=allow``
-(and the other off values used by the build tool) skips the prompt. Any
-other value, including an empty one, still asks. Hermes blocks the command
-when nobody can approve. Hermes ``--yolo`` (and ``HERMES_YOLO_MODE``)
-auto-approves this action by Hermes design. The plugin still returns it.
-That flag is separate from ``PHOTOPART_BUILD_APPROVAL``.
+covers the terminal and the code tool. No environment variable switches the
+prompt off. Hermes blocks the command when nobody can approve. Hermes
+``--yolo`` (and ``HERMES_YOLO_MODE``) auto-approves this action by Hermes
+design. The plugin still returns it.
 
 The check looks at the command text and, when a ``.py`` path is readable and
 is not a test, at the first 64KB of that file. It does not execute the
@@ -17,12 +15,9 @@ not seen. ``SECURITY.md`` lists that limit.
 
 from __future__ import annotations
 
-import os
 import re
 import shlex
 from pathlib import Path
-
-APPROVAL_OFF = {"allow", "yes", "true", "1", "off", "skip"}
 
 SHELL_TOOLS = frozenset(
     {
@@ -139,11 +134,6 @@ BLOCK_MESSAGE = (
 )
 
 
-def approval_skipped() -> bool:
-    """True when a sealed eval or a test set ``PHOTOPART_BUILD_APPROVAL`` off."""
-    return os.environ.get("PHOTOPART_BUILD_APPROVAL", "").strip().lower() in APPROVAL_OFF
-
-
 def is_shell_tool(tool_name: str) -> bool:
     """Terminal, shell, and code-execution tools. ``read_terminal`` is not one."""
     name = str(tool_name or "").strip().lower()
@@ -157,13 +147,10 @@ def is_shell_tool(tool_name: str) -> bool:
 def terminal_build_approval(tool_name: str = "", args=None, *, session_id: str | None = None) -> dict | None:
     """Approve action when a shell or code tool runs a photo-to-part build.
 
-    ``None`` means the command is not that kind of build, or approval is
-    switched off. Hermes still fail-closes when this returns an approve
+    ``None`` means the command is not that kind of build. Hermes still fail-closes when this returns an approve
     action and nobody answers.
     """
     if not is_shell_tool(tool_name):
-        return None
-    if approval_skipped():
         return None
     command, workdir = _command_and_dir(args)
     if not command.strip():
@@ -185,13 +172,20 @@ def terminal_build_approval(tool_name: str = "", args=None, *, session_id: str |
 def eval_read_block(tool_name: str = "", args=None) -> dict | None:
     """Block a tool that reads this repo's eval scorer or regression meshes.
 
+    Only paths inside this repository's own source checkout
+    (``paths.source_checkout_root()``) are guarded. An installed plugin has
+    no checkout, so this never fires there, and an ``evals/`` or
+    ``tests/regression`` folder in any other project is left alone.
     ``pytest`` and ``unittest`` are left alone. A plain ``ls`` or ``cat`` of
     some other file is left alone.
     """
     name = str(tool_name or "").strip().lower()
     if name.startswith("photo_part_") or name.startswith("read_terminal"):
         return None
-    command, _workdir = _command_and_dir(args)
+    root = _checkout_root()
+    if root is None:
+        return None
+    command, workdir = _command_and_dir(args)
     if command and _command_is_tests(command):
         return None
     blob = command if isinstance(args, str) and not _as_dict(args) else _blob(args)
@@ -202,11 +196,14 @@ def eval_read_block(tool_name: str = "", args=None) -> dict | None:
         path = _path_field(args)
         target = path.replace("\\", "/") if path else ""
         if target and (_EVAL_PATH.search(target) or "p2p-canary-" in target):
-            return {"action": "block", "message": BLOCK_MESSAGE}
+            if _path_in(path, workdir, root):
+                return {"action": "block", "message": BLOCK_MESSAGE}
         return None
     if not is_shell_tool(name):
         return None
-    if _EVAL_PATH.search(folded) or _EVAL_IMPORT.search(blob) or "p2p-canary-" in blob:
+    if not (_EVAL_PATH.search(folded) or _EVAL_IMPORT.search(blob) or "p2p-canary-" in blob):
+        return None
+    if _base_in(workdir, root) or _names_checkout_path(blob, workdir, root):
         return {"action": "block", "message": BLOCK_MESSAGE}
     return None
 
@@ -214,15 +211,74 @@ def eval_read_block(tool_name: str = "", args=None) -> dict | None:
 def protected_read_text(blob: str) -> bool:
     """True when raw tool text names a protected eval or regression path.
 
-    Used only after the read check itself raises. ``pytest`` and
+    Used only after the read check itself raises. Like ``eval_read_block``
+    it applies only inside this repository's source checkout. ``pytest`` and
     ``unittest`` stay allowed. An ordinary README path does not match.
     """
     if not blob:
         return False
+    root = _checkout_root()
+    if root is None:
+        return False
     if re.search(r"\b(?:pytest|py\.test|unittest|nose2?|tox)\b", blob):
         return False
     folded = blob.replace("\\", "/")
-    return bool(_EVAL_PATH.search(folded) or _EVAL_IMPORT.search(blob) or "p2p-canary-" in blob)
+    if not (_EVAL_PATH.search(folded) or _EVAL_IMPORT.search(blob) or "p2p-canary-" in blob):
+        return False
+    return _base_in(None, root) or str(root).replace("\\", "/") in folded
+
+
+def _checkout_root() -> Path | None:
+    try:
+        from photopart.paths import source_checkout_root
+
+        return source_checkout_root()
+    except Exception:
+        return None
+
+
+def _base(workdir: str | None) -> Path | None:
+    try:
+        return Path(workdir).expanduser() if workdir else Path.cwd()
+    except OSError:
+        return None
+
+
+def _base_in(workdir: str | None, root: Path) -> bool:
+    from photopart.paths import inside
+
+    base = _base(workdir)
+    return base is not None and inside(base, root)
+
+
+def _path_in(raw: str, workdir: str | None, root: Path) -> bool:
+    from photopart.paths import inside
+
+    if not raw:
+        return False
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        base = _base(workdir)
+        if base is None:
+            return False
+        path = base / path
+    return inside(path, root)
+
+
+_TOKEN_SPLIT = re.compile(r"[\s\"'`;|&<>()=,]+")
+
+
+def _names_checkout_path(blob: str, workdir: str | None, root: Path) -> bool:
+    """True when a path token in ``blob`` that names evals/ or tests/regression is inside ``root``."""
+    for token in _TOKEN_SPLIT.split(blob):
+        if not token:
+            continue
+        folded = token.replace("\\", "/")
+        if not (_EVAL_PATH.search(folded) or "p2p-canary-" in folded or "evals/" in folded):
+            continue
+        if _path_in(token, workdir, root):
+            return True
+    return False
 
 
 def _needs_approval(command: str, *, workdir: str | None, session_id: str | None, code_only: bool) -> bool:

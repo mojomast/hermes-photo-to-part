@@ -1,11 +1,9 @@
 """Hermes plugin entrypoint. Registers the skill and the mesh tools."""
 
 import json
-import os
 from pathlib import Path
 
 _HELP_MODES = {"help", "describe"}
-_APPROVAL_OFF = {"allow", "yes", "true", "1", "off", "skip"}
 
 
 def _approval_args(args) -> dict:
@@ -52,10 +50,9 @@ def approve_build(tool_name: str = "", args: dict | None = None, **kwargs):
     The same ``rule_key`` (``photo_part_build``) covers a terminal or code
     tool that runs ``python build.py``, CadQuery or build123d, or
     ``photopart.build_run`` / ``photopart.stamp``. ``ls``, ``cat``, and
-    ``pytest`` are not builds. ``PHOTOPART_BUILD_APPROVAL=allow`` skips the
-    prompt for an in-process test or a sealed eval. The default is to ask.
-    Hermes fails closed when nobody can approve. Hermes ``--yolo``
-    auto-approves the returned action. This plugin does not block that flag.
+    ``pytest`` are not builds. There is no environment switch that turns this
+    off. Hermes fails closed when nobody can approve. Sealed evals use Hermes's
+    own approvals mode (``--yolo``), which auto-approves the returned action.
     """
     if str(tool_name or "") != "photo_part_build":
         from photopart.build_gate import terminal_build_approval
@@ -65,13 +62,20 @@ def approve_build(tool_name: str = "", args: dict | None = None, **kwargs):
             args,
             session_id=kwargs.get("session_id"),
         )
-        parsed = _approval_args(args)
-        project = parsed.get("cwd") if isinstance(parsed.get("cwd"), str) else parsed.get("workdir")
+        # The pane note goes to the folder a photo_part_* call already named
+        # in this session, never to a terminal tool's working directory.
+        project = None
+        if decision is not None:
+            try:
+                from photopart.hooks import session_project
+
+                remembered = session_project(kwargs.get("session_id"))
+                project = str(remembered) if remembered is not None else None
+            except Exception:
+                project = None
         return _note_gate(decision, project)
     parsed = _approval_args(args)
     if _build_is_help(parsed):
-        return None
-    if os.environ.get("PHOTOPART_BUILD_APPROVAL", "").strip().lower() in _APPROVAL_OFF:
         return None
     raw_args = parsed.get("args") or []
     if not isinstance(raw_args, (list, tuple)):
@@ -105,10 +109,11 @@ def register(ctx) -> None:
     ``post_tool_call`` and ``transform_tool_result`` still count the session
     budget. A second ``pre_tool_call`` callback asks for Hermes approval
     before ``photo_part_build`` runs a script, and before a terminal or
-    code tool runs that build directly. ``pre_tool_call`` also blocks reads
-    of ``evals/`` scoring files and ``tests/regression``, and blocks a
-    handwritten gear or involute script until ``photo_part_template``
-    shape ``spur_gear`` has been tried. ``pre_llm_call`` only classifies
+    code tool runs that build directly. In a developer checkout of this
+    repository, ``pre_tool_call`` also blocks reads of that checkout's
+    ``evals/`` scoring files and ``tests/regression``. In a session that
+    used this plugin it blocks a handwritten gear or involute script until
+    ``photo_part_template`` shape ``spur_gear`` has been tried. ``pre_llm_call`` only classifies
     that request and does not inject context. ``on_session_end`` settles
     the Part studio pane to a terminal state when a session ends.
     """

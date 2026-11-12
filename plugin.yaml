@@ -11,7 +11,7 @@
 # for requires_hermes). A future Hermes that both parses as >=999 and
 # supports manifest_version 99 would install this root and would ship evals.
 name: photo-to-part-repo-root
-version: "0.1.22"
+version: "0.1.23"
 manifest_version: 99
 requires_hermes: ">=999.0.0"
 description: >-

@@ -132,6 +132,20 @@ class HookTests(unittest.TestCase):
             )
             self.assertIsNone(untouched)
             log = Path(tmp) / ".photopart" / "calls.jsonl"
+            # 0.1.23: a skill_view argument never picks the folder. Rows wait
+            # until a photo_part_* call names the project, then land there.
+            self.assertFalse(log.exists())
+            for index in range(len(misses)):
+                on_pre_tool_call(
+                    tool_name="photo_part_render",
+                    args={"help": True, "out_dir": tmp},
+                    session_id=f"skill-{index}",
+                )
+            on_pre_tool_call(
+                tool_name="photo_part_render",
+                args={"help": True, "out_dir": tmp},
+                session_id="other-skill",
+            )
             text = log.read_text(encoding="utf-8")
             for skill in misses:
                 self.assertIn(skill, text)
