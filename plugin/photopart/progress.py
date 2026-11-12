@@ -1,9 +1,11 @@
 """Structured progress for the optional Part studio pane.
 
 Tools call ``note_start``, ``note_result``, and ``note_approval``. Each call
-rewrites ``<project>/.photopart/pane.json`` and, when ``HERMES_HOME`` is set,
-an index under ``$HERMES_HOME/.photopart/pane-index.json``. A desktop pane
-reads that index through ``plugin_api.py``. Nothing here is a tool argument.
+rewrites ``<project>/.photopart/pane.json`` and, inside Hermes, an index at
+``get_hermes_home()/plugin-data/photo-to-part/pane-index.json``. A desktop
+pane reads that index through ``plugin_api.py``. ``<project>`` always comes
+from ``photo_part_*`` tool arguments or results, and Hermes's write denylist
+is checked first. Nothing here is a tool argument.
 
 Failures are swallowed by the callers. A missing desktop, a missing
 ``broadcast_plugin_event``, or a project this plugin must not write (the
@@ -36,7 +38,6 @@ _STAGE_FOR_TOOL = {
     "photo_part_validate": "spec",
     "photo_part_render": "render",
 }
-_APPROVAL_OFF = {"allow", "yes", "true", "1", "off", "skip"}
 
 
 def note_start(tool: str, args: dict | None) -> None:
@@ -112,15 +113,7 @@ def _apply_start(state: dict, tool: str, args: dict) -> None:
     stage = _STAGE_FOR_TOOL.get(tool, "build")
     if tool == "photo_part_build":
         approval = state.get("approval") if isinstance(state.get("approval"), dict) else {}
-        if os.environ.get("PHOTOPART_BUILD_APPROVAL", "").strip().lower() in _APPROVAL_OFF:
-            approval = {
-                "status": "skipped",
-                "message": "Build approval is skipped in this process.",
-                "rule_key": "photo_part_build",
-                "at": _now(),
-            }
-            _mark_done(state, "approval")
-        elif approval.get("status") == "waiting":
+        if approval.get("status") == "waiting":
             approval = {
                 "status": "approved",
                 "message": approval.get("message") or "Build approved.",
@@ -188,9 +181,8 @@ def _apply_result(state: dict, tool: str, payload: dict) -> None:
         _mark_done(state, "approval")
         approval = state.get("approval") if isinstance(state.get("approval"), dict) else {}
         if approval.get("status") in {None, "", "idle", "waiting"}:
-            status = "skipped" if os.environ.get("PHOTOPART_BUILD_APPROVAL", "").strip().lower() in _APPROVAL_OFF else "approved"
             state["approval"] = {
-                "status": status,
+                "status": "approved",
                 "message": approval.get("message") or "Build finished.",
                 "rule_key": "photo_part_build",
                 "at": _now(),
@@ -489,7 +481,9 @@ def _directory(raw) -> Path | None:
         return None
     if not_a_project(resolved) or _blocked(resolved):
         return None
-    return resolved
+    from photopart.paths import writable_project
+
+    return writable_project(resolved)
 
 
 def _blocked(path: Path) -> bool:
@@ -595,18 +589,19 @@ def run_id(project: Path) -> str:
 
 
 def index_path() -> Path | None:
-    raw = os.environ.get("HERMES_HOME", "").strip()
-    if not raw:
+    """``get_hermes_home()/plugin-data/photo-to-part/pane-index.json``, or None outside Hermes."""
+    from photopart.paths import not_a_project, state_dir
+
+    root = state_dir()
+    if root is None:
         return None
     try:
-        root = Path(raw).expanduser().resolve()
+        root = root.resolve()
     except OSError:
         return None
-    from photopart.paths import not_a_project
-
     if not_a_project(root) or _blocked(root):
         return None
-    return root / ".photopart" / "pane-index.json"
+    return root / "pane-index.json"
 
 
 def _touch_index(state: dict) -> None:

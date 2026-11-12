@@ -115,12 +115,14 @@ class TerminalBuildApprovalTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIsNone(_gate(command), command)
 
-    def test_approval_off_skips_the_prompt(self):
-        for value in ("allow", "yes", "true", "1", "off", "skip"):
-            os.environ["PHOTOPART_BUILD_APPROVAL"] = value
-            self.assertIsNone(_gate("python build.py"), value)
-        os.environ["PHOTOPART_BUILD_APPROVAL"] = "ask"
-        self._approves("python build.py")
+    def test_environment_cannot_switch_approval_off(self):
+        # 0.1.23 removed the PHOTOPART_BUILD_APPROVAL off-switch.
+        try:
+            for value in ("allow", "yes", "true", "1", "off", "skip", "ask"):
+                os.environ["PHOTOPART_BUILD_APPROVAL"] = value
+                self._approves("python build.py")
+        finally:
+            os.environ.pop("PHOTOPART_BUILD_APPROVAL", None)
 
     def test_photo_part_validate_is_not_a_terminal_build(self):
         from importlib.util import module_from_spec, spec_from_file_location
@@ -246,12 +248,12 @@ class PackagingTests(unittest.TestCase):
     def test_root_manifest_refuses_a_root_install(self):
         stub = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
         self.assertEqual(stub["name"], "photo-to-part-repo-root")
-        self.assertEqual(stub["version"], "0.1.22")
+        self.assertEqual(stub["version"], "0.1.23")
         self.assertEqual(stub["manifest_version"], 99)
         self.assertEqual(stub["requires_hermes"], ">=999.0.0")
         plugin = yaml.safe_load((PLUGIN / "plugin.yaml").read_text(encoding="utf-8"))
         self.assertEqual(plugin["name"], "photo-to-part")
-        self.assertEqual(plugin["version"], "0.1.22")
+        self.assertEqual(plugin["version"], "0.1.23")
         self.assertEqual(plugin["manifest_version"], 2)
 
     def test_skill_frontmatter_stays_within_the_length_cap(self):

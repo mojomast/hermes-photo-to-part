@@ -67,6 +67,12 @@ mesh.export("gear.stl")
 """
 
 
+def _activate(session_id: str, project: Path | None = None) -> None:
+    """Use the plugin in this session (0.1.23: steering is scoped to active sessions)."""
+    args = {"name": "photo-to-part:photo-to-printable-part"}
+    on_post_tool_call(tool_name="skill_view", args=args, session_id=session_id)
+
+
 class GearSteerTests(unittest.TestCase):
     def setUp(self):
         reset_hooks()
@@ -105,6 +111,15 @@ class GearSteerTests(unittest.TestCase):
                 conversation_history=[],
                 is_first_turn=True,
             )
+            with patch("photopart.gear_steer._safe_cwd", return_value=project):
+                before = on_pre_tool_call(
+                    tool_name="write_file",
+                    args={"path": str(project / "build_gear.py"), "content": INVOLUTE},
+                    session_id="s-gear",
+                )
+            # Before the session uses photo-to-part, nothing is policed.
+            self.assertIsNone(before)
+            _activate("s-gear")
             with patch("photopart.gear_steer._safe_cwd", return_value=project):
                 blocked = on_pre_tool_call(
                     tool_name="write_file",
@@ -145,6 +160,7 @@ class GearSteerTests(unittest.TestCase):
                 user_message="18-tooth involute spur gear, printable STL from this photo.",
                 conversation_history=[],
             )
+            _activate("s-term")
             with patch("photopart.gear_steer._safe_cwd", return_value=project):
                 terminal = on_pre_tool_call(
                     tool_name="terminal",
@@ -231,6 +247,7 @@ class GearSteerTests(unittest.TestCase):
     def test_prompt_file_is_enough_without_pre_llm(self):
         with tempfile.TemporaryDirectory() as raw:
             project = _gear_project(Path(raw))
+            _activate("s-prompt")
             with patch("photopart.gear_steer._safe_cwd", return_value=project):
                 blocked = on_pre_tool_call(
                     tool_name="write_file",
@@ -238,6 +255,22 @@ class GearSteerTests(unittest.TestCase):
                     session_id="s-prompt",
                 )
             self.assertEqual(blocked["action"], "block")
+
+    def test_gear_prompt_without_plugin_use_is_not_policed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            project = _gear_project(Path(raw))
+            on_pre_llm_call(
+                session_id="s-other-project",
+                user_message="Write an involute spur gear generator for my CAD library.",
+                conversation_history=[],
+            )
+            with patch("photopart.gear_steer._safe_cwd", return_value=project):
+                result = on_pre_tool_call(
+                    tool_name="write_file",
+                    args={"path": str(project / "build_gear.py"), "content": INVOLUTE},
+                    session_id="s-other-project",
+                )
+            self.assertIsNone(result)
 
 
 class PaneSessionEndTests(unittest.TestCase):

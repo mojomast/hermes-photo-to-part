@@ -63,12 +63,12 @@ class BuildApprovalHookTests(unittest.TestCase):
         saved = os.environ.get("PHOTOPART_BUILD_APPROVAL")
         os.environ["PHOTOPART_BUILD_APPROVAL"] = "allow"
         try:
-            self.assertIsNone(
-                hook(
-                    tool_name="photo_part_build",
-                    args={"script": "/project/make.py", "cwd": "/project"},
-                )
+            # 0.1.23: the old environment off-switch is gone and changes nothing.
+            still = hook(
+                tool_name="photo_part_build",
+                args={"script": "/project/make.py", "cwd": "/project"},
             )
+            self.assertEqual(still["action"], "approve")
         finally:
             if saved is None:
                 os.environ.pop("PHOTOPART_BUILD_APPROVAL", None)

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.23 — 2026-11-12
+
+Catalog review fixes for NousResearch/hermes-agent#153757 (reviewed at `d924991f`).
+
+- `photo_part_build` runs the build script with an explicit minimal `env=` (PATH, HOME, user and locale names, TZ, temp directories, the Windows system variables, VIRTUAL_ENV and PYTHONPATH, plus the plugin directory on PYTHONPATH). It no longer inherits the Hermes environment, so provider keys never reach the script. A sentinel-secret test checks this.
+- The `PHOTOPART_BUILD_APPROVAL` environment off-switch is removed from the approval hook, the terminal build gate and the pane. Build approval always asks; sealed evals use Hermes's own approvals mode (`--yolo`).
+- The eval read-block only guards paths inside this repository's own checkout (`paths.source_checkout_root()`). An installed plugin never blocks a read, and `evals/` or `tests/regression` folders in other projects are left alone. The gear and deliver steering hooks now run only for sessions that used the plugin.
+- Shared state (pane index, skill-id rewrite mirror) moved from `$HERMES_HOME/.photopart` to `get_hermes_home()/plugin-data/photo-to-part` via Hermes's `plugin_data_dir`. The `~/.hermes` fallback is gone; outside Hermes nothing shared is written. Per-project `.photopart/` files are written only into folders named by `photo_part_*` arguments, after Hermes's write denylist is checked. Rows logged before that folder is known are held in memory and written once it is.
+
 ## 0.1.22 — 2026-11-10
 
 - If a validated STL exists, the Part studio pane settles to Ready and points at the best validated version, even when the last state was error. That includes a delivery-budget refusal of a non-final render. The refusal is recorded as a note, not a scary error.

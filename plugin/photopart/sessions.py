@@ -2,7 +2,7 @@
 
 ``PluginContext`` at that tag does not carry a call counter. The dispatcher
 passes ``session_id`` into a handler that accepts it. The canonical store is
-``$HERMES_HOME/state.db`` (table ``messages``, column ``tool_calls``). The
+``<hermes home>/state.db`` (table ``messages``, column ``tool_calls``). The
 same home also keeps JSON and JSONL transcripts under ``sessions/``, and
 ``hermes sessions export`` writes one session object per JSONL line. A text
 export uses ``<timestamp> TOOLCALL name {args}``.
@@ -11,7 +11,6 @@ export uses ``<timestamp> TOOLCALL name {args}``.
 from __future__ import annotations
 
 import json
-import os
 import re
 import sqlite3
 from datetime import datetime
@@ -23,14 +22,14 @@ _DB_LABEL = "state.db"
 
 
 def hermes_home() -> Path | None:
-    """``HERMES_HOME`` when it is set, otherwise ``~/.hermes`` if that directory exists."""
-    raw = os.environ.get("HERMES_HOME", "").strip()
-    if raw:
-        return Path(raw).expanduser()
-    default = Path.home() / ".hermes"
-    if default.is_dir():
-        return default
-    return None
+    """The active Hermes home from ``hermes_constants.get_hermes_home()``.
+
+    None outside Hermes. There is no ``HERMES_HOME`` or ``~/.hermes`` guess;
+    the eval runner passes ``home`` explicitly instead.
+    """
+    from photopart.paths import hermes_home as active_home
+
+    return active_home()
 
 
 def session_ended(session_id: str | None, *, home: Path | None = None) -> bool:

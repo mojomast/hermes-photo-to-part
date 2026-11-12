@@ -1,15 +1,16 @@
 """Session-scoped Hermes hooks for budget, skill ids, and photo probes.
 
-Hermes v0.21.7 calls these for every tool, not only photo_part_*. Budget
-and probe hooks act only after this plugin has been used in that
+Hermes calls these for every tool, not only photo_part_*. Budget, probe,
+gear and deliver steering act only after this plugin has been used in that
 ``session_id`` (a ``photo_part_*`` call or ``skill_view`` of this skill).
-A photo-to-part gear request is also steered before the first plugin
-call: handwritten gear or involute scripts are blocked until
-``photo_part_template`` shape ``spur_gear`` has been tried. Unrelated
-sessions are left untouched. Exceptions are swallowed so an unrelated
-tool still runs. A read of an eval scoring file or ``tests/regression``
-stays blocked when this hook raises. ``on_session_end`` settles the
-Part studio pane so a CLI oneshot does not stay ``running``.
+Unrelated sessions are left untouched. The eval read-block applies only to
+paths inside this repository's own source checkout
+(``paths.source_checkout_root()``); an installed plugin has no checkout, so
+it never blocks a read. Per-project ``.photopart/`` files are written only
+into folders taken from ``photo_part_*`` arguments, after Hermes's write
+denylist is checked. Exceptions are swallowed so an unrelated tool still
+runs. ``on_session_end`` settles the Part studio pane so a CLI oneshot does
+not stay ``running``.
 """
 
 from __future__ import annotations
@@ -40,6 +41,10 @@ _counts: dict[str, int] = {}
 _notes: dict[str, set[str]] = {}
 _probes: dict[str, int] = {}
 _probe_noted: set[str] = set()
+# Log rows from before a photo_part_* call named the project folder. They are
+# written to that folder's .photopart/calls.jsonl once it is known.
+_pending: dict[str, list[str]] = {}
+_PENDING_CAP = 50
 
 
 def reset_hooks() -> None:
@@ -51,6 +56,7 @@ def reset_hooks() -> None:
     _notes.clear()
     _probes.clear()
     _probe_noted.clear()
+    _pending.clear()
     try:
         from photopart.gear_steer import reset as reset_gear_steer
 
@@ -164,7 +170,7 @@ def _pre(*args, **kwargs):
     sid = fields["session_id"]
     updated, misses = rewrite_arguments(name, arguments)
     if sid and (touches_plugin(name, arguments) or misses):
-        _mark_active(sid, updated if isinstance(updated, dict) else arguments)
+        _mark_active(sid, updated if isinstance(updated, dict) else arguments, tool_name=name)
         _remember_image(sid, arguments)
         _remember_wrapped_images(sid, arguments)
     if misses:
@@ -173,6 +179,18 @@ def _pre(*args, **kwargs):
                 _log(sid, arguments, {"tool": tool, "rewrite_from": original, "paths": []})
         payload = json.dumps(updated) if was_string else updated
         return {"action": "modify", "args": payload}
+    if name.startswith("photo_part_") and sid:
+        # A photo_part_* call marks the session even when the rewrite
+        # helper does not, so the steer hooks below see it as active.
+        _mark_active(sid, arguments, tool_name=name)
+    from photopart.build_gate import eval_read_block
+
+    if not name.startswith("photo_part_"):
+        blocked = eval_read_block(name, arguments if arguments else fields["args"])
+        if blocked:
+            return blocked
+    if not sid or sid not in _active:
+        return None
     try:
         from photopart.gear_steer import steer_pre_tool
 
@@ -184,12 +202,10 @@ def _pre(*args, **kwargs):
     try:
         from photopart.deliver_steer import steer_pre_tool as steer_deliver
 
-        directory = None
-        if sid:
-            try:
-                directory = _directory(sid, arguments if isinstance(arguments, dict) else {})
-            except Exception:
-                directory = None
+        try:
+            directory = _directory(sid, arguments if isinstance(arguments, dict) else {}, tool_name=name)
+        except Exception:
+            directory = None
         steered = steer_deliver(
             name,
             arguments if isinstance(arguments, dict) else {},
@@ -201,13 +217,6 @@ def _pre(*args, **kwargs):
     except Exception:
         pass
     if name.startswith("photo_part_"):
-        return None
-    from photopart.build_gate import eval_read_block
-
-    blocked = eval_read_block(name, arguments if arguments else fields["args"])
-    if blocked:
-        return blocked
-    if not sid or sid not in _active:
         return None
     if _is_probe(name, arguments, sid):
         count = _probes.get(sid, 0) + 1
@@ -232,9 +241,9 @@ def _post(*args, **kwargs):
         from photopart.deliver_steer import note_tool as note_deliver
 
         directory = None
-        if sid:
+        if sid and sid in _active:
             try:
-                directory = _directory(sid, arguments if isinstance(arguments, dict) else {})
+                directory = _directory(sid, arguments if isinstance(arguments, dict) else {}, tool_name=name)
             except Exception:
                 directory = None
         note_deliver(
@@ -249,11 +258,11 @@ def _post(*args, **kwargs):
     if not sid:
         return None
     if name.startswith("photo_part_") or (name == "skill_view" and _is_our_skill(arguments)):
-        _mark_active(sid, arguments)
+        _mark_active(sid, arguments, tool_name=name)
         _remember_image(sid, arguments)
     if sid not in _active:
         return None
-    directory = _directory(sid, arguments)
+    directory = _directory(sid, arguments, tool_name=name)
     _counts[sid] = int(_counts.get(sid, 0)) + 1
     _write_budget(directory, sid, name)
     paths = _paths_of(arguments)
@@ -399,12 +408,42 @@ def _remember_wrapped_images(sid: str, arguments: dict) -> None:
             _remember_image(sid, inner)
 
 
-def _mark_active(sid: str, arguments: dict) -> None:
+def _mark_active(sid: str, arguments: dict, *, tool_name: str = "") -> None:
     _active.add(sid)
-    if _has_project_path(arguments):
-        from photopart.budget import project_dir
+    _remember_project(sid, arguments, tool_name)
 
-        _projects[sid] = project_dir(arguments)
+
+def _remember_project(sid: str, arguments: dict, tool_name: str) -> Path | None:
+    """Remember a project folder, but only from ``photo_part_*`` arguments.
+
+    Paths in other tools' arguments (a read, a terminal command) never pick
+    the folder this plugin writes into. The folder must also pass
+    ``paths.writable_project`` (Hermes's write denylist, the cache, the
+    install dir and the source checkout are refused).
+    """
+    if not str(tool_name or "").startswith("photo_part_") or not _has_project_path(arguments):
+        return None
+    from photopart.budget import project_dir
+    from photopart.paths import writable_project
+
+    chosen = writable_project(project_dir(arguments))
+    if chosen is not None:
+        _projects[sid] = chosen
+        _flush_pending(sid, chosen)
+    return chosen
+
+
+def _flush_pending(sid: str, directory: Path) -> None:
+    rows = _pending.pop(sid, None)
+    if not rows:
+        return
+    path = _calls_path(directory)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.writelines(rows)
+    except OSError:
+        return
 
 
 def _remember_image(sid: str, arguments: dict) -> None:
@@ -421,17 +460,12 @@ def _remember_image(sid: str, arguments: dict) -> None:
         return
 
 
-def _directory(sid: str, arguments: dict) -> Path:
-    if _has_project_path(arguments):
-        from photopart.budget import project_dir
-
-        chosen = project_dir(arguments)
-        _projects[sid] = chosen
+def _directory(sid: str, arguments: dict, *, tool_name: str = "") -> Path | None:
+    """The session's project folder, or None when no photo_part_* call named one."""
+    chosen = _remember_project(sid, arguments, tool_name)
+    if chosen is not None:
         return chosen
-    remembered = _projects.get(sid)
-    if remembered is not None:
-        return remembered
-    return Path.cwd()
+    return _projects.get(sid)
 
 
 def _has_project_path(arguments: dict) -> bool:
@@ -452,10 +486,11 @@ def _calls_path(directory: Path) -> Path:
     return directory / ".photopart" / "calls.jsonl"
 
 
-def _plugin_dir(directory: Path) -> bool:
-    from photopart.paths import not_a_project
+def _plugin_dir(directory: Path | None) -> bool:
+    """True when ``<directory>/.photopart`` must not be written."""
+    from photopart.paths import writable_project
 
-    return not_a_project(directory)
+    return writable_project(directory) is None
 
 
 def _write_budget(directory: Path, sid: str, tool_name: str) -> None:
@@ -481,7 +516,7 @@ def _write_budget(directory: Path, sid: str, tool_name: str) -> None:
 
 
 def _persist_notes(sid: str, sent: set[str]) -> None:
-    directory = _projects.get(sid, Path.cwd())
+    directory = _projects.get(sid)
     if _plugin_dir(directory):
         return
     path = _budget_path(directory)
@@ -510,16 +545,21 @@ def _file_count(directory: Path | None, sid: str) -> int | None:
 
 
 def _log(sid: str, arguments: dict, row: dict) -> None:
-    directory = _directory(sid, arguments) if sid in _projects or _has_project_path(arguments) else _projects.get(sid, Path.cwd())
-    if _plugin_dir(directory):
-        return
-    path = _calls_path(directory)
+    tool = str(row.get("tool") or "")
+    directory = _directory(sid, arguments, tool_name=tool)
     body = {
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "session_id": sid,
         **row,
     }
     line = json.dumps(body, sort_keys=True) + "\n"
+    if _plugin_dir(directory):
+        queue = _pending.setdefault(sid, [])
+        if len(queue) < _PENDING_CAP:
+            queue.append(line)
+        _mirror_rewrite(None, line, row)
+        return
+    path = _calls_path(directory)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
@@ -529,26 +569,28 @@ def _log(sid: str, arguments: dict, row: dict) -> None:
     _mirror_rewrite(path, line, row)
 
 
-def _mirror_rewrite(written: Path, line: str, row: dict) -> None:
-    """Copy a skill-id rewrite to ``$HERMES_HOME/.photopart`` for inspection.
+def _mirror_rewrite(written: Path | None, line: str, row: dict) -> None:
+    """Copy a skill-id rewrite to ``plugin-data/photo-to-part/calls.jsonl``.
 
-    The scorer does not read that shared file. It reads the case directory's
-    ``.photopart/calls.jsonl``, filtered to the session being scored.
+    That is ``get_hermes_home()/plugin-data/photo-to-part`` (the shared
+    plugin state). The scorer does not read that shared file. It reads the
+    case directory's ``.photopart/calls.jsonl``, filtered to the session
+    being scored. Outside Hermes nothing is mirrored.
     """
     if not row.get("rewrite_from"):
         return
-    raw = os.environ.get("HERMES_HOME", "").strip()
-    if not raw:
+    from photopart.paths import state_dir
+
+    directory = state_dir()
+    if directory is None:
         return
-    directory = Path(raw).expanduser()
-    if _plugin_dir(directory):
-        return
-    path = _calls_path(directory)
-    try:
-        if path.resolve() == written.resolve():
+    path = directory / "calls.jsonl"
+    if written is not None:
+        try:
+            if path.resolve() == written.resolve():
+                return
+        except OSError:
             return
-    except OSError:
-        return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:

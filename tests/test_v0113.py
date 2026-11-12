@@ -157,6 +157,13 @@ class SkillPathTests(unittest.TestCase):
             )
             self.assertEqual(updated["calls"][2]["arguments"]["name"], "superpowers:x")
             self.assertEqual(logged["args"]["calls"][0]["arguments"]["name"], SKILL_ID)
+            # 0.1.23: the rewrite row waits for a photo_part_* call to name the folder.
+            self.assertFalse((Path(tmp) / ".photopart" / "calls.jsonl").exists())
+            on_pre_tool_call(
+                tool_name="photo_part_validate",
+                args={"help": True, "cwd": tmp},
+                session_id="wrap-dir",
+            )
             text = (Path(tmp) / ".photopart" / "calls.jsonl").read_text(encoding="utf-8")
             self.assertIn("rewrite_from", text)
             self.assertIn("plugin:photo-to-part:photo-to-printable-part", text)

@@ -43,11 +43,92 @@ def not_a_project(path: Path) -> bool:
     return any(root is not None and resolved == root for root in (plugin_root(), source_checkout_root()))
 
 
-def cache_root() -> Path | None:
-    raw = os.environ.get("HERMES_HOME", "").strip()
-    if not raw:
+PLUGIN_ID = "photo-to-part"
+
+
+def hermes_home() -> Path | None:
+    """The active Hermes home from ``hermes_constants.get_hermes_home()``.
+
+    Outside Hermes (a bare ``python`` run of a helper script, or the unit
+    tests) this returns None. There is no ``~/.hermes`` fallback, so the
+    plugin never guesses a profile.
+    """
+    try:
+        from hermes_constants import get_hermes_home
+    except ImportError:
         return None
-    return (Path(raw).expanduser().resolve() / "cache")
+    try:
+        return Path(get_hermes_home()).expanduser().resolve()
+    except Exception:
+        return None
+
+
+def state_dir() -> Path | None:
+    """Shared plugin state: ``get_hermes_home()/plugin-data/photo-to-part``.
+
+    Uses Hermes's ``plugins.plugin_storage.plugin_data_dir`` when it exists,
+    which resolves the same path and follows the active profile. None outside
+    Hermes, so nothing shared is written then.
+    """
+    try:
+        from plugins.plugin_storage import plugin_data_dir
+    except ImportError:
+        plugin_data_dir = None
+    if plugin_data_dir is not None:
+        try:
+            return Path(plugin_data_dir(PLUGIN_ID)).resolve()
+        except Exception:
+            pass
+    home = hermes_home()
+    if home is None:
+        return None
+    return home / "plugin-data" / PLUGIN_ID
+
+
+def cache_root() -> Path | None:
+    """``<hermes home>/cache``, the scratch tree no tool may write into.
+
+    A helper script started by the terminal tool runs outside the Hermes
+    process, so this write guard also honours an inherited ``HERMES_HOME``.
+    It only refuses writes; no state is stored from that variable.
+    """
+    home = hermes_home()
+    if home is None:
+        raw = os.environ.get("HERMES_HOME", "").strip()
+        if not raw:
+            return None
+        home = Path(raw).expanduser().resolve()
+    return home / "cache"
+
+
+def inside(path: Path, root: Path | None) -> bool:
+    """True when ``path`` resolves to ``root`` or below it."""
+    if root is None:
+        return False
+    try:
+        Path(path).expanduser().resolve().relative_to(Path(root).resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def writable_project(path: Path | None) -> Path | None:
+    """``path`` when the plugin may write ``<path>/.photopart`` there, else None.
+
+    Refuses the install directory, the source checkout root, the Hermes cache,
+    and any path Hermes's write denylist refuses.
+    """
+    if path is None:
+        return None
+    try:
+        resolved = Path(path).expanduser().resolve()
+    except OSError:
+        return None
+    if not resolved.is_dir() or not_a_project(resolved) or under_cache(resolved):
+        return None
+    if write_denied(resolved / ".photopart") or write_denied(resolved):
+        return None
+    return resolved
 
 
 def under_cache(path: Path) -> bool:

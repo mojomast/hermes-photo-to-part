@@ -318,6 +318,10 @@ def _load(folder: Path | None) -> dict:
 
 def _save(folder: Path, state: dict) -> None:
     _memory[str(folder)] = dict(state)
+    from photopart.paths import writable_project
+
+    if writable_project(folder) is None:
+        return
     path = _state_path(folder)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
